@@ -6,49 +6,49 @@
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 0 0% 10%;
+    --background: 0 0% 6%;
+    --foreground: 45 24% 92%;
 
-    --card: 0 0% 100%;
-    --card-foreground: 0 0% 10%;
+    --card: 0 0% 10%;
+    --card-foreground: 45 18% 92%;
 
-    --popover: 0 0% 100%;
-    --popover-foreground: 0 0% 10%;
+    --popover: 0 0% 10%;
+    --popover-foreground: 45 18% 92%;
 
-    --primary: 43 72% 52%;
-    --primary-foreground: 0 0% 100%;
+    --primary: 45 64% 52%;
+    --primary-foreground: 0 0% 8%;
 
-    --secondary: 37 75% 34%;
-    --secondary-foreground: 0 0% 100%;
+    --secondary: 37 76% 35%;
+    --secondary-foreground: 45 24% 92%;
 
-    --muted: 40 20% 96%;
-    --muted-foreground: 0 0% 45%;
+    --muted: 0 0% 14%;
+    --muted-foreground: 40 10% 66%;
 
-    --accent: 45 97% 77%;
+    --accent: 45 93% 77%;
     --accent-foreground: 0 0% 10%;
 
     --destructive: 0 84% 60%;
     --destructive-foreground: 0 0% 100%;
 
-    --border: 40 15% 90%;
-    --input: 40 15% 90%;
-    --ring: 43 72% 52%;
+    --border: 0 0% 20%;
+    --input: 0 0% 18%;
+    --ring: 45 64% 52%;
 
     --radius: 0.5rem;
 
-    --sidebar-background: 0 0% 10%;
-    --sidebar-foreground: 40 20% 85%;
-    --sidebar-primary: 43 72% 52%;
-    --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 0 0% 15%;
-    --sidebar-accent-foreground: 40 20% 90%;
-    --sidebar-border: 0 0% 18%;
-    --sidebar-ring: 43 72% 52%;
+    --sidebar-background: 0 0% 8%;
+    --sidebar-foreground: 45 18% 82%;
+    --sidebar-primary: 45 64% 52%;
+    --sidebar-primary-foreground: 0 0% 10%;
+    --sidebar-accent: 0 0% 14%;
+    --sidebar-accent-foreground: 45 18% 92%;
+    --sidebar-border: 0 0% 16%;
+    --sidebar-ring: 45 64% 52%;
 
-    --gold-gradient: linear-gradient(135deg, hsl(43 72% 52%), hsl(45 97% 77%));
-    --gold-shadow: 0 4px 20px -4px hsla(43, 72%, 52%, 0.35);
-    --card-shadow: 0 1px 3px 0 hsla(0, 0%, 0%, 0.06), 0 1px 2px -1px hsla(0, 0%, 0%, 0.06);
-    --card-shadow-hover: 0 10px 25px -5px hsla(0, 0%, 0%, 0.08);
+    --gold-gradient: linear-gradient(135deg, hsl(37 76% 35%), hsl(45 64% 52%), hsl(45 93% 77%));
+    --gold-shadow: 0 8px 34px -12px hsla(45, 64%, 52%, 0.55);
+    --card-shadow: 0 10px 30px -18px hsla(0, 0%, 0%, 0.8), inset 0 1px 0 hsla(45, 22%, 85%, 0.05);
+    --card-shadow-hover: 0 18px 44px -18px hsla(0, 0%, 0%, 0.95), 0 0 20px -8px hsla(45, 64%, 52%, 0.28);
 
     --status-ok: 142 71% 45%;
     --status-warning: 38 92% 50%;
@@ -56,8 +56,37 @@
   }
 
   .dark {
-    --background: 0 0% 10%;
-    --foreground: 40 20% 90%;
+    --background: 0 0% 6%;
+    --foreground: 45 24% 92%;
+  }
+}
+
+@keyframes float-orb {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
+  }
+  50% {
+    transform: translate3d(16px, -20px, 24px) rotate(8deg) scale(1.05);
+  }
+}
+
+@keyframes float-orb-reverse {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
+  }
+  50% {
+    transform: translate3d(-20px, 16px, -18px) rotate(-10deg) scale(0.95);
+  }
+}
+
+@keyframes shimmer-gold {
+  0% {
+    background-position: 0% 50%;
+  }
+  100% {
+    background-position: 200% 50%;
   }
 }
 
@@ -83,11 +112,44 @@
 
   .card-elevated {
     box-shadow: var(--card-shadow);
-    transition: box-shadow 0.2s ease;
+    transition: box-shadow 0.25s ease, transform 0.25s ease;
   }
 
   .card-elevated:hover {
     box-shadow: var(--card-shadow-hover);
+    transform: translateY(-2px);
+  }
+
+  .premium-glass {
+    background: linear-gradient(160deg, hsl(var(--card) / 0.86), hsl(0 0% 10% / 0.76));
+    backdrop-filter: blur(10px);
+    border: 1px solid hsl(var(--border) / 0.8);
+    box-shadow: var(--card-shadow);
+    transition: border-color 0.25s ease, transform 0.25s ease, box-shadow 0.25s ease;
+  }
+
+  .premium-glass:hover {
+    border-color: hsl(var(--primary) / 0.4);
+    transform: translateY(-2px);
+    box-shadow: var(--card-shadow-hover);
+  }
+
+  .gold-glow {
+    box-shadow: 0 0 0 1px hsl(var(--primary) / 0.28), 0 0 28px -8px hsl(var(--primary) / 0.62);
+  }
+
+  .gold-shimmer {
+    background-image: linear-gradient(110deg, hsl(var(--secondary)), hsl(var(--primary)), hsl(var(--accent)), hsl(var(--primary)));
+    background-size: 220% 100%;
+    animation: shimmer-gold 4s linear infinite;
+  }
+
+  .motion-orb {
+    animation: float-orb 9s ease-in-out infinite;
+  }
+
+  .motion-orb-reverse {
+    animation: float-orb-reverse 11s ease-in-out infinite;
   }
 
   .status-ok {

@@ -4,11 +4,11 @@ import AppHeader from '@/components/AppHeader';
 
 export default function DashboardLayout() {
   return (
-    <div className="flex min-h-screen w-full bg-muted/30">
+    <div className="flex min-h-screen w-full bg-background">
       <AppSidebar />
       <div className="flex flex-1 flex-col ml-60">
         <AppHeader />
-        <main className="flex-1 p-6 animate-fade-in">
+        <main className="relative flex-1 p-8 animate-fade-in">
           <Outlet />
         </main>
       </div>

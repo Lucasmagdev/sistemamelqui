@@ -13,8 +13,9 @@ interface TenantContextType {
 }
 
 const defaultConfig: TenantConfig = {
-  nomeEmpresa: 'Imperial Tec Solution',
+  nomeEmpresa: 'Sabor Imperial',
   corPrimaria: '#D4AF37',
+  logoUrl: '/brand/logo-sabor-imperial.png',
   tenantId: 'tenant-001',
 };
 

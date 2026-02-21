@@ -3,8 +3,11 @@ import DashboardKpiCard from '@/components/dashboard/DashboardKpiCard';
 import ExecutiveAlertsList from '@/components/dashboard/ExecutiveAlertsList';
 import ExecutiveHeroChart from '@/components/dashboard/ExecutiveHeroChart';
 import RecentOrdersTable from '@/components/dashboard/RecentOrdersTable';
+import { Button } from '@/components/ui/button';
 import { dashboardStats, mockAlertas, mockPedidos } from '@/data/mockData';
-import { AlertTriangle, Bell, DollarSign, Package, ShoppingCart } from 'lucide-react';
+import { AlertTriangle, Bell, DollarSign, Package, ShoppingCart, Clock3, PackageCheck, Plus } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { OrderList, Order } from '@/components/dashboard/OrderList';
 
 const chartData = [
   { dia: 'Seg', faturamento: 4210, pedidos: 18 },
@@ -24,14 +27,73 @@ const secondaryCards = [
 ];
 
 export default function DashboardPage() {
+  const navigate = useNavigate();
+  const pedidosPendentes = mockPedidos.filter((pedido) => pedido.status === 'pendente').length;
+  const alertasCriticos = mockAlertas.filter((alerta) => alerta.nivel === 'critico').length;
+
+  // Adaptar mockPedidos para o formato do OrderList
+  const pedidosParaCards: Order[] = mockPedidos.map((pedido, idx) => ({
+    id: pedido.id,
+    code: pedido.numero.replace('PED', 'IMP'),
+    clientName: pedido.cliente,
+    city: 'Cidade Exemplo', // Não há cidade no mock, pode ser ajustado
+    phone: '(11) 00000-0000', // Não há telefone no mock, pode ser ajustado
+    value: pedido.valorTotal,
+    status: pedido.status === 'concluido' ? 5 : pedido.status === 'pendente' ? 2 : 0,
+  }));
+
   return (
     <div className="relative space-y-8 pb-2">
       <DashboardBackground3D />
+
+      {/* NOVO: Lista de pedidos no topo */}
+      <section className="relative z-20">
+        <h2 className="text-lg font-bold text-yellow-400 mb-2">Pedidos Recentes</h2>
+        <OrderList orders={pedidosParaCards} />
+      </section>
 
       <div className="relative z-10 space-y-2">
         <h1 className="text-3xl font-extrabold tracking-tight text-foreground">Dashboard Executivo</h1>
         <p className="text-sm text-muted-foreground">Painel estratégico com visão premium da operação diária.</p>
       </div>
+
+      <section className="relative z-10 grid gap-3 lg:grid-cols-12">
+        <div className="rounded-xl border border-border bg-card p-4 card-elevated lg:col-span-7">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-foreground">Ações Rápidas da Operação</h2>
+            <span className="text-xs text-muted-foreground">Uso frequente</span>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-3">
+            <Button onClick={() => navigate('/admin/pedidos/novo')} className="justify-start gold-gradient-bg text-accent-foreground">
+              <Plus className="mr-2 h-4 w-4" /> Novo Pedido
+            </Button>
+            <Button onClick={() => navigate('/admin/lotes/novo')} variant="outline" className="justify-start">
+              <Package className="mr-2 h-4 w-4" /> Cadastrar Lote
+            </Button>
+            <Button onClick={() => navigate('/admin/alertas')} variant="outline" className="justify-start">
+              <AlertTriangle className="mr-2 h-4 w-4" /> Ver Alertas
+            </Button>
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-border bg-card p-4 card-elevated lg:col-span-5">
+          <h2 className="mb-3 text-sm font-semibold text-foreground">Resumo do Turno</h2>
+          <div className="space-y-2 text-sm">
+            <div className="flex items-center justify-between rounded-lg border border-border/70 px-3 py-2">
+              <span className="inline-flex items-center gap-2 text-muted-foreground"><Clock3 className="h-4 w-4" /> Pedidos pendentes</span>
+              <strong className="text-foreground">{pedidosPendentes}</strong>
+            </div>
+            <div className="flex items-center justify-between rounded-lg border border-border/70 px-3 py-2">
+              <span className="inline-flex items-center gap-2 text-muted-foreground"><AlertTriangle className="h-4 w-4" /> Alertas críticos</span>
+              <strong className="text-foreground">{alertasCriticos}</strong>
+            </div>
+            <div className="flex items-center justify-between rounded-lg border border-border/70 px-3 py-2">
+              <span className="inline-flex items-center gap-2 text-muted-foreground"><PackageCheck className="h-4 w-4" /> Estoque em dia</span>
+              <strong className="text-foreground">{dashboardStats.totalEstoque} kg</strong>
+            </div>
+          </div>
+        </div>
+      </section>
 
       <div className="relative z-10">
         <ExecutiveHeroChart data={chartData} />

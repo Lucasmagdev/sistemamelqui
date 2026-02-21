@@ -2,9 +2,36 @@ import { mockPedidos } from '@/data/mockData';
 import { Button } from '@/components/ui/button';
 import { Plus } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { OrderList, Order } from '@/components/dashboard/OrderList';
 
 export default function PedidosPage() {
   const navigate = useNavigate();
+
+  // Adaptar mockPedidos para OrderList
+  // Novo fluxo de status:
+  // 0: Pedido Recebido
+  // 1: Aceito/Confirmado
+  // 2: Em Preparação
+  // 3: Finalizado/Pronto
+  // 4: Saiu para Entrega
+  // 5: Concluído
+  //
+  // Como o mock só tem concluido, pendente, cancelado, vamos mapear:
+  // concluido -> 5 (Concluído)
+  // pendente -> 0 (Pedido Recebido)
+  // cancelado -> 0 (Pedido Recebido, ou pode criar lógica para status especial se desejar)
+  const pedidosParaCards: Order[] = mockPedidos.map((pedido) => ({
+    id: pedido.id,
+    code: pedido.numero.replace('PED', 'IMP'),
+    clientName: pedido.cliente,
+    city: 'Cidade Exemplo',
+    phone: '(11) 00000-0000',
+    value: pedido.valorTotal,
+    status:
+      pedido.status === 'concluido' ? 5 :
+      pedido.status === 'pendente' ? 0 :
+      0,
+  }));
 
   const statusLabel = (s: string) =>
     s === 'concluido' ? 'Concluído' : s === 'pendente' ? 'Pendente' : 'Cancelado';
@@ -24,6 +51,13 @@ export default function PedidosPage() {
         </Button>
       </div>
 
+      {/* Adicionado: cards de pedidos recentes */}
+      <section className="relative z-20">
+        <h2 className="text-lg font-bold text-yellow-400 mb-2">Pedidos Recentes</h2>
+        <OrderList orders={pedidosParaCards} />
+      </section>
+
+      {/* Tabela de pedidos (mantida) */}
       <div className="rounded-xl border border-border bg-card card-elevated overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">

@@ -1,13 +1,27 @@
 import { useTenant } from '@/contexts/TenantContext';
-import { User, Bell, LogOut } from 'lucide-react';
+import { User, Bell, LogOut, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
+
+const pageTitleByPath: Record<string, string> = {
+  '/admin': 'Dashboard',
+  '/admin/estoque': 'Estoque',
+  '/admin/lotes/novo': 'Cadastro de Lote',
+  '/admin/pedidos': 'Pedidos',
+  '/admin/pedidos/novo': 'Novo Pedido',
+  '/admin/alertas': 'Alertas',
+  '/admin/relatorios': 'Relatórios',
+  '/admin/configuracoes': 'Configurações',
+};
 
 export default function AppHeader() {
   const { config } = useTenant();
   const { logout } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+
+  const currentPageTitle = pageTitleByPath[location.pathname] ?? 'Painel Administrativo';
 
   const handleLogout = () => {
     logout();
@@ -15,12 +29,31 @@ export default function AppHeader() {
   };
 
   return (
-    <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-border bg-background px-6">
-      <div>
-        <h2 className="text-lg font-semibold text-foreground">{config.nomeEmpresa}</h2>
+    <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-border bg-background/95 px-6 backdrop-blur">
+      <div className="flex flex-col">
+        <p className="text-[11px] uppercase tracking-widest text-muted-foreground">{config.nomeEmpresa}</p>
+        <h2 className="text-base font-semibold text-foreground">{currentPageTitle}</h2>
       </div>
       <div className="flex items-center gap-3">
-        <Button variant="ghost" size="icon" className="relative">
+        <Button
+          variant="outline"
+          size="sm"
+          className="hidden gap-2 lg:inline-flex"
+          onClick={() => navigate('/admin/pedidos/novo')}
+        >
+          <Plus className="h-4 w-4" />
+          Novo Pedido
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          className="hidden gap-2 xl:inline-flex"
+          onClick={() => navigate('/admin/lotes/novo')}
+        >
+          <Plus className="h-4 w-4" />
+          Novo Lote
+        </Button>
+        <Button variant="ghost" size="icon" className="relative" onClick={() => navigate('/admin/alertas')}>
           <Bell className="h-4 w-4" />
           <span className="absolute -top-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-[10px] text-destructive-foreground">
             4

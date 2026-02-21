@@ -8,7 +8,6 @@ import {
   AlertTriangle,
   BarChart3,
   Settings,
-  Crown,
 } from 'lucide-react';
 
 const navItems = [
@@ -28,9 +27,11 @@ export default function AppSidebar() {
     <aside className="fixed left-0 top-0 z-40 flex h-screen w-60 flex-col bg-sidebar text-sidebar-foreground">
       {/* Logo */}
       <div className="flex items-center gap-3 px-5 py-6 border-b border-sidebar-border">
-        <div className="flex h-9 w-9 items-center justify-center rounded-lg gold-gradient-bg">
-          <Crown className="h-5 w-5 text-sidebar-background" />
-        </div>
+        <img
+          src={config.logoUrl}
+          alt={config.nomeEmpresa}
+          className="h-[108px] w-[108px] rounded-lg object-cover border border-sidebar-border"
+        />
         <div className="flex flex-col">
           <span className="text-sm font-bold text-sidebar-accent-foreground leading-tight">
             {config.nomeEmpresa}

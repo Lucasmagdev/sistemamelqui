@@ -19,7 +19,7 @@ export default function EstoquePage() {
           <h1 className="text-2xl font-bold text-foreground">Estoque Inteligente</h1>
           <p className="text-sm text-muted-foreground">Controle de produtos e lotes</p>
         </div>
-        <Button onClick={() => navigate('/lotes/novo')} className="gold-gradient-bg text-accent-foreground font-semibold hover:opacity-90 gold-shadow">
+        <Button onClick={() => navigate('/admin/lotes/novo')} className="gold-gradient-bg text-accent-foreground font-semibold hover:opacity-90 gold-shadow">
           <Plus className="mr-2 h-4 w-4" /> Novo Lote
         </Button>
       </div>

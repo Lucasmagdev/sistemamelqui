@@ -4,15 +4,19 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Crown } from 'lucide-react';
+import { useAuth, type UserRole } from '@/contexts/AuthContext';
 
 export default function LoginPage() {
   const navigate = useNavigate();
+  const { loginAs } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [perfil, setPerfil] = useState<UserRole>('cliente');
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    navigate('/');
+    loginAs(perfil);
+    navigate(perfil === 'admin' ? '/admin' : '/');
   };
 
   return (
@@ -32,6 +36,18 @@ export default function LoginPage() {
         {/* Form */}
         <form onSubmit={handleLogin} className="space-y-4">
           <div className="space-y-1.5">
+            <Label htmlFor="perfil">Acesso</Label>
+            <select
+              id="perfil"
+              value={perfil}
+              onChange={(e) => setPerfil(e.target.value as UserRole)}
+              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <option value="cliente">Cliente (catálogo)</option>
+              <option value="admin">Administrador (dashboard)</option>
+            </select>
+          </div>
+          <div className="space-y-1.5">
             <Label htmlFor="email">E-mail</Label>
             <Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="admin@imperial.com" required />
           </div>
@@ -43,6 +59,8 @@ export default function LoginPage() {
             Entrar
           </Button>
         </form>
+
+        <p className="text-center text-xs text-primary">Login mock: redirecionamento condicional por perfil</p>
 
         <p className="text-center text-[11px] text-muted-foreground">
           © 2025 Imperial Tec Solution. Todos os direitos reservados.

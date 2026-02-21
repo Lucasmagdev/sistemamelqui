@@ -1,9 +1,18 @@
 import { useTenant } from '@/contexts/TenantContext';
-import { User, Bell } from 'lucide-react';
+import { User, Bell, LogOut } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '@/contexts/AuthContext';
 
 export default function AppHeader() {
   const { config } = useTenant();
+  const { logout } = useAuth();
+  const navigate = useNavigate();
+
+  const handleLogout = () => {
+    logout();
+    navigate('/login');
+  };
 
   return (
     <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-border bg-background px-6">
@@ -26,6 +35,10 @@ export default function AppHeader() {
             <p className="text-[10px] text-muted-foreground">Gerente</p>
           </div>
         </div>
+        <Button variant="outline" size="sm" onClick={handleLogout} className="gap-2">
+          <LogOut className="h-4 w-4" />
+          Sair
+        </Button>
       </div>
     </header>
   );

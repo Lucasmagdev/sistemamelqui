@@ -20,7 +20,7 @@ export default function CadastroLotePage() {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     toast.success('Lote cadastrado com sucesso!');
-    navigate('/estoque');
+    navigate('/admin/estoque');
   };
 
   return (
@@ -65,7 +65,7 @@ export default function CadastroLotePage() {
           <Button type="submit" className="gold-gradient-bg text-accent-foreground font-semibold hover:opacity-90 gold-shadow">
             Salvar Lote
           </Button>
-          <Button type="button" variant="outline" onClick={() => navigate('/estoque')}>
+          <Button type="button" variant="outline" onClick={() => navigate('/admin/estoque')}>
             Cancelar
           </Button>
         </div>

@@ -12,13 +12,13 @@ import {
 } from 'lucide-react';
 
 const navItems = [
-  { title: 'Dashboard', url: '/', icon: LayoutDashboard },
-  { title: 'Estoque', url: '/estoque', icon: Package },
-  { title: 'Lotes', url: '/lotes/novo', icon: Layers },
-  { title: 'Pedidos', url: '/pedidos', icon: ShoppingCart },
-  { title: 'Alertas', url: '/alertas', icon: AlertTriangle },
-  { title: 'Relatórios', url: '/relatorios', icon: BarChart3 },
-  { title: 'Configurações', url: '/configuracoes', icon: Settings },
+  { title: 'Dashboard', url: '/admin', icon: LayoutDashboard },
+  { title: 'Estoque', url: '/admin/estoque', icon: Package },
+  { title: 'Lotes', url: '/admin/lotes/novo', icon: Layers },
+  { title: 'Pedidos', url: '/admin/pedidos', icon: ShoppingCart },
+  { title: 'Alertas', url: '/admin/alertas', icon: AlertTriangle },
+  { title: 'Relatórios', url: '/admin/relatorios', icon: BarChart3 },
+  { title: 'Configurações', url: '/admin/configuracoes', icon: Settings },
 ];
 
 export default function AppSidebar() {
@@ -47,7 +47,7 @@ export default function AppSidebar() {
           <NavLink
             key={item.url}
             to={item.url}
-            end={item.url === '/'}
+            end={item.url === '/admin'}
             className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-sidebar-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
             activeClassName="bg-sidebar-accent text-sidebar-primary"
           >

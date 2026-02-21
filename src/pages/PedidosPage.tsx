@@ -19,7 +19,7 @@ export default function PedidosPage() {
           <h1 className="text-2xl font-bold text-foreground">Pedidos</h1>
           <p className="text-sm text-muted-foreground">Gestão de vendas e baixa automática</p>
         </div>
-        <Button onClick={() => navigate('/pedidos/novo')} className="gold-gradient-bg text-accent-foreground font-semibold hover:opacity-90 gold-shadow">
+        <Button onClick={() => navigate('/admin/pedidos/novo')} className="gold-gradient-bg text-accent-foreground font-semibold hover:opacity-90 gold-shadow">
           <Plus className="mr-2 h-4 w-4" /> Novo Pedido
         </Button>
       </div>

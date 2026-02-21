@@ -24,7 +24,7 @@ export default function NovoPedidoPage() {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     toast.success('Pedido registrado com sucesso!');
-    navigate('/pedidos');
+    navigate('/admin/pedidos');
   };
 
   return (
@@ -89,7 +89,7 @@ export default function NovoPedidoPage() {
           <Button type="submit" disabled={restante < 0} className="gold-gradient-bg text-accent-foreground font-semibold hover:opacity-90 gold-shadow">
             Confirmar Pedido
           </Button>
-          <Button type="button" variant="outline" onClick={() => navigate('/pedidos')}>
+          <Button type="button" variant="outline" onClick={() => navigate('/admin/pedidos')}>
             Cancelar
           </Button>
         </div>

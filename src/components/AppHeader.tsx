@@ -21,10 +21,15 @@ export default function AppHeader() {
   const navigate = useNavigate();
   const location = useLocation();
 
+  // Busca nome do usuário logado
+  const userNome = window.localStorage.getItem('imperial-flow-nome') || 'Usuário';
+    const userRole = window.localStorage.getItem('imperial-flow-role') || 'cliente';
+
   const currentPageTitle = pageTitleByPath[location.pathname] ?? 'Painel Administrativo';
 
   const handleLogout = () => {
     logout();
+    window.localStorage.removeItem('imperial-flow-nome');
     navigate('/login');
   };
 
@@ -64,8 +69,8 @@ export default function AppHeader() {
             <User className="h-3.5 w-3.5 text-primary-foreground" />
           </div>
           <div className="hidden sm:block">
-            <p className="text-xs font-medium text-foreground">Admin</p>
-            <p className="text-[10px] text-muted-foreground">Gerente</p>
+            <p className="text-xs font-medium text-foreground">{userNome}</p>
+            <p className="text-[10px] text-muted-foreground">{userRole === 'admin' ? 'Admin' : 'Usuário'}</p>
           </div>
         </div>
         <Button variant="outline" size="sm" onClick={handleLogout} className="gap-2">

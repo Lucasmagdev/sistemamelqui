@@ -8,6 +8,7 @@ import {
   AlertTriangle,
   BarChart3,
   Settings,
+  Users,
 } from 'lucide-react';
 
 const navItems = [
@@ -15,16 +16,16 @@ const navItems = [
   { title: 'Estoque', url: '/admin/estoque', icon: Package },
   { title: 'Lotes', url: '/admin/lotes/novo', icon: Layers },
   { title: 'Pedidos', url: '/admin/pedidos', icon: ShoppingCart },
-  { title: 'Alertas', url: '/admin/alertas', icon: AlertTriangle },
+  { title: 'Clientes', url: '/admin/clientes', icon: Users },
+  { title: 'Produtos', url: '/admin/produtos', icon: Package },
   { title: 'Relatórios', url: '/admin/relatorios', icon: BarChart3 },
-  { title: 'Configurações', url: '/admin/configuracoes', icon: Settings },
 ];
 
 export default function AppSidebar() {
   const { config } = useTenant();
 
   return (
-    <aside className="fixed left-0 top-0 z-40 flex h-screen w-60 flex-col bg-sidebar text-sidebar-foreground">
+    <aside className="hidden md:flex fixed left-0 top-0 z-40 h-screen w-60 flex-col bg-sidebar text-sidebar-foreground">
       {/* Logo */}
       <div className="flex items-center gap-3 px-5 py-6 border-b border-sidebar-border">
         <img

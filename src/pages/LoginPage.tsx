@@ -6,11 +6,7 @@ import { Label } from '@/components/ui/label';
 import { useAuth } from '@/contexts/AuthContext';
 import { toast } from 'sonner';
 import { useTenant } from '@/contexts/TenantContext';
-
-const MOCK_ADMIN = {
-  email: 'admin@imperial.com',
-  password: 'admin123',
-};
+import { supabase } from '@/lib/supabaseClient';
 
 export default function LoginPage() {
   const navigate = useNavigate();
@@ -18,21 +14,42 @@ export default function LoginPage() {
   const { config } = useTenant();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-
-    const normalizedEmail = email.trim().toLowerCase();
-    const isAdminLogin =
-      normalizedEmail === MOCK_ADMIN.email && password === MOCK_ADMIN.password;
-
-    if (normalizedEmail.includes('admin') && !isAdminLogin) {
-      toast.error('Credenciais de administrador inválidas');
-      return;
+    setLoading(true);
+    try {
+      // 1. Autentica com Supabase Auth
+      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+        email: email.trim().toLowerCase(),
+        password,
+      });
+      if (authError || !authData?.user) {
+        toast.error('Usuário ou senha inválidos');
+        setLoading(false);
+        return;
+      }
+      const auth_user_id = authData.user.id;
+      // 2. Busca tipo do usuário na tabela users
+      const { data: userData, error: userError } = await supabase
+        .from('users')
+        .select('tipo, nome')
+        .eq('auth_user_id', auth_user_id)
+        .single();
+      if (userError || !userData) {
+        toast.error('Usuário sem perfil vinculado.');
+        setLoading(false);
+        return;
+      }
+      window.localStorage.setItem('imperial-flow-nome', userData.nome || 'Usuário');
+      loginAs(userData.tipo === 'admin' ? 'admin' : 'cliente');
+      navigate(userData.tipo === 'admin' ? '/admin' : '/');
+    } catch (err) {
+      toast.error('Erro ao tentar logar.');
+    } finally {
+      setLoading(false);
     }
-
-    loginAs(isAdminLogin ? 'admin' : 'cliente');
-    navigate(isAdminLogin ? '/admin' : '/');
   };
 
   return (
@@ -53,21 +70,16 @@ export default function LoginPage() {
         <form onSubmit={handleLogin} className="space-y-4">
           <div className="space-y-1.5">
             <Label htmlFor="email">E-mail</Label>
-            <Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="admin@imperial.com" required />
+            <Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Seu e-mail" required />
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="password">Senha</Label>
             <Input id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" required />
           </div>
-          <Button type="submit" className="w-full gold-gradient-bg text-accent-foreground font-semibold hover:opacity-90 gold-shadow h-11">
-            Entrar
+          <Button type="submit" className="w-full gold-gradient-bg text-accent-foreground font-semibold hover:opacity-90 gold-shadow h-11" disabled={loading}>
+            {loading ? 'Entrando...' : 'Entrar'}
           </Button>
         </form>
-
-        <p className="text-center text-[11px] text-muted-foreground">
-          Admin mock: {MOCK_ADMIN.email} / {MOCK_ADMIN.password}
-        </p>
-
         <p className="text-center text-[11px] text-muted-foreground">
           © 2025 Imperial Tec Solution. Todos os direitos reservados.
         </p>

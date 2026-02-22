@@ -19,7 +19,8 @@ import {
   Trash2,
   Truck,
 } from 'lucide-react';
-import { mockProdutos } from '@/data/mockData';
+import { useEffect } from 'react';
+import { supabase } from '@/lib/supabaseClient';
 import { useTenant } from '@/contexts/TenantContext';
 import { Button } from '@/components/ui/button';
 import { Link, useNavigate } from 'react-router-dom';
@@ -36,16 +37,12 @@ const menuCategorias = [
   'Contato',
 ];
 
-const mockMeatPhotos = [
-  'https://images.unsplash.com/photo-1603048297172-c92544798d5a?auto=format&fit=crop&w=1200&q=80',
-  'https://images.unsplash.com/photo-1551028150-64b9f398f678?auto=format&fit=crop&w=1200&q=80',
-  'https://images.unsplash.com/photo-1529692236671-f1f6cf9683ba?auto=format&fit=crop&w=1200&q=80',
-  'https://images.unsplash.com/photo-1602470521006-4f4a6f0d87a5?auto=format&fit=crop&w=1200&q=80',
-  'https://images.unsplash.com/photo-1544025162-d76694265947?auto=format&fit=crop&w=1200&q=80',
-  'https://images.unsplash.com/photo-1600891964599-f61ba0e24092?auto=format&fit=crop&w=1200&q=80',
-];
 
-const precoFormatado = (valor: number) => `R$ ${valor.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
+
+const precoFormatado = (valor: number | null | undefined) => {
+  if (typeof valor !== 'number' || isNaN(valor)) return '$0.00';
+  return `$${valor.toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
+};
 
 type ModoVisualizacao = 'grid' | 'compact' | 'list';
 type Ordenacao = 'menor-maior' | 'maior-menor';
@@ -90,31 +87,57 @@ export default function ClientePage() {
     imagem: string;
     preco: number;
   } | null>(null);
-  const [compraKg, setCompraKg] = useState('1');
+  const [compraLb, setCompraLb] = useState('1');
   const [compraTipoCorte, setCompraTipoCorte] = useState<TipoCorte>('Peça inteira');
   const [compraObservacoes, setCompraObservacoes] = useState('');
 
+  // Cadastro de cliente
   const [clienteNome, setClienteNome] = useState('');
   const [clienteTelefone, setClienteTelefone] = useState('');
+  const [clienteEmail, setClienteEmail] = useState('');
+  // Endereço
+  const [enderecoNumero, setEnderecoNumero] = useState('');
+  const [enderecoRua, setEnderecoRua] = useState('');
+  const [enderecoApt, setEnderecoApt] = useState('');
+  const [enderecoCidade, setEnderecoCidade] = useState('');
+  const [enderecoEstado, setEnderecoEstado] = useState('');
+  const [enderecoZip, setEnderecoZip] = useState('');
   const [modoEntrega, setModoEntrega] = useState<EntregaModo>('entrega');
-  const [endereco, setEndereco] = useState('');
-  const [bairro, setBairro] = useState('');
-  const [complemento, setComplemento] = useState('');
   const [dataEntrega, setDataEntrega] = useState('');
   const [horarioEntrega, setHorarioEntrega] = useState('');
   const [pagamento, setPagamento] = useState<Pagamento>('pix');
   const [trocoPara, setTrocoPara] = useState('');
 
-  const produtosCatalogo = mockProdutos.map((produto, index) => ({
-    id: produto.id,
-    nome: `${produto.nome} ${index % 2 === 0 ? 'Premium' : 'Seleção do Açougue'}`,
-    imagem: mockMeatPhotos[index % mockMeatPhotos.length],
-    preco: produto.custoMedio * 2.2,
-    precoAnterior: produto.custoMedio * 2.7,
-    destaque: index === 2 || index === 5,
-    selo: index % 3 === 0 ? 'OFERTA' : index % 3 === 1 ? 'MAIS VENDIDO' : 'NOVO',
-    categoria: index % 3 === 0 ? 'Ofertas da semana' : categoriaPorIndex(index),
-  }));
+  const [produtosCatalogo, setProdutosCatalogo] = useState<any[]>([]);
+  useEffect(() => {
+    async function fetchProdutos() {
+      let query = supabase.from('products').select('*');
+      // Só aplica filtro se usuário estiver logado (admin ou cliente)
+      const userRole = window.localStorage.getItem('imperial-flow-role');
+      let tenantId = config.tenantId;
+      if (userRole && tenantId) {
+        query = query.eq('tenant_id', tenantId);
+      }
+      const { data, error } = await query;
+      if (error) {
+        toast.error('Erro ao carregar produtos');
+        return;
+      }
+      // Adiciona campos extras para manter compatibilidade visual
+      const produtos = (data || []).map((produto: any) => ({
+        id: produto.id,
+        nome: produto.nome,
+        imagem: produto.foto_url && produto.foto_url !== 'NULL' && produto.foto_url !== '' ? produto.foto_url : '/mock/meats/meat-1.svg',
+        preco: produto.preco,
+        precoAnterior: produto.precoAnterior || null,
+        destaque: produto.destaque || false,
+        selo: produto.selo || '',
+        categoria: produto.categoria || '',
+      }));
+      setProdutosCatalogo(produtos);
+    }
+    fetchProdutos();
+  }, [config]);
 
   const produtosFiltrados = useMemo(() => {
     let resultado = [...produtosCatalogo];
@@ -141,10 +164,9 @@ export default function ClientePage() {
 
   const resumoCarrinho = useMemo(() => {
     const totalItens = itensCarrinho.length;
-    const totalKg = itensCarrinho.reduce((acc, item) => acc + item.kg, 0);
+    const totalLb = itensCarrinho.reduce((acc, item) => acc + item.kg, 0); // kg vira lb
     const totalValor = itensCarrinho.reduce((acc, item) => acc + item.kg * item.precoKg, 0);
-
-    return { totalItens, totalKg, totalValor };
+    return { totalItens, totalLb, totalValor };
   }, [itensCarrinho]);
 
   const adicionarAoCarrinho = (
@@ -158,7 +180,7 @@ export default function ClientePage() {
   ) => {
 
     if (!kg || kg < 0.3) {
-      toast.error('Informe ao menos 0,3 kg para adicionar');
+      toast.error('Informe ao menos 0.3 LB para adicionar');
       return;
     }
 
@@ -174,19 +196,19 @@ export default function ClientePage() {
     };
 
     setItensCarrinho((estadoAtual) => [...estadoAtual, novoItem]);
-    toast.success(`${nome} (${kg.toFixed(1)}kg - ${tipoCorte}) adicionado`);
+    toast.success(`${nome} (${kg.toFixed(1)} LB - ${tipoCorte}) adicionado`);
   };
 
   const abrirCompra = (produto: { id: string; nome: string; imagem: string; preco: number }) => {
     setProdutoParaCompra(produto);
-    setCompraKg('1');
+    setCompraLb('1');
     setCompraTipoCorte('Peça inteira');
     setCompraObservacoes('');
   };
 
   const confirmarCompra = () => {
     if (!produtoParaCompra) return;
-    const kg = Number(compraKg);
+    const kg = Number(compraLb);
     adicionarAoCarrinho(
       produtoParaCompra.id,
       produtoParaCompra.nome,
@@ -230,20 +252,11 @@ export default function ClientePage() {
     }
 
     if (etapaCheckout === 2) {
-      if (!dataEntrega || !horarioEntrega) {
-        toast.error('Escolha data e horário');
+      // Validação dos dados de pagamento
+      if (pagamento === 'dinheiro' && !trocoPara.trim()) {
+        toast.error('Informe o valor para troco');
         return false;
       }
-
-      if (modoEntrega === 'entrega' && (!endereco.trim() || !bairro.trim())) {
-        toast.error('Preencha endereço e bairro para entrega');
-        return false;
-      }
-    }
-
-    if (etapaCheckout === 3 && pagamento === 'dinheiro' && !trocoPara.trim()) {
-      toast.error('Informe o valor para troco');
-      return false;
     }
 
     return true;
@@ -251,10 +264,39 @@ export default function ClientePage() {
 
   const avancarEtapa = () => {
     if (!validarEtapaAtual()) return;
-    setEtapaCheckout((etapaAtual) => Math.min(4, etapaAtual + 1));
+    setEtapaCheckout((etapaAtual) => {
+      if (etapaAtual === 1) return 2;
+      return Math.min(3, etapaAtual + 1);
+    });
   };
 
-  const finalizarPedido = () => {
+  // Salvar cliente no banco antes de finalizar pedido
+  const finalizarPedido = async () => {
+    // Salva cliente se não existir (pode ser aprimorado para evitar duplicidade)
+    const clientePayload = {
+      nome: clienteNome,
+      telefone: clienteTelefone,
+      email: clienteEmail,
+      endereco_numero: enderecoNumero,
+      endereco_rua: enderecoRua,
+      endereco_complemento: enderecoApt,
+      cidade: enderecoCidade,
+      estado: enderecoEstado,
+      cep: enderecoZip,
+      pais: 'USA',
+      tenant_id: 1,
+    };
+    try {
+      const { error } = await supabase.from('clients').insert([clientePayload]);
+      if (error) {
+        toast.error('Erro ao salvar cliente: ' + error.message);
+        return;
+      }
+    } catch (err) {
+      toast.error('Erro inesperado ao salvar cliente.');
+      return;
+    }
+    // Finaliza pedido mock (mantém lógica anterior)
     const numero = `PED-${Math.floor(Math.random() * 9000 + 1000)}`;
     setPedidoFinalizado({ numero, total: resumoCarrinho.totalValor });
     setItensCarrinho([]);
@@ -299,12 +341,41 @@ export default function ClientePage() {
             </div>
 
             <div className="ml-auto flex items-center gap-2">
-              <Button asChild variant="outline" className="h-11 gap-2 px-4 text-sm md:h-12 md:text-base">
-                <Link to="/login">
-                  <CircleUserRound className="h-5 w-5" />
-                  Login
-                </Link>
-              </Button>
+              {window.localStorage.getItem('imperial-flow-nome') ? (
+                <>
+                  <div className="flex items-center gap-2 px-4 py-2 rounded-md border border-border bg-background">
+                    <CircleUserRound className="h-5 w-5 text-primary" />
+                    <span className="font-semibold text-foreground text-sm md:text-base">
+                      {window.localStorage.getItem('imperial-flow-nome')}
+                    </span>
+                  </div>
+                  <Button
+                    variant="outline"
+                    className="h-11 gap-2 px-4 text-sm md:h-12 md:text-base"
+                    onClick={() => {
+                      window.localStorage.removeItem('imperial-flow-nome');
+                      window.location.reload();
+                    }}
+                  >
+                    Sair
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <Button asChild variant="outline" className="h-11 gap-2 px-4 text-sm md:h-12 md:text-base">
+                    <Link to="/login">
+                      <CircleUserRound className="h-5 w-5" />
+                      Login
+                    </Link>
+                  </Button>
+                  <Button asChild variant="ghost" className="h-11 gap-2 px-4 text-sm md:h-12 md:text-base">
+                    <Link to="/cadastro">
+                      <Plus className="h-5 w-5" />
+                      Cadastrar-se
+                    </Link>
+                  </Button>
+                </>
+              )}
               <button
                 type="button"
                 onClick={() => setCarrinhoAberto((estadoAtual) => !estadoAtual)}
@@ -390,13 +461,13 @@ export default function ClientePage() {
 
               <div className="mt-3 grid gap-3 md:grid-cols-4">
                 <div>
-                  <label className="text-xs text-muted-foreground">Quantidade (kg)</label>
+                  <label className="text-xs text-muted-foreground">Quantidade (LB)</label>
                   <input
                     type="number"
                     min="0.3"
                     step="0.1"
-                    value={compraKg}
-                    onChange={(e) => setCompraKg(e.target.value)}
+                    value={compraLb}
+                    onChange={(e) => setCompraLb(e.target.value)}
                     className="mt-1 h-10 w-full rounded-md border border-border bg-card px-3 text-sm"
                   />
                 </div>
@@ -427,7 +498,7 @@ export default function ClientePage() {
 
               <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
                 <p className="text-sm text-muted-foreground">
-                  Subtotal: <span className="font-semibold text-primary">{precoFormatado((Number(compraKg) || 0) * produtoParaCompra.preco)}</span>
+                  Subtotal: <span className="font-semibold text-primary">{precoFormatado((Number(compraLb) || 0) * produtoParaCompra.preco)}</span>
                 </p>
                 <Button type="button" className="gold-gradient-bg text-accent-foreground" onClick={confirmarCompra}>
                   Adicionar ao Carrinho
@@ -451,7 +522,7 @@ export default function ClientePage() {
           {carrinhoAberto ? (
             <section className="rounded-xl border border-primary/35 bg-background p-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-sm font-semibold text-foreground">Carrinho ({resumoCarrinho.totalItens} itens • {resumoCarrinho.totalKg.toFixed(1)}kg)</p>
+                <p className="text-sm font-semibold text-foreground">Carrinho ({resumoCarrinho.totalItens} itens • {resumoCarrinho.totalLb.toFixed(1)}kg)</p>
                 <div className="flex gap-2">
                   <Button size="sm" variant="outline" onClick={() => setCarrinhoAberto(false)}>Fechar</Button>
                   <Button
@@ -477,7 +548,7 @@ export default function ClientePage() {
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div>
                           <p className="text-sm font-semibold text-foreground">{item.nome}</p>
-                          <p className="text-xs text-muted-foreground">{item.tipoCorte} • {precoFormatado(item.precoKg)}/kg</p>
+                          <p className="text-xs text-muted-foreground">{item.tipoCorte} • {precoFormatado(item.precoKg)}/LB</p>
                           {item.observacoes ? <p className="text-xs text-muted-foreground">Obs: {item.observacoes}</p> : null}
                         </div>
                         <button type="button" onClick={() => removerItem(item.id)} className="text-muted-foreground hover:text-destructive">
@@ -490,7 +561,7 @@ export default function ClientePage() {
                           <button type="button" onClick={() => alterarKgItem(item.id, -0.1)} className="rounded border border-border p-1">
                             <Minus className="h-3.5 w-3.5" />
                           </button>
-                          <span className="min-w-20 text-center text-sm text-foreground">{item.kg.toFixed(1)} kg</span>
+                          <span className="min-w-20 text-center text-sm text-foreground">{item.kg.toFixed(1)} LB</span>
                           <button type="button" onClick={() => alterarKgItem(item.id, 0.1)} className="rounded border border-border p-1">
                             <Plus className="h-3.5 w-3.5" />
                           </button>
@@ -511,66 +582,60 @@ export default function ClientePage() {
           {checkoutAberto ? (
             <section className="rounded-xl border border-primary/35 bg-background p-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-sm font-semibold text-foreground">Checkout • Etapa {etapaCheckout} de 4</p>
+                <p className="text-sm font-semibold text-foreground">Checkout • Etapa {etapaCheckout} de 3</p>
                 <Button size="sm" variant="outline" onClick={() => setCheckoutAberto(false)}>Fechar</Button>
               </div>
 
               <div className="mt-3 space-y-4">
                 {etapaCheckout === 1 ? (
-                  <div className="grid gap-3 md:grid-cols-2">
-                    <div>
-                      <label className="text-xs text-muted-foreground">Nome completo</label>
-                      <input value={clienteNome} onChange={(e) => setClienteNome(e.target.value)} className="mt-1 h-10 w-full rounded-md border border-border bg-card px-3 text-sm" />
-                    </div>
-                    <div>
-                      <label className="text-xs text-muted-foreground">Telefone/WhatsApp</label>
-                      <input value={clienteTelefone} onChange={(e) => setClienteTelefone(e.target.value)} className="mt-1 h-10 w-full rounded-md border border-border bg-card px-3 text-sm" />
-                    </div>
-                  </div>
-                ) : null}
-
-                {etapaCheckout === 2 ? (
-                  <div className="space-y-3">
-                    <div className="flex flex-wrap gap-2">
-                      <button type="button" onClick={() => setModoEntrega('entrega')} className={cn('rounded-md px-3 py-2 text-sm', modoEntrega === 'entrega' ? 'gold-gradient-bg text-accent-foreground' : 'border border-border')}>
-                        <MapPin className="mr-1 inline h-4 w-4" /> Entrega
-                      </button>
-                      <button type="button" onClick={() => setModoEntrega('retirada')} className={cn('rounded-md px-3 py-2 text-sm', modoEntrega === 'retirada' ? 'gold-gradient-bg text-accent-foreground' : 'border border-border')}>
-                        <PackageCheck className="mr-1 inline h-4 w-4" /> Retirada na loja
-                      </button>
-                    </div>
-
-                    {modoEntrega === 'entrega' ? (
-                      <div className="grid gap-3 md:grid-cols-2">
-                        <div>
-                          <label className="text-xs text-muted-foreground">Endereço</label>
-                          <input value={endereco} onChange={(e) => setEndereco(e.target.value)} className="mt-1 h-10 w-full rounded-md border border-border bg-card px-3 text-sm" />
-                        </div>
-                        <div>
-                          <label className="text-xs text-muted-foreground">Bairro</label>
-                          <input value={bairro} onChange={(e) => setBairro(e.target.value)} className="mt-1 h-10 w-full rounded-md border border-border bg-card px-3 text-sm" />
-                        </div>
-                        <div className="md:col-span-2">
-                          <label className="text-xs text-muted-foreground">Complemento</label>
-                          <input value={complemento} onChange={(e) => setComplemento(e.target.value)} className="mt-1 h-10 w-full rounded-md border border-border bg-card px-3 text-sm" />
-                        </div>
-                      </div>
-                    ) : null}
-
+                  <div className="space-y-4">
+                    <h2 className="text-lg font-bold text-foreground mb-2">Identificação</h2>
                     <div className="grid gap-3 md:grid-cols-2">
                       <div>
-                        <label className="text-xs text-muted-foreground">Data</label>
-                        <input type="date" value={dataEntrega} onChange={(e) => setDataEntrega(e.target.value)} className="mt-1 h-10 w-full rounded-md border border-border bg-card px-3 text-sm" />
+                        <label className="text-xs text-muted-foreground">Nome completo</label>
+                        <input value={clienteNome} onChange={(e) => setClienteNome(e.target.value)} className="mt-1 h-10 w-full rounded-md border border-border bg-card px-3 text-sm" required />
                       </div>
                       <div>
-                        <label className="text-xs text-muted-foreground">Horário</label>
-                        <input type="time" value={horarioEntrega} onChange={(e) => setHorarioEntrega(e.target.value)} className="mt-1 h-10 w-full rounded-md border border-border bg-card px-3 text-sm" />
+                        <label className="text-xs text-muted-foreground">Telefone <span className="text-muted-foreground">(EUA: +1 XXX-XXX-XXXX)</span></label>
+                        <input value={clienteTelefone} onChange={(e) => setClienteTelefone(e.target.value)} className="mt-1 h-10 w-full rounded-md border border-border bg-card px-3 text-sm" placeholder="+1 555-555-5555" required />
+                      </div>
+                      <div className="md:col-span-2">
+                        <label className="text-xs text-muted-foreground">E-mail</label>
+                        <input value={clienteEmail} onChange={(e) => setClienteEmail(e.target.value)} className="mt-1 h-10 w-full rounded-md border border-border bg-card px-3 text-sm" type="email" required />
+                      </div>
+                    </div>
+                    <h2 className="text-lg font-bold text-foreground mt-6 mb-2">Endereço de entrega</h2>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <div>
+                        <label className="text-xs text-muted-foreground">Street Number + Street Name</label>
+                        <div className="flex gap-2">
+                          <input value={enderecoNumero} onChange={(e) => setEnderecoNumero(e.target.value)} className="mt-1 h-10 w-24 rounded-md border border-border bg-card px-3 text-sm" placeholder="350" required />
+                          <input value={enderecoRua} onChange={(e) => setEnderecoRua(e.target.value)} className="mt-1 h-10 flex-1 rounded-md border border-border bg-card px-3 text-sm" placeholder="5th Ave" required />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="text-xs text-muted-foreground">Apt / Suite / Unit <span className="text-muted-foreground">(opcional)</span></label>
+                        <input value={enderecoApt} onChange={(e) => setEnderecoApt(e.target.value)} className="mt-1 h-10 w-full rounded-md border border-border bg-card px-3 text-sm" placeholder="Apt 12, Suite 8..." />
+                      </div>
+                      <div>
+                        <label className="text-xs text-muted-foreground">City</label>
+                        <input value={enderecoCidade} onChange={(e) => setEnderecoCidade(e.target.value)} className="mt-1 h-10 w-full rounded-md border border-border bg-card px-3 text-sm" required />
+                      </div>
+                      <div>
+                        <label className="text-xs text-muted-foreground">State (2 letras)</label>
+                        <input value={enderecoEstado} onChange={(e) => setEnderecoEstado(e.target.value.toUpperCase().slice(0,2))} className="mt-1 h-10 w-full rounded-md border border-border bg-card px-3 text-sm uppercase" maxLength={2} required />
+                      </div>
+                      <div className="md:col-span-2">
+                        <label className="text-xs text-muted-foreground">ZIP Code</label>
+                        <input value={enderecoZip} onChange={(e) => setEnderecoZip(e.target.value)} className="mt-1 h-10 w-full rounded-md border border-border bg-card px-3 text-sm" placeholder="10118" required />
                       </div>
                     </div>
                   </div>
                 ) : null}
 
-                {etapaCheckout === 3 ? (
+                {/* Etapa 2 removida completamente */}
+
+                {etapaCheckout === 2 ? (
                   <div className="space-y-3">
                     <div className="flex flex-wrap gap-2">
                       {([
@@ -597,10 +662,13 @@ export default function ClientePage() {
                   </div>
                 ) : null}
 
-                {etapaCheckout === 4 ? (
+                {etapaCheckout === 3 ? (
                   <div className="space-y-2 rounded-lg border border-border bg-card p-3 text-sm">
+                    <h2 className="text-lg font-bold text-foreground mb-2">Confirme seu pedido</h2>
                     <p><strong>Cliente:</strong> {clienteNome} • {clienteTelefone}</p>
-                    <p><strong>Entrega:</strong> {modoEntrega === 'entrega' ? `Entrega em ${endereco}, ${bairro}` : 'Retirada na loja'}</p>
+                    <p><strong>Entrega:</strong> {modoEntrega === 'entrega'
+                      ? `Entrega em ${enderecoRua}, ${enderecoNumero}${enderecoApt ? ' - ' + enderecoApt : ''}, ${enderecoCidade}, ${enderecoEstado}, ${enderecoZip}`
+                      : 'Retirada na loja'}</p>
                     <p><strong>Agendamento:</strong> {dataEntrega || '-'} às {horarioEntrega || '-'}</p>
                     <p><strong>Pagamento:</strong> {pagamento === 'pix' ? 'Pix' : pagamento === 'cartao' ? 'Cartão' : `Dinheiro (troco para ${trocoPara})`}</p>
                     <p><strong>Total:</strong> <span className="text-primary font-semibold">{precoFormatado(resumoCarrinho.totalValor)}</span></p>
@@ -613,7 +681,7 @@ export default function ClientePage() {
                   Voltar
                 </Button>
 
-                {etapaCheckout < 4 ? (
+                {etapaCheckout < 3 ? (
                   <Button type="button" onClick={avancarEtapa} className="gold-gradient-bg text-accent-foreground">
                     Continuar
                   </Button>
@@ -711,7 +779,7 @@ export default function ClientePage() {
                   <div>
                     <p className="text-xs text-muted-foreground line-through">de {precoFormatado(produto.precoAnterior)}</p>
                     <p className="text-3xl font-bold text-primary">{precoFormatado(produto.preco)}</p>
-                    <p className="text-xs text-muted-foreground">preço por kg</p>
+                    <p className="text-xs text-muted-foreground">preço por LB</p>
                   </div>
 
                   <Button

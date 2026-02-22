@@ -12,11 +12,12 @@ import EstoquePage from "@/pages/EstoquePage";
 import CadastroLotePage from "@/pages/CadastroLotePage";
 import PedidosPage from "@/pages/PedidosPage";
 import NovoPedidoPage from "@/pages/NovoPedidoPage";
-import AlertasPage from "@/pages/AlertasPage";
 import RelatoriosPage from "@/pages/RelatoriosPage";
-import ConfiguracoesPage from "@/pages/ConfiguracoesPage";
+import ProductsAdminPage from "@/pages/ProductsAdminPage";
 import ClientePage from "@/pages/ClientePage";
 import NotFound from "@/pages/NotFound";
+import ClientesAdminPage from "@/pages/ClientesAdminPage";
+import CadastroPage from "@/pages/CadastroPage";
 
 const queryClient = new QueryClient();
 
@@ -36,6 +37,7 @@ const App = () => (
             <Routes>
               <Route path="/" element={<ClientePage />} />
               <Route path="/login" element={<LoginPage />} />
+              <Route path="/cadastro" element={<CadastroPage />} />
 
               <Route path="/admin" element={<AdminRoute />}>
                 <Route element={<DashboardLayout />}>
@@ -44,9 +46,9 @@ const App = () => (
                   <Route path="lotes/novo" element={<CadastroLotePage />} />
                   <Route path="pedidos" element={<PedidosPage />} />
                   <Route path="pedidos/novo" element={<NovoPedidoPage />} />
-                  <Route path="alertas" element={<AlertasPage />} />
+                  <Route path="clientes" element={<ClientesAdminPage />} />
+                  <Route path="produtos" element={<ProductsAdminPage />} />
                   <Route path="relatorios" element={<RelatoriosPage />} />
-                  <Route path="configuracoes" element={<ConfiguracoesPage />} />
                 </Route>
               </Route>
 

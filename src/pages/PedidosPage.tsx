@@ -1,4 +1,5 @@
-import { mockPedidos } from '@/data/mockData';
+import { useEffect, useState } from 'react';
+import { supabase } from '@/lib/supabaseClient';
 import { Button } from '@/components/ui/button';
 import { Plus } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -20,18 +21,29 @@ export default function PedidosPage() {
   // concluido -> 5 (Concluído)
   // pendente -> 0 (Pedido Recebido)
   // cancelado -> 0 (Pedido Recebido, ou pode criar lógica para status especial se desejar)
-  const pedidosParaCards: Order[] = mockPedidos.map((pedido) => ({
-    id: pedido.id,
-    code: pedido.numero.replace('PED', 'IMP'),
-    clientName: pedido.cliente,
-    city: 'Cidade Exemplo',
-    phone: '(11) 00000-0000',
-    value: pedido.valorTotal,
-    status:
-      pedido.status === 'concluido' ? 5 :
-      pedido.status === 'pendente' ? 0 :
-      0,
-  }));
+  const [pedidosParaCards, setPedidosParaCards] = useState<Order[]>([]);
+  useEffect(() => {
+    async function fetchPedidos() {
+      const { data, error } = await supabase
+        .from('orders')
+        .select('id, cliente_id, data_pedido, status, valor_total, clients(nome)');
+      if (error) return;
+      const pedidos = (data || []).map((pedido: any) => ({
+        id: pedido.id,
+        code: `IMP${pedido.id}`,
+        clientName: pedido.clients?.nome || 'Cliente',
+        city: 'Cidade Exemplo',
+        phone: '(11) 00000-0000',
+        value: pedido.valor_total,
+        status:
+          pedido.status === 'concluido' ? 5 :
+          pedido.status === 'pendente' ? 0 :
+          0,
+      }));
+      setPedidosParaCards(pedidos);
+    }
+    fetchPedidos();
+  }, []);
 
   const statusLabel = (s: string) =>
     s === 'concluido' ? 'Concluído' : s === 'pendente' ? 'Pendente' : 'Cancelado';
@@ -54,7 +66,7 @@ export default function PedidosPage() {
       {/* Adicionado: cards de pedidos recentes */}
       <section className="relative z-20">
         <h2 className="text-lg font-bold text-yellow-400 mb-2">Pedidos Recentes</h2>
-        <OrderList orders={pedidosParaCards} />
+        <OrderList orders={pedidosParaCards} moeda="USD" unidadePeso="LB" />
       </section>
 
       {/* Tabela de pedidos (mantida) */}

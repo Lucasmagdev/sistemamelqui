@@ -5,10 +5,13 @@ import AppHeader from '@/components/AppHeader';
 export default function DashboardLayout() {
   return (
     <div className="flex min-h-screen w-full bg-background">
-      <AppSidebar />
-      <div className="flex flex-1 flex-col ml-60">
+      {/* Sidebar responsiva: oculta em telas menores */}
+      <div className="hidden md:block">
+        <AppSidebar />
+      </div>
+      <div className="flex flex-1 flex-col md:ml-60 w-full">
         <AppHeader />
-        <main className="relative flex-1 p-8 animate-fade-in">
+        <main className="relative flex-1 p-2 md:p-8 animate-fade-in w-full">
           <Outlet />
         </main>
       </div>

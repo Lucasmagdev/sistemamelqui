@@ -11,6 +11,91 @@ const ProductsAdminPage: React.FC = () => {
     foto: null as File | null,
   });
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [editProduct, setEditProduct] = useState<any | null>(null);
+  const [editForm, setEditForm] = useState({ nome: '', preco: '', foto: null as File | null, foto_url: '', id: null });
+  const [editPreviewUrl, setEditPreviewUrl] = useState<string | null>(null);
+    // Função para abrir modal de edição
+    const handleEditClick = (prod: any) => {
+      setEditProduct(prod);
+      setEditForm({
+        nome: prod.nome,
+        preco: prod.preco,
+        foto: null,
+        foto_url: prod.foto_url || '',
+        id: prod.id,
+      });
+      setEditPreviewUrl(prod.foto_url || null);
+    };
+
+    // Função para lidar com mudanças no formulário de edição
+    const handleEditFormChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const { name, value, type } = e.target;
+      if (type === "file") {
+        const file = (e.target as HTMLInputElement).files?.[0] || null;
+        setEditForm({ ...editForm, foto: file });
+        if (file) {
+          setEditPreviewUrl(URL.createObjectURL(file));
+        } else {
+          setEditPreviewUrl(editForm.foto_url || null);
+        }
+      } else {
+        setEditForm({ ...editForm, [name]: value });
+      }
+    };
+
+    // Função para salvar edição
+    const handleEditSubmit = async (e: React.FormEvent) => {
+      e.preventDefault();
+      setLoading(true);
+      setMessage("");
+      try {
+        let fotoUrl = editForm.foto_url;
+        if (editForm.foto) {
+          const fileExt = editForm.foto.name.split('.').pop();
+          const safeNome = editForm.nome.replace(/[^a-zA-Z0-9\-]/g, '').toLowerCase();
+          const fileName = `${Date.now()}-${safeNome}.${fileExt}`;
+          const { data: uploadData, error: uploadError } = await supabase.storage
+            .from('produtos')
+            .upload(fileName, editForm.foto, { contentType: editForm.foto.type });
+          if (uploadError) {
+            setMessage(`Erro ao fazer upload da imagem: ${uploadError.message}`);
+            setLoading(false);
+            return;
+          }
+          const { data: publicUrlData, error: urlError } = supabase.storage
+            .from('produtos')
+            .getPublicUrl(fileName);
+          if (urlError) {
+            setMessage(`Erro ao gerar URL pública: ${urlError.message}`);
+            setLoading(false);
+            return;
+          }
+          fotoUrl = publicUrlData?.publicUrl || '';
+        }
+        const { error: updateError } = await supabase
+          .from("products")
+          .update({ nome: editForm.nome, preco: parseFloat(editForm.preco), foto_url: fotoUrl })
+          .eq("id", editForm.id);
+        if (updateError) {
+          setMessage(`Erro ao atualizar produto: ${updateError.message}`);
+          setLoading(false);
+          return;
+        }
+        setMessage("Produto atualizado com sucesso!");
+        setEditProduct(null);
+        setEditForm({ nome: '', preco: '', foto: null, foto_url: '', id: null });
+        setEditPreviewUrl(null);
+        // Atualizar lista de produtos
+        const { data } = await supabase
+          .from("products")
+          .select("id, nome, descricao, categoria, preco, unidade, foto_url");
+        if (data) setProducts(data);
+      } catch (err: any) {
+        setMessage("Erro inesperado: " + err.message);
+      } finally {
+        setLoading(false);
+      }
+    };
   const [showForm, setShowForm] = useState(false);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
@@ -254,6 +339,40 @@ const ProductsAdminPage: React.FC = () => {
                           <td className="px-1 py-1 text-white/80">{prod.categoria || '-'}</td>
                           <td className="px-1 py-1 text-gold-dark">R$ {prod.preco}</td>
                           <td className="px-1 py-1 text-white/80">{prod.unidade || '-'}</td>
+                          <td className="px-1 py-1">
+                            <button className="bg-gold text-black rounded px-2 py-1 text-xs font-bold hover:bg-gold-dark" onClick={() => handleEditClick(prod)}>
+                              Editar
+                            </button>
+                          </td>
+                              {/* Modal de edição de produto */}
+                              {editProduct && (
+                                <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-60 z-50">
+                                  <div className="bg-[#181818] border border-gold rounded-2xl shadow-2xl p-4 sm:p-8 relative w-full max-w-[400px] flex flex-col gap-6">
+                                    <button
+                                      className="absolute top-4 right-4 text-gold text-xl font-bold bg-transparent border-none cursor-pointer"
+                                      onClick={() => setEditProduct(null)}
+                                    >×</button>
+                                    <form onSubmit={handleEditSubmit} className="flex flex-col gap-4" encType="multipart/form-data">
+                                      <label className="text-gold font-semibold text-sm">Nome do Produto</label>
+                                      <input name="nome" type="text" value={editForm.nome} onChange={handleEditFormChange} required className="bg-[#222] border border-gold rounded px-3 py-2 text-white w-full" />
+                                      <label className="text-gold font-semibold text-sm">Preço de Venda</label>
+                                      <input name="preco" type="number" step="0.01" value={editForm.preco} onChange={handleEditFormChange} required className="bg-[#222] border border-gold rounded px-3 py-2 text-white w-full" />
+                                      <label className="text-gold font-semibold text-sm">Imagem do Produto</label>
+                                      <input name="foto" type="file" accept="image/*" onChange={handleEditFormChange} className="bg-[#222] border border-gold rounded px-3 py-2 text-white w-full" />
+                                      {editPreviewUrl && (
+                                        <div className="mt-2 flex justify-center">
+                                          <img src={editPreviewUrl} alt="Preview" className="h-24 w-24 object-cover rounded border border-gold" />
+                                        </div>
+                                      )}
+                                      <div className="flex gap-4 mt-4">
+                                        <button type="submit" disabled={loading} className="bg-gold text-black font-bold py-2 px-4 rounded hover:bg-gold-dark transition flex-1 text-lg w-full sm:w-auto">{loading ? "Salvando..." : "SALVAR ALTERAÇÕES"}</button>
+                                        <button type="button" className="bg-[#222] border border-gold text-gold font-bold py-2 px-4 rounded flex-1 text-lg w-full sm:w-auto" onClick={() => setEditProduct(null)}>Cancelar</button>
+                                      </div>
+                                      {message && <div className="text-sm text-red-500 mt-2">{message}</div>}
+                                    </form>
+                                  </div>
+                                </div>
+                              )}
                         </tr>
                       ))
                     )}

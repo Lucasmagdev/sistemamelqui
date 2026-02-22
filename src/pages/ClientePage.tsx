@@ -79,6 +79,38 @@ export default function ClientePage() {
   const [itensCarrinho, setItensCarrinho] = useState<ItemCarrinho[]>([]);
   const [carrinhoAberto, setCarrinhoAberto] = useState(false);
   const [checkoutAberto, setCheckoutAberto] = useState(false);
+    // Preencher dados do usuário logado ao abrir checkout
+    useEffect(() => {
+      if (checkoutAberto) {
+        const nome = window.localStorage.getItem('imperial-flow-nome');
+        const telefone = window.localStorage.getItem('imperial-flow-telefone');
+        (async () => {
+          let query = supabase.from('clients').select('*');
+          if (nome && telefone) {
+            query = query.eq('nome', nome).eq('telefone', telefone);
+          } else if (nome) {
+            query = query.eq('nome', nome);
+          }
+          const { data: clientes, error } = await query;
+          if (error) {
+            toast.error('Erro ao buscar dados do cliente');
+            return;
+          }
+          if (clientes && clientes.length > 0) {
+            const cliente = clientes[0];
+            setClienteNome(cliente.nome);
+            setClienteTelefone(cliente.telefone);
+            setClienteEmail(cliente.email || '');
+            setEnderecoNumero(cliente.endereco_numero || '');
+            setEnderecoRua(cliente.endereco_rua || '');
+            setEnderecoApt(cliente.endereco_complemento || '');
+            setEnderecoCidade(cliente.cidade || '');
+            setEnderecoEstado(cliente.estado || '');
+            setEnderecoZip(cliente.cep || '');
+          }
+        })();
+      }
+    }, [checkoutAberto]);
   const [etapaCheckout, setEtapaCheckout] = useState(1);
   const [pedidoFinalizado, setPedidoFinalizado] = useState<{ numero: string; total: number } | null>(null);
   const [produtoParaCompra, setProdutoParaCompra] = useState<{
@@ -111,14 +143,10 @@ export default function ClientePage() {
   const [produtosCatalogo, setProdutosCatalogo] = useState<any[]>([]);
   useEffect(() => {
     async function fetchProdutos() {
-      let query = supabase.from('products').select('*');
-      // Só aplica filtro se usuário estiver logado (admin ou cliente)
-      const userRole = window.localStorage.getItem('imperial-flow-role');
-      let tenantId = config.tenantId;
-      if (userRole && tenantId) {
-        query = query.eq('tenant_id', tenantId);
-      }
-      const { data, error } = await query;
+      const { data, error } = await supabase
+        .from('products')
+        .select('*')
+        .or('tenant_id.eq.1,tenant_id.is.null');
       if (error) {
         toast.error('Erro ao carregar produtos');
         return;
@@ -127,7 +155,7 @@ export default function ClientePage() {
       const produtos = (data || []).map((produto: any) => ({
         id: produto.id,
         nome: produto.nome,
-        imagem: produto.foto_url && produto.foto_url !== 'NULL' && produto.foto_url !== '' ? produto.foto_url : '/mock/meats/meat-1.svg',
+        imagem: produto.foto_url && produto.foto_url !== 'NULL' && produto.foto_url !== '' ? produto.foto_url : null,
         preco: produto.preco,
         precoAnterior: produto.precoAnterior || null,
         destaque: produto.destaque || false,
@@ -272,38 +300,90 @@ export default function ClientePage() {
 
   // Salvar cliente no banco antes de finalizar pedido
   const finalizarPedido = async () => {
-    // Salva cliente se não existir (pode ser aprimorado para evitar duplicidade)
-    const clientePayload = {
-      nome: clienteNome,
-      telefone: clienteTelefone,
-      email: clienteEmail,
-      endereco_numero: enderecoNumero,
-      endereco_rua: enderecoRua,
-      endereco_complemento: enderecoApt,
-      cidade: enderecoCidade,
-      estado: enderecoEstado,
-      cep: enderecoZip,
-      pais: 'USA',
-      tenant_id: 1,
-    };
+    // Busca cliente pelo nome e telefone (simples, pode ser aprimorado)
+    let clienteId = null;
     try {
-      const { error } = await supabase.from('clients').insert([clientePayload]);
+      const { data: clientes } = await supabase
+        .from('clients')
+        .select('id')
+        .eq('nome', clienteNome)
+        .eq('telefone', clienteTelefone);
+      if (clientes && clientes.length > 0) {
+        clienteId = clientes[0].id;
+      } else {
+        // Insere cliente se não existe
+        const { data: novoCliente, error } = await supabase.from('clients').insert([
+          {
+            nome: clienteNome,
+            telefone: clienteTelefone,
+            email: clienteEmail,
+            endereco_numero: enderecoNumero,
+            endereco_rua: enderecoRua,
+            endereco_complemento: enderecoApt,
+            cidade: enderecoCidade,
+            estado: enderecoEstado,
+            cep: enderecoZip,
+            pais: 'USA',
+            tenant_id: 1,
+          },
+        ]).select('id');
+        if (error) {
+          toast.error('Erro ao salvar cliente: ' + error.message);
+          return;
+        }
+        clienteId = novoCliente[0].id;
+      }
+    } catch (err) {
+      toast.error('Erro inesperado ao buscar/salvar cliente.');
+      return;
+    }
+
+    // Insere pedido
+    let pedidoId = null;
+    try {
+      const { data: novoPedido, error } = await supabase.from('orders').insert([
+        {
+          cliente_id: clienteId,
+          data_pedido: new Date().toISOString(),
+          status: 'novo',
+          valor_total: resumoCarrinho.totalValor,
+          tenant_id: 1,
+        },
+      ]).select('id');
       if (error) {
-        toast.error('Erro ao salvar cliente: ' + error.message);
+        toast.error('Erro ao salvar pedido: ' + error.message);
+        return;
+      }
+      pedidoId = novoPedido[0].id;
+    } catch (err) {
+      toast.error('Erro inesperado ao salvar pedido.');
+      return;
+    }
+
+    // Insere itens do pedido
+    try {
+      const itensPayload = itensCarrinho.map((item) => ({
+        pedido_id: pedidoId,
+        produto_id: item.produtoId,
+        quantidade: item.kg,
+        preco_unitario: item.precoKg,
+      }));
+      const { error } = await supabase.from('order_items').insert(itensPayload);
+      if (error) {
+        toast.error('Erro ao salvar itens do pedido: ' + error.message);
         return;
       }
     } catch (err) {
-      toast.error('Erro inesperado ao salvar cliente.');
+      toast.error('Erro inesperado ao salvar itens do pedido.');
       return;
     }
-    // Finaliza pedido mock (mantém lógica anterior)
-    const numero = `PED-${Math.floor(Math.random() * 9000 + 1000)}`;
-    setPedidoFinalizado({ numero, total: resumoCarrinho.totalValor });
+
+    setPedidoFinalizado({ numero: pedidoId, total: resumoCarrinho.totalValor });
     setItensCarrinho([]);
     setCheckoutAberto(false);
     setCarrinhoAberto(false);
     setEtapaCheckout(1);
-    toast.success(`Pedido ${numero} enviado com sucesso!`);
+    toast.success(`Pedido ${pedidoId} enviado com sucesso!`);
   };
 
   return (
@@ -589,6 +669,10 @@ export default function ClientePage() {
               <div className="mt-3 space-y-4">
                 {etapaCheckout === 1 ? (
                   <div className="space-y-4">
+                                        <div className="mb-2 flex items-center gap-2 text-xs text-primary">
+                                          <BadgeCheck className="h-4 w-4" />
+                                          Os campos abaixo foram preenchidos automaticamente de acordo com seu perfil.
+                                        </div>
                     <h2 className="text-lg font-bold text-foreground mb-2">Identificação</h2>
                     <div className="grid gap-3 md:grid-cols-2">
                       <div>
@@ -754,13 +838,10 @@ export default function ClientePage() {
                   modoVisualizacao === 'compact' ? 'h-36' : 'h-52',
                 )}>
                   <img
-                    src={produto.imagem}
+                    src={produto.imagem || ''}
                     alt={produto.nome}
-                    className="h-full w-full object-cover"
+                    className={produto.imagem ? "h-full w-full object-cover" : "hidden"}
                     loading="lazy"
-                    onError={(e) => {
-                      e.currentTarget.src = '/mock/meats/meat-1.svg';
-                    }}
                   />
                   <div className="absolute inset-0 bg-[linear-gradient(to_top,hsl(var(--background)/0.56),transparent_45%)]" />
                   <span className="absolute left-3 top-3 rounded-full bg-primary px-2.5 py-1 text-[10px] font-bold text-primary-foreground">

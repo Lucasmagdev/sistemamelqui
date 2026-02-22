@@ -36,6 +36,13 @@ interface OrderCardProps {
 }
 
 export const OrderCard: React.FC<OrderCardProps> = ({ order }) => {
+  const [status, setStatus] = React.useState(order.status);
+  // Simulação: função para atualizar status no backend
+  const updateStatus = async (newStatus: number) => {
+    setStatus(newStatus);
+    // Aqui você pode chamar a API para atualizar o status no banco
+    // await supabase.from('orders').update({ status: newStatus }).eq('id', order.id);
+  };
   return (
     <div className="bg-[#18181b] border border-yellow-900 rounded-xl p-4 mb-4 flex flex-col md:flex-row md:items-center justify-between shadow-lg">
       <div className="mb-2 md:mb-0">
@@ -46,10 +53,15 @@ export const OrderCard: React.FC<OrderCardProps> = ({ order }) => {
       <div className="flex-1 flex flex-col md:flex-row items-center justify-center gap-2 md:gap-4">
         {orderStatusSteps.map((step, idx) => (
           <div key={step.label} className="flex flex-col items-center min-w-[70px]">
-            <div className={`w-8 h-8 flex items-center justify-center rounded-full border-2 transition-all duration-150 ${idx === order.status ? 'border-yellow-400 bg-yellow-400 text-black' : 'border-gray-600 bg-[#23232a] text-gray-400'}`}>
+            <button
+              className={`w-8 h-8 flex items-center justify-center rounded-full border-2 transition-all duration-150 ${idx === status ? 'border-yellow-400 bg-yellow-400 text-black' : 'border-gray-600 bg-[#23232a] text-gray-400'} ${idx > status ? 'opacity-50 cursor-pointer' : ''}`}
+              disabled={idx < status}
+              onClick={() => updateStatus(idx)}
+              title={step.label}
+            >
               {step.icon}
-            </div>
-            <span className={`text-xs mt-1 text-center ${idx === order.status ? 'text-yellow-400 font-bold' : 'text-gray-400'}`}>{step.label}</span>
+            </button>
+            <span className={`text-xs mt-1 text-center ${idx === status ? 'text-yellow-400 font-bold' : 'text-gray-400'}`}>{step.label}</span>
           </div>
         ))}
       </div>

@@ -10,7 +10,22 @@ export default function ClientesAdminPage() {
   const [loading, setLoading] = useState(true);
   const [busca, setBusca] = useState('');
   const [filtro, setFiltro] = useState('');
+  const [pedidosPorCliente, setPedidosPorCliente] = useState<Record<string, number>>({});
 
+  useEffect(() => {
+    async function fetchPedidosPorCliente() {
+      // Busca todos os pedidos e conta por cliente
+      const { data, error } = await supabase.from('orders').select('cliente_id');
+      if (!error && data) {
+        const counts: Record<string, number> = {};
+        data.forEach((pedido: any) => {
+          counts[pedido.cliente_id] = (counts[pedido.cliente_id] || 0) + 1;
+        });
+        setPedidosPorCliente(counts);
+      }
+    }
+    fetchPedidosPorCliente();
+  }, []);
   useEffect(() => {
     async function fetchClientes() {
       setLoading(true);
@@ -64,13 +79,7 @@ export default function ClientesAdminPage() {
             className="w-64 bg-background border-border focus:ring-primary"
             prefix={<Search className="h-4 w-4 text-muted-foreground" />}
           />
-          <Input
-            placeholder="Filtrar por cidade, estado..."
-            value={filtro}
-            onChange={(e) => setFiltro(e.target.value)}
-            className="w-48 bg-background border-border"
-            prefix={<Filter className="h-4 w-4 text-muted-foreground" />}
-          />
+          {/* Filtro por cidade/estado removido */}
           <Button variant="outline" onClick={exportarCSV} className="gap-2">
             <Download className="h-4 w-4" /> Exportar CSV
           </Button>
@@ -90,7 +99,8 @@ export default function ClientesAdminPage() {
                 <th className="px-5 py-3 font-semibold text-muted-foreground">Documento</th>
                 <th className="px-5 py-3 font-semibold text-muted-foreground">Telefone</th>
                 <th className="px-5 py-3 font-semibold text-muted-foreground">E-mail</th>
-                <th className="rounded-tr-2xl px-5 py-3 font-semibold text-muted-foreground">Endereço</th>
+                <th className="px-5 py-3 font-semibold text-muted-foreground">Endereço</th>
+                <th className="rounded-tr-2xl px-5 py-3 font-semibold text-muted-foreground">Pedidos</th>
               </tr>
             </thead>
             <tbody>
@@ -105,7 +115,10 @@ export default function ClientesAdminPage() {
                   <td className="px-5 py-3">{c.documento}</td>
                   <td className="px-5 py-3">{c.telefone}</td>
                   <td className="px-5 py-3">{c.email}</td>
-                  <td className="px-5 py-3">{c.endereco}</td>
+                  <td className="px-5 py-3">
+                    {`${c.endereco_rua || ''}, ${c.endereco_numero || ''}${c.endereco_complemento ? ' - ' + c.endereco_complemento : ''}, ${c.cidade || ''} - ${c.estado || ''}`.replace(/^, |, $| - $/, '')}
+                  </td>
+                  <td className="px-5 py-3 text-center">{pedidosPorCliente[c.id] || 0}</td>
                 </tr>
               ))}
             </tbody>

@@ -4,7 +4,9 @@ import ExecutiveAlertsList from '@/components/dashboard/ExecutiveAlertsList';
 import ExecutiveHeroChart from '@/components/dashboard/ExecutiveHeroChart';
 import RecentOrdersTable from '@/components/dashboard/RecentOrdersTable';
 import { Button } from '@/components/ui/button';
-import { dashboardStats, mockAlertas, mockPedidos } from '@/data/mockData';
+import { dashboardStats, mockAlertas } from '@/data/mockData';
+import { useEffect, useState } from 'react';
+import { supabase } from '@/lib/supabaseClient';
 import { AlertTriangle, Bell, DollarSign, Package, ShoppingCart, Clock3, PackageCheck, Plus } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { OrderList, Order } from '@/components/dashboard/OrderList';
@@ -28,19 +30,41 @@ const secondaryCards = [
 
 export default function DashboardPage() {
   const navigate = useNavigate();
-  const pedidosPendentes = mockPedidos.filter((pedido) => pedido.status === 'pendente').length;
+  const [pedidosRecentes, setPedidosRecentes] = useState<Order[]>([]);
+  const [pedidosPendentes, setPedidosPendentes] = useState(0);
   const alertasCriticos = mockAlertas.filter((alerta) => alerta.nivel === 'critico').length;
 
-  // Adaptar mockPedidos para o formato do OrderList
-  const pedidosParaCards: Order[] = mockPedidos.map((pedido, idx) => ({
-    id: pedido.id,
-    code: pedido.numero.replace('PED', 'IMP'),
-    clientName: pedido.cliente,
-    city: 'Cidade Exemplo', // Não há cidade no mock, pode ser ajustado
-    phone: '(11) 00000-0000', // Não há telefone no mock, pode ser ajustado
-    value: pedido.valorTotal,
-    status: pedido.status === 'concluido' ? 5 : pedido.status === 'pendente' ? 2 : 0,
-  }));
+  useEffect(() => {
+    async function fetchPedidos() {
+      const { data: pedidosData, error } = await supabase
+        .from('orders')
+        .select('id, cliente_id, data_pedido, status, valor_total')
+        .order('data_pedido', { ascending: false })
+        .limit(5);
+      if (error) return;
+      // Buscar todos os clientes referenciados
+      const clienteIds = (pedidosData || []).map((pedido: any) => pedido.cliente_id);
+      const { data: clientesData } = await supabase
+        .from('clients')
+        .select('id, nome, telefone, cidade')
+        .in('id', clienteIds);
+      const pedidos = (pedidosData || []).map((pedido: any) => {
+        const cliente = (clientesData || []).find((c: any) => c.id === pedido.cliente_id);
+        return {
+          id: pedido.id,
+          code: `IMP${pedido.id}`,
+          clientName: cliente?.nome || 'Cliente',
+          city: cliente?.cidade || '-',
+          phone: cliente?.telefone || '-',
+          value: pedido.valor_total,
+          status: typeof pedido.status === 'number' ? pedido.status : 0,
+        };
+      });
+      setPedidosRecentes(pedidos);
+      setPedidosPendentes((pedidosData || []).filter((p: any) => p.status === 0).length);
+    }
+    fetchPedidos();
+  }, []);
 
   return (
     <div className="relative space-y-8 pb-2">
@@ -49,7 +73,7 @@ export default function DashboardPage() {
       {/* NOVO: Lista de pedidos no topo */}
       <section className="relative z-20">
         <h2 className="text-lg font-bold text-yellow-400 mb-2">Pedidos Recentes</h2>
-        <OrderList orders={pedidosParaCards} />
+        <OrderList orders={pedidosRecentes} />
       </section>
 
       <div className="relative z-10 space-y-2">
@@ -126,7 +150,15 @@ export default function DashboardPage() {
           <h2 className="text-lg font-semibold text-foreground">Últimos Pedidos</h2>
           <span className="text-xs uppercase tracking-[0.14em] text-muted-foreground">Atualizado em tempo real</span>
         </div>
-        <RecentOrdersTable orders={mockPedidos.slice(0, 5)} />
+        <RecentOrdersTable orders={pedidosRecentes.map(p => ({
+          id: p.id,
+          numero: p.code,
+          cliente: p.clientName,
+          data: '', // Adapte se quiser mostrar a data real
+          produtos: [], // Adapte se quiser mostrar produtos
+          valorTotal: p.value,
+          status: p.status === 5 ? 'concluido' : p.status === 0 ? 'pendente' : 'cancelado',
+        }))} />
       </section>
     </div>
   );

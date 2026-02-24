@@ -1,6 +1,7 @@
 import { useTenant } from '@/contexts/TenantContext';
 import { User, Bell, LogOut, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 
@@ -64,19 +65,38 @@ export default function AppHeader() {
             4
           </span>
         </Button>
-        <div className="flex items-center gap-2 rounded-lg border border-border px-3 py-1.5">
-          <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary">
-            <User className="h-3.5 w-3.5 text-primary-foreground" />
-          </div>
-          <div className="hidden sm:block">
-            <p className="text-xs font-medium text-foreground">{userNome}</p>
-            <p className="text-[10px] text-muted-foreground">{userRole === 'admin' ? 'Admin' : 'Usuário'}</p>
-          </div>
-        </div>
-        <Button variant="outline" size="sm" onClick={handleLogout} className="gap-2">
-          <LogOut className="h-4 w-4" />
-          Sair
-        </Button>
+        <Popover>
+          <PopoverTrigger asChild>
+            <button type="button" aria-label="Abrir perfil" className="flex items-center gap-2 rounded-lg border border-border px-3 py-1.5 cursor-pointer hover:bg-accent transition focus:outline-none focus:ring-2 focus:ring-primary">
+              <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary">
+                <User className="h-3.5 w-3.5 text-primary-foreground" />
+              </div>
+              <div className="hidden sm:block text-left">
+                <span className="text-xs font-medium text-foreground">{userNome}</span>
+                <br />
+                <span className="text-[10px] text-muted-foreground">{userRole === 'admin' ? 'Admin' : 'Usuário'}</span>
+              </div>
+            </button>
+          </PopoverTrigger>
+          <PopoverContent align="end" className="w-56 p-3">
+            <div className="flex flex-col items-center gap-2">
+              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary">
+                <User className="h-6 w-6 text-primary-foreground" />
+              </div>
+              <div className="text-center">
+                <p className="text-sm font-semibold text-foreground">{userNome}</p>
+                <p className="text-xs text-muted-foreground">{userRole === 'admin' ? 'Admin' : 'Usuário'}</p>
+              </div>
+            </div>
+            <div className="mt-4 flex flex-col gap-2">
+              <Button variant="outline" size="sm" onClick={handleLogout} className="gap-2 w-full">
+                <LogOut className="h-4 w-4" />
+                Sair
+              </Button>
+            </div>
+          </PopoverContent>
+        </Popover>
+        {/* O botão de sair agora está apenas dentro do popover de perfil */}
       </div>
     </header>
   );

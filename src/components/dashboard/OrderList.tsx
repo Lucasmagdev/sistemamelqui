@@ -1,4 +1,5 @@
 import React from "react";
+import { supabase } from "@/lib/supabaseClient";
 
 const orderStatusSteps = [
   { label: "Pedido Recebido", icon: (
@@ -33,15 +34,15 @@ export type Order = {
 
 interface OrderCardProps {
   order: Order;
+  onStatusChange?: () => void;
 }
 
-export const OrderCard: React.FC<OrderCardProps> = ({ order }) => {
+export const OrderCard: React.FC<OrderCardProps> = ({ order, onStatusChange }) => {
   const [status, setStatus] = React.useState(order.status);
-  // Simulação: função para atualizar status no backend
   const updateStatus = async (newStatus: number) => {
     setStatus(newStatus);
-    // Aqui você pode chamar a API para atualizar o status no banco
-    // await supabase.from('orders').update({ status: newStatus }).eq('id', order.id);
+    await supabase.from('orders').update({ status: newStatus }).eq('id', order.id);
+    if (onStatusChange) onStatusChange();
   };
   return (
     <div className="bg-[#18181b] border border-yellow-900 rounded-xl p-4 mb-4 flex flex-col md:flex-row md:items-center justify-between shadow-lg">
@@ -54,8 +55,8 @@ export const OrderCard: React.FC<OrderCardProps> = ({ order }) => {
         {orderStatusSteps.map((step, idx) => (
           <div key={step.label} className="flex flex-col items-center min-w-[70px]">
             <button
-              className={`w-8 h-8 flex items-center justify-center rounded-full border-2 transition-all duration-150 ${idx === status ? 'border-yellow-400 bg-yellow-400 text-black' : 'border-gray-600 bg-[#23232a] text-gray-400'} ${idx > status ? 'opacity-50 cursor-pointer' : ''}`}
-              disabled={idx < status}
+              className={`w-8 h-8 flex items-center justify-center rounded-full border-2 transition-all duration-150 ${idx === status ? 'border-yellow-400 bg-yellow-400 text-black' : 'border-gray-600 bg-[#23232a] text-gray-400'} ${idx !== status + 1 ? 'opacity-50 cursor-not-allowed' : 'hover:border-yellow-400 hover:bg-yellow-400 hover:text-black cursor-pointer'}`}
+              disabled={idx !== status + 1}
               onClick={() => updateStatus(idx)}
               title={step.label}
             >
@@ -66,7 +67,7 @@ export const OrderCard: React.FC<OrderCardProps> = ({ order }) => {
         ))}
       </div>
       <div className="text-right mt-2 md:mt-0">
-        <div className="text-white font-bold text-lg">R$ {order.value.toFixed(2)}</div>
+        <div className="text-white font-bold text-lg">{order.value.toLocaleString('en-US', { style: 'currency', currency: 'USD' })}</div>
       </div>
     </div>
   );
@@ -74,13 +75,14 @@ export const OrderCard: React.FC<OrderCardProps> = ({ order }) => {
 
 interface OrderListProps {
   orders: Order[];
+  onStatusChange?: () => void;
 }
 
-export const OrderList: React.FC<OrderListProps> = ({ orders }) => {
+export const OrderList: React.FC<OrderListProps> = ({ orders, onStatusChange }) => {
   return (
     <div>
       {orders.map(order => (
-        <OrderCard key={order.id} order={order} />
+        <OrderCard key={order.id} order={order} onStatusChange={onStatusChange} />
       ))}
     </div>
   );

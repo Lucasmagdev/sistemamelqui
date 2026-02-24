@@ -18,11 +18,13 @@ import {
   Star,
   Trash2,
   Truck,
+  LogOut,
 } from 'lucide-react';
 import { useEffect } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import { useTenant } from '@/contexts/TenantContext';
 import { Button } from '@/components/ui/button';
+import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import { Link, useNavigate } from 'react-router-dom';
 import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
@@ -232,6 +234,12 @@ export default function ClientePage() {
     setCompraLb('1');
     setCompraTipoCorte('Peça inteira');
     setCompraObservacoes('');
+    setTimeout(() => {
+      if (window.innerWidth < 768) {
+        const form = document.getElementById('form-compra-produto');
+        if (form) form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }, 100);
   };
 
   const confirmarCompra = () => {
@@ -345,7 +353,7 @@ export default function ClientePage() {
         {
           cliente_id: clienteId,
           data_pedido: new Date().toISOString(),
-          status: 'novo',
+          status: 0,
           valor_total: resumoCarrinho.totalValor,
           tenant_id: 1,
         },
@@ -378,6 +386,19 @@ export default function ClientePage() {
       return;
     }
 
+    // Monta mensagem para WhatsApp
+    const produtosMsg = itensCarrinho.map(item => `- ${item.nome} (${item.kg} LB)`).join('\n');
+    const msg =
+      `*Novo pedido realizado!*\n` +
+      `Cliente: ${clienteNome}\n` +
+      `Telefone: ${clienteTelefone}\n` +
+      `Endereço: ${enderecoRua}, Nº ${enderecoNumero}, ${enderecoApt ? 'Comp: ' + enderecoApt + ', ' : ''}${enderecoCidade} - ${enderecoEstado}\n` +
+      `Produtos:\n${produtosMsg}\n` +
+      `Valor total: R$ ${resumoCarrinho.totalValor.toLocaleString('pt-BR')}\n` +
+      `Pedido: ${pedidoId}`;
+    const url = `https://wa.me/5531991666106?text=${encodeURIComponent(msg)}`;
+    window.open(url, '_blank');
+
     setPedidoFinalizado({ numero: pedidoId, total: resumoCarrinho.totalValor });
     setItensCarrinho([]);
     setCheckoutAberto(false);
@@ -390,7 +411,7 @@ export default function ClientePage() {
     <div className="min-h-screen bg-background p-0 md:p-2 xl:p-3">
       <div className="w-full overflow-hidden border-y border-border bg-card md:rounded-2xl md:border">
         <div className="flex items-center justify-between gap-3 border-b border-border bg-primary/15 px-4 py-2.5 text-xs text-primary md:px-6 md:text-sm">
-          <p className="font-medium">Loja online do açougue • Catálogo e carrinho em modo mock</p>
+          <p className="font-medium">Loja online do açougue</p>
           <div className="hidden items-center gap-4 md:flex">
             <span className="inline-flex items-center gap-1"><Truck className="h-3.5 w-3.5" /> Entrega no mesmo dia</span>
             <span className="inline-flex items-center gap-1"><Beef className="h-3.5 w-3.5" /> Cortes selecionados</span>
@@ -423,22 +444,40 @@ export default function ClientePage() {
             <div className="ml-auto flex items-center gap-2">
               {window.localStorage.getItem('imperial-flow-nome') ? (
                 <>
-                  <div className="flex items-center gap-2 px-4 py-2 rounded-md border border-border bg-background">
-                    <CircleUserRound className="h-5 w-5 text-primary" />
-                    <span className="font-semibold text-foreground text-sm md:text-base">
-                      {window.localStorage.getItem('imperial-flow-nome')}
-                    </span>
-                  </div>
-                  <Button
-                    variant="outline"
-                    className="h-11 gap-2 px-4 text-sm md:h-12 md:text-base"
-                    onClick={() => {
-                      window.localStorage.removeItem('imperial-flow-nome');
-                      window.location.reload();
-                    }}
-                  >
-                    Sair
-                  </Button>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <button type="button" aria-label="Abrir perfil" className="flex items-center gap-2 px-4 py-2 rounded-md border border-border bg-background cursor-pointer hover:bg-accent transition focus:outline-none focus:ring-2 focus:ring-primary">
+                        <CircleUserRound className="h-5 w-5 text-primary" />
+                        <span className="font-semibold text-foreground text-sm md:text-base">
+                          {window.localStorage.getItem('imperial-flow-nome')}
+                        </span>
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent align="end" className="w-56 p-3">
+                      <div className="flex flex-col items-center gap-2">
+                        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary">
+                          <CircleUserRound className="h-6 w-6 text-primary-foreground" />
+                        </div>
+                        <div className="text-center">
+                          <p className="text-sm font-semibold text-foreground">{window.localStorage.getItem('imperial-flow-nome')}</p>
+                        </div>
+                      </div>
+                      <div className="mt-4 flex flex-col gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            window.localStorage.removeItem('imperial-flow-nome');
+                            window.location.reload();
+                          }}
+                          className="gap-2 w-full"
+                        >
+                          <LogOut className="h-4 w-4" />
+                          Sair
+                        </Button>
+                      </div>
+                    </PopoverContent>
+                  </Popover>
                 </>
               ) : (
                 <>
@@ -524,7 +563,7 @@ export default function ClientePage() {
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wider text-primary">Vitrine da Semana</p>
                 <h1 className="mt-1 text-2xl font-bold text-foreground md:text-3xl">Cortes especiais para seu churrasco</h1>
-                <p className="mt-1 text-sm text-muted-foreground">Navegação funcional em mock local, pronta para plugar API depois.</p>
+                
               </div>
               <Button type="button" onClick={() => setCarrinhoAberto(true)} className="gold-gradient-bg text-accent-foreground font-semibold">
                 Ver Carrinho ({precoFormatado(resumoCarrinho.totalValor)})
@@ -533,7 +572,7 @@ export default function ClientePage() {
           </section>
 
           {produtoParaCompra ? (
-            <section className="rounded-xl border border-primary/35 bg-background p-4">
+            <section id="form-compra-produto" className="rounded-xl border border-primary/35 bg-background p-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-sm font-semibold text-foreground">Comprar: {produtoParaCompra.nome}</p>
                 <Button size="sm" variant="outline" onClick={() => setProdutoParaCompra(null)}>Cancelar</Button>
@@ -874,6 +913,18 @@ export default function ClientePage() {
               </article>
             ))}
           </div>
+          {produtosFiltrados.length < produtosCatalogo.length && (
+            <div className="flex justify-center mt-6">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setShowCount((prev) => prev + 12)}
+                className="px-6 py-2 text-base font-semibold"
+              >
+                Carregar mais produtos
+              </Button>
+            </div>
+          )}
         </main>
 
         <footer className="border-t border-border bg-muted/70 px-4 py-3 md:px-6">

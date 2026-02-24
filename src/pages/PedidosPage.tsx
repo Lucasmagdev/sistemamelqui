@@ -20,69 +20,77 @@ export default function PedidosPage() {
   // 3: Finalizado/Pronto
   // 4: Saiu para Entrega
   // 5: Concluído
-  //
-  // Como o mock só tem concluido, pendente, cancelado, vamos mapear:
-  // concluido -> 5 (Concluído)
-  // pendente -> 0 (Pedido Recebido)
-  // cancelado -> 0 (Pedido Recebido, ou pode criar lógica para status especial se desejar)
   const [pedidosParaCards, setPedidosParaCards] = useState<Order[]>([]);
+  const fetchPedidos = async () => {
+    const { data: pedidosData, error } = await supabase
+      .from('orders')
+      .select('id, cliente_id, data_pedido, status, valor_total');
+    if (error) return;
+    // Buscar todos os clientes referenciados
+    const clienteIds = (pedidosData || []).map((pedido: any) => pedido.cliente_id);
+    const { data: clientesData } = await supabase
+      .from('clients')
+      .select('id, nome, telefone, cidade, endereco_rua, endereco_numero, endereco_complemento, cep, estado')
+      .in('id', clienteIds);
+    // Buscar itens dos pedidos
+    const pedidoIds = (pedidosData || []).map((pedido: any) => pedido.id);
+    const { data: itensData } = await supabase
+      .from('order_items')
+      .select('pedido_id, produto_id, quantidade')
+      .in('pedido_id', pedidoIds);
+    // Buscar nomes dos produtos
+    const produtoIds = (itensData || []).map((item: any) => item.produto_id);
+    const { data: produtosData } = await supabase
+      .from('products')
+      .select('id, nome')
+      .in('id', produtoIds);
+    const pedidos = (pedidosData || []).map((pedido: any) => {
+      const cliente = (clientesData || []).find((c: any) => c.id === pedido.cliente_id);
+      const itensPedido = (itensData || []).filter((item: any) => item.pedido_id === pedido.id);
+      const produtosPedido = itensPedido.map((item: any) => {
+        const produto = (produtosData || []).find((p: any) => p.id === item.produto_id);
+        return produto ? `${produto.nome} (${item.quantidade}x)` : '';
+      }).filter(Boolean);
+      return {
+        id: pedido.id,
+        code: `IMP${pedido.id}`,
+        clientName: cliente?.nome || 'Cliente',
+        city: cliente?.cidade || '-',
+        phone: cliente?.telefone || '-',
+        address: cliente ? `Cidade: ${cliente.cidade || '-'}, Estado: ${cliente.estado || '-'}, Rua: ${cliente.endereco_rua || '-'}, Nº: ${cliente.endereco_numero || '-'}, Complemento: ${cliente.endereco_complemento || '-'}, CEP: ${cliente.cep || '-'}` : '-',
+        produtos: produtosPedido.join(', '),
+        value: pedido.valor_total,
+        status: typeof pedido.status === 'number' ? pedido.status : 0,
+        data_pedido: pedido.data_pedido,
+      };
+    });
+    setPedidosParaCards(pedidos);
+  };
+
   useEffect(() => {
-    async function fetchPedidos() {
-      const { data: pedidosData, error } = await supabase
-        .from('orders')
-        .select('id, cliente_id, data_pedido, status, valor_total');
-      if (error) return;
-      // Buscar todos os clientes referenciados
-      const clienteIds = (pedidosData || []).map((pedido: any) => pedido.cliente_id);
-      const { data: clientesData } = await supabase
-        .from('clients')
-        .select('id, nome, telefone, cidade, endereco_rua, endereco_numero, endereco_complemento, cep, estado')
-        .in('id', clienteIds);
-      // Buscar itens dos pedidos
-      const pedidoIds = (pedidosData || []).map((pedido: any) => pedido.id);
-      const { data: itensData } = await supabase
-        .from('order_items')
-        .select('pedido_id, produto_id, quantidade')
-        .in('pedido_id', pedidoIds);
-      // Buscar nomes dos produtos
-      const produtoIds = (itensData || []).map((item: any) => item.produto_id);
-      const { data: produtosData } = await supabase
-        .from('products')
-        .select('id, nome')
-        .in('id', produtoIds);
-      const pedidos = (pedidosData || []).map((pedido: any) => {
-        const cliente = (clientesData || []).find((c: any) => c.id === pedido.cliente_id);
-        const itensPedido = (itensData || []).filter((item: any) => item.pedido_id === pedido.id);
-        const produtosPedido = itensPedido.map((item: any) => {
-          const produto = (produtosData || []).find((p: any) => p.id === item.produto_id);
-          return produto ? `${produto.nome} (${item.quantidade}x)` : '';
-        }).filter(Boolean);
-        return {
-          id: pedido.id,
-          code: `IMP${pedido.id}`,
-          clientName: cliente?.nome || 'Cliente',
-          city: cliente?.cidade || '-',
-          phone: cliente?.telefone || '-',
-          address: cliente ? `Cidade: ${cliente.cidade || '-'}, Estado: ${cliente.estado || '-'}, Rua: ${cliente.endereco_rua || '-'}, Nº: ${cliente.endereco_numero || '-'}, Complemento: ${cliente.endereco_complemento || '-'}, CEP: ${cliente.cep || '-'}` : '-',
-          produtos: produtosPedido.join(', '),
-          value: pedido.valor_total,
-          status:
-            pedido.status === 'concluido' ? 5 :
-            pedido.status === 'pendente' ? 0 :
-            0,
-          data_pedido: pedido.data_pedido,
-        };
-      });
-      setPedidosParaCards(pedidos);
-    }
     fetchPedidos();
   }, []);
 
-  const statusLabel = (s: string) =>
-    s === 'concluido' ? 'Concluído' : s === 'pendente' ? 'Pendente' : 'Cancelado';
 
-  const statusClass = (s: string) =>
-    s === 'concluido' ? 'status-ok' : s === 'pendente' ? 'status-warning' : 'status-critical';
+  const statusLabel = (s: number) => {
+    switch (s) {
+      case 0: return 'Pedido Recebido';
+      case 1: return 'Aceito/Confirmado';
+      case 2: return 'Em Preparação';
+      case 3: return 'Finalizado/Pronto';
+      case 4: return 'Saiu para Entrega';
+      case 5: return 'Concluído';
+      default: return 'Desconhecido';
+    }
+  };
+
+  const statusClass = (s: number) => {
+    switch (s) {
+      case 5: return 'status-ok';
+      case 0: return 'status-warning';
+      default: return 'status-critical';
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -99,7 +107,7 @@ export default function PedidosPage() {
       {/* Adicionado: cards de pedidos recentes */}
       <section className="relative z-20">
         <h2 className="text-lg font-bold text-yellow-400 mb-2">Pedidos Recentes</h2>
-        <OrderList orders={pedidosParaCards} moeda="USD" unidadePeso="LB" />
+        <OrderList orders={pedidosParaCards} moeda="USD" unidadePeso="LB" onStatusChange={fetchPedidos} />
       </section>
 
       {/* Filtros avançados em linha */}
@@ -111,20 +119,19 @@ export default function PedidosPage() {
           onChange={e => setFilterSearch(e.target.value)}
           className="border border-sidebar-border rounded px-3 py-2 bg-sidebar-foreground text-sidebar-primary placeholder-gold-dark focus:ring-gold focus-border-gold"
         />
-        <input
-          type="text"
-          placeholder="Filtrar por cidade, estado"
-          value={filterCity}
-          onChange={e => setFilterCity(e.target.value)}
-          className="border border-sidebar-border rounded px-3 py-2 bg-sidebar-foreground text-sidebar-primary placeholder-gold-dark focus:ring-gold focus-border-gold"
-        />
-        <input
-          type="text"
-          placeholder="Filtrar por estado"
+        <select
           value={filterState}
           onChange={e => setFilterState(e.target.value)}
-          className="border border-sidebar-border rounded px-3 py-2 bg-sidebar-foreground text-sidebar-primary placeholder-gold-dark focus:ring-gold focus-border-gold"
-        />
+          className="border border-sidebar-border rounded px-3 py-2 bg-sidebar-foreground text-sidebar-primary focus:ring-gold focus-border-gold"
+        >
+          <option value="">Filtrar por status</option>
+          <option value="0">Pedido Recebido</option>
+          <option value="1">Aceito/Confirmado</option>
+          <option value="2">Em Preparação</option>
+          <option value="3">Finalizado/Pronto</option>
+          <option value="4">Saiu para Entrega</option>
+          <option value="5">Concluído</option>
+        </select>
         <button className="border border-sidebar-border rounded px-3 py-2 bg-gold text-black font-bold hover:bg-gold-dark transition">Exportar CSV</button>
       </div>
       {/* Tabela de pedidos (mantida) */}
@@ -149,8 +156,7 @@ export default function PedidosPage() {
             </thead>
             <tbody className="bg-card text-white">
               {pedidosParaCards.filter(p =>
-                (filterCity === '' || p.city.toLowerCase().includes(filterCity.toLowerCase())) &&
-                (filterState === '' || (p.address && p.address.toLowerCase().includes(filterState.toLowerCase()))) &&
+                (filterState === '' || p.status === Number(filterState)) &&
                 (filterSearch === '' || p.clientName.toLowerCase().includes(filterSearch.toLowerCase()) || (p.phone && p.phone.includes(filterSearch)))
               ).map((p) => (
                 <tr key={p.id} className="border-b border-border last:border-0 hover:bg-gold/10 transition-colors">
@@ -174,7 +180,7 @@ export default function PedidosPage() {
                         })
                       : '-'}
                   </td>
-                  <td className="px-4 py-3 text-right font-bold text-lg text-gold">R$ {p.value?.toLocaleString('pt-BR') || '-'}</td>
+                  <td className="px-4 py-3 text-right font-bold text-lg text-gold">{p.value != null ? p.value.toLocaleString('en-US', { style: 'currency', currency: 'USD' }) : '-'}</td>
                   <td className="px-4 py-3 text-center">
                     <span className={`inline-flex rounded-full border px-2.5 py-0.5 text-xs font-bold ${statusClass(p.status)}`}>{statusLabel(p.status)}</span>
                   </td>

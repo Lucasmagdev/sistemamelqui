@@ -19,6 +19,8 @@ import {
   Trash2,
   Truck,
   LogOut,
+  House,
+  LogIn,
 } from 'lucide-react';
 import { useEffect } from 'react';
 import { supabase } from '@/lib/supabaseClient';
@@ -48,7 +50,7 @@ const precoFormatado = (valor: number | null | undefined) => {
 
 type ModoVisualizacao = 'grid' | 'compact' | 'list';
 type Ordenacao = 'menor-maior' | 'maior-menor';
-type TipoCorte = 'Peça inteira' | 'Bife' | 'Cubos' | 'Moído';
+type TipoCorte = 'Peça inteira' | 'Bife' | 'Cubos' | 'Moído' | 'Outro';
 type EntregaModo = 'entrega' | 'retirada';
 type Pagamento = 'pix' | 'cartao' | 'dinheiro';
 
@@ -69,6 +71,48 @@ const categoriaPorIndex = (index: number) => {
 };
 
 export default function ClientePage() {
+  // ...existing code...
+  // Função para repetir último pedido
+  const repetirUltimoPedido = async () => {
+    const email = window.localStorage.getItem('imperial-flow-email');
+    if (!email) {
+      toast.error('Faça login para repetir pedido');
+      return;
+    }
+    // Buscar último pedido pelo email_cliente
+    const { data: pedidos } = await supabase
+      .from('orders')
+      .select('id')
+      .eq('email_cliente', email)
+      .order('data_pedido', { ascending: false })
+      .limit(1);
+    if (!pedidos || !pedidos.length) {
+      toast.error('Nenhum pedido encontrado');
+      return;
+    }
+    const pedidoId = pedidos[0].id;
+    // Buscar itens do pedido
+    const { data: itens } = await supabase
+      .from('order_items')
+      .select('produto_id, quantidade, preco_unitario, products(nome, foto_url)')
+      .eq('pedido_id', pedidoId);
+    if (!itens || !itens.length) {
+      toast.error('Nenhum item encontrado');
+      return;
+    }
+    setItensCarrinho(itens.map((item: any) => ({
+      id: `${item.produto_id}-${Date.now()}`,
+      produtoId: item.produto_id,
+      nome: item.products?.nome || 'Produto',
+      imagem: item.products?.foto_url || '',
+      precoKg: item.preco_unitario,
+      kg: item.quantidade,
+      tipoCorte: 'Peça inteira',
+      observacoes: '',
+    })));
+    toast.success('Carrinho preenchido com último pedido!');
+    setCarrinhoAberto(true);
+  };
   const { config } = useTenant();
   const navigate = useNavigate();
   const [categoriaAtiva, setCategoriaAtiva] = useState('Todos os cortes');
@@ -84,24 +128,51 @@ export default function ClientePage() {
     // Preencher dados do usuário logado ao abrir checkout
     useEffect(() => {
       if (checkoutAberto) {
-        const nome = window.localStorage.getItem('imperial-flow-nome');
-        const telefone = window.localStorage.getItem('imperial-flow-telefone');
-        (async () => {
-          let query = supabase.from('clients').select('*');
-          if (nome && telefone) {
-            query = query.eq('nome', nome).eq('telefone', telefone);
-          } else if (nome) {
-            query = query.eq('nome', nome);
+        // Busca dados do usuário no banco
+        // O email do usuário logado deve vir do sistema de autenticação (Supabase Auth)
+        let email = '';
+        const getUser = async () => {
+          const { data, error } = await supabase.auth.getUser();
+          if (data?.user) {
+            email = data.user.email || '';
+            // Busca dados do usuário no banco
+            const { data: clientes, error: clientError } = await supabase
+              .from('clients')
+              .select('*')
+              .eq('email', email);
+            if (clientError) {
+              toast.error('Erro ao buscar dados do cliente');
+              return;
+            }
+            if (clientes && clientes.length > 0) {
+              const cliente = clientes[0];
+              setClienteNome(cliente.nome || '');
+              setClienteTelefone(cliente.telefone || '');
+              setClienteEmail(cliente.email || '');
+              setEnderecoNumero(cliente.endereco_numero || '');
+              setEnderecoRua(cliente.endereco_rua || '');
+              setEnderecoApt(cliente.endereco_complemento || '');
+              setEnderecoCidade(cliente.cidade || '');
+              setEnderecoEstado(cliente.estado || '');
+              setEnderecoZip(cliente.cep || '');
+            }
           }
-          const { data: clientes, error } = await query;
+        };
+        getUser();
+        if (!email) return;
+        (async () => {
+          const { data: clientes, error } = await supabase
+            .from('clients')
+            .select('*')
+            .eq('email', email);
           if (error) {
             toast.error('Erro ao buscar dados do cliente');
             return;
           }
           if (clientes && clientes.length > 0) {
             const cliente = clientes[0];
-            setClienteNome(cliente.nome);
-            setClienteTelefone(cliente.telefone);
+            setClienteNome(cliente.nome || '');
+            setClienteTelefone(cliente.telefone || '');
             setClienteEmail(cliente.email || '');
             setEnderecoNumero(cliente.endereco_numero || '');
             setEnderecoRua(cliente.endereco_rua || '');
@@ -123,6 +194,7 @@ export default function ClientePage() {
   } | null>(null);
   const [compraLb, setCompraLb] = useState('1');
   const [compraTipoCorte, setCompraTipoCorte] = useState<TipoCorte>('Peça inteira');
+  const [compraOutroTipoCorte, setCompraOutroTipoCorte] = useState('');
   const [compraObservacoes, setCompraObservacoes] = useState('');
 
   // Cadastro de cliente
@@ -300,6 +372,23 @@ export default function ClientePage() {
 
   const avancarEtapa = () => {
     if (!validarEtapaAtual()) return;
+    // Salva alterações de perfil no banco ao avançar do perfil
+    if (etapaCheckout === 1) {
+      const email = clienteEmail;
+      (async () => {
+        const { error } = await supabase.from('clients').update({
+          nome: clienteNome,
+          telefone: clienteTelefone,
+          endereco_numero: enderecoNumero,
+          endereco_rua: enderecoRua,
+          endereco_complemento: enderecoApt,
+          cidade: enderecoCidade,
+          estado: enderecoEstado,
+          cep: enderecoZip,
+        }).eq('email', email);
+        if (error) toast.error('Erro ao salvar perfil: ' + error.message);
+      })();
+    }
     setEtapaCheckout((etapaAtual) => {
       if (etapaAtual === 1) return 2;
       return Math.min(3, etapaAtual + 1);
@@ -308,14 +397,13 @@ export default function ClientePage() {
 
   // Salvar cliente no banco antes de finalizar pedido
   const finalizarPedido = async () => {
-    // Busca cliente pelo nome e telefone (simples, pode ser aprimorado)
+    // Busca cliente pelo email (garante vínculo correto)
     let clienteId = null;
     try {
       const { data: clientes } = await supabase
         .from('clients')
         .select('id')
-        .eq('nome', clienteNome)
-        .eq('telefone', clienteTelefone);
+        .eq('email', clienteEmail);
       if (clientes && clientes.length > 0) {
         clienteId = clientes[0].id;
       } else {
@@ -352,6 +440,7 @@ export default function ClientePage() {
       const { data: novoPedido, error } = await supabase.from('orders').insert([
         {
           cliente_id: clienteId,
+          email_cliente: clienteEmail,
           data_pedido: new Date().toISOString(),
           status: 0,
           valor_total: resumoCarrinho.totalValor,
@@ -386,29 +475,17 @@ export default function ClientePage() {
       return;
     }
 
-    // Monta mensagem para WhatsApp
-    const produtosMsg = itensCarrinho.map(item => `- ${item.nome} (${item.kg} LB)`).join('\n');
-    const msg =
-      `*Novo pedido realizado!*\n` +
-      `Cliente: ${clienteNome}\n` +
-      `Telefone: ${clienteTelefone}\n` +
-      `Endereço: ${enderecoRua}, Nº ${enderecoNumero}, ${enderecoApt ? 'Comp: ' + enderecoApt + ', ' : ''}${enderecoCidade} - ${enderecoEstado}\n` +
-      `Produtos:\n${produtosMsg}\n` +
-      `Valor total: R$ ${resumoCarrinho.totalValor.toLocaleString('pt-BR')}\n` +
-      `Pedido: ${pedidoId}`;
-    const url = `https://wa.me/5531991666106?text=${encodeURIComponent(msg)}`;
-    window.open(url, '_blank');
 
     setPedidoFinalizado({ numero: pedidoId, total: resumoCarrinho.totalValor });
     setItensCarrinho([]);
     setCheckoutAberto(false);
     setCarrinhoAberto(false);
     setEtapaCheckout(1);
-    toast.success(`Pedido ${pedidoId} enviado com sucesso!`);
+    toast.success(`Pedido ${pedidoId} finalizado com sucesso!`);
   };
 
   return (
-    <div className="min-h-screen bg-background p-0 md:p-2 xl:p-3">
+    <div className="min-h-screen bg-background p-0 pb-[calc(7.5rem+env(safe-area-inset-bottom))] md:p-2 md:pb-2 xl:p-3">
       <div className="w-full overflow-hidden border-y border-border bg-card md:rounded-2xl md:border">
         <div className="flex items-center justify-between gap-3 border-b border-border bg-primary/15 px-4 py-2.5 text-xs text-primary md:px-6 md:text-sm">
           <p className="font-medium">Loja online do açougue</p>
@@ -420,13 +497,36 @@ export default function ClientePage() {
 
         <header className="border-b border-border bg-card/95">
           <div className="flex flex-wrap items-center gap-4 px-4 py-3 md:px-6 md:py-4">
-            <div className="flex items-center gap-3 text-primary">
-              <img
-                src={config.logoUrl}
-                alt={config.nomeEmpresa}
-                className="h-12 w-12 rounded-md border border-border object-cover md:h-14 md:w-14"
-              />
-              <span className="text-lg font-semibold text-foreground md:text-xl">{config.nomeEmpresa}</span>
+            <div className="flex w-full items-center justify-between text-primary md:w-auto">
+              <div className="flex items-center gap-3">
+                <img
+                  src={config.logoUrl}
+                  alt={config.nomeEmpresa}
+                  className="h-12 w-12 rounded-md border border-border object-cover md:h-14 md:w-14"
+                />
+                <span className="text-lg font-semibold text-foreground md:text-xl">{config.nomeEmpresa}</span>
+              </div>
+              <div className="flex items-center gap-2 md:hidden">
+                <button
+                  type="button"
+                  onClick={() => setCarrinhoAberto((estadoAtual) => !estadoAtual)}
+                  className="relative rounded-full border border-border bg-background p-2.5 text-primary"
+                  aria-label="Carrinho"
+                >
+                  <ShoppingCart className="h-6 w-6" />
+                  <span className="absolute -right-1 -top-1 rounded-full bg-primary px-1.5 text-[10px] font-bold text-primary-foreground">
+                    {resumoCarrinho.totalItens}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMenuAberto((estadoAtual) => !estadoAtual)}
+                  className="rounded-lg border border-border bg-background p-2.5 text-foreground"
+                  aria-label="Menu"
+                >
+                  <Menu className="h-6 w-6" />
+                </button>
+              </div>
             </div>
 
             <div className="order-3 w-full md:order-none md:mx-6 md:flex-1">
@@ -441,12 +541,12 @@ export default function ClientePage() {
               </div>
             </div>
 
-            <div className="ml-auto flex items-center gap-2">
+            <div className="ml-auto flex w-full flex-col gap-2 md:w-auto md:flex-row md:items-center">
               {window.localStorage.getItem('imperial-flow-nome') ? (
                 <>
                   <Popover>
                     <PopoverTrigger asChild>
-                      <button type="button" aria-label="Abrir perfil" className="flex items-center gap-2 px-4 py-2 rounded-md border border-border bg-background cursor-pointer hover:bg-accent transition focus:outline-none focus:ring-2 focus:ring-primary">
+                      <button type="button" aria-label="Abrir perfil" className="flex w-full items-center justify-center gap-2 rounded-md border border-border bg-background px-4 py-2 transition hover:bg-accent focus:outline-none focus:ring-2 focus:ring-primary md:w-auto">
                         <CircleUserRound className="h-5 w-5 text-primary" />
                         <span className="font-semibold text-foreground text-sm md:text-base">
                           {window.localStorage.getItem('imperial-flow-nome')}
@@ -480,40 +580,42 @@ export default function ClientePage() {
                   </Popover>
                 </>
               ) : (
-                <>
-                  <Button asChild variant="outline" className="h-11 gap-2 px-4 text-sm md:h-12 md:text-base">
+                <div className="grid w-full grid-cols-2 gap-2 md:flex md:w-auto md:items-center">
+                  <Button asChild variant="outline" className="h-11 w-full gap-2 px-4 text-sm md:h-12 md:w-auto md:text-base">
                     <Link to="/login">
                       <CircleUserRound className="h-5 w-5" />
                       Login
                     </Link>
                   </Button>
-                  <Button asChild variant="ghost" className="h-11 gap-2 px-4 text-sm md:h-12 md:text-base">
+                  <Button asChild variant="ghost" className="h-11 w-full gap-2 px-4 text-sm md:h-12 md:w-auto md:text-base">
                     <Link to="/cadastro">
                       <Plus className="h-5 w-5" />
                       Cadastrar-se
                     </Link>
                   </Button>
-                </>
+                </div>
               )}
-              <button
-                type="button"
-                onClick={() => setCarrinhoAberto((estadoAtual) => !estadoAtual)}
-                className="relative rounded-full border border-border bg-background p-2.5 text-primary md:p-3"
-                aria-label="Carrinho mock"
-              >
-                <ShoppingCart className="h-6 w-6" />
-                <span className="absolute -right-1 -top-1 rounded-full bg-primary px-1.5 text-[10px] font-bold text-primary-foreground">
-                  {resumoCarrinho.totalItens}
-                </span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setMenuAberto((estadoAtual) => !estadoAtual)}
-                className="rounded-lg border border-border bg-background p-2.5 text-foreground md:p-3"
-                aria-label="Menu mock"
-              >
-                <Menu className="h-6 w-6" />
-              </button>
+              <div className="hidden items-center justify-end gap-2 md:flex">
+                <button
+                  type="button"
+                  onClick={() => setCarrinhoAberto((estadoAtual) => !estadoAtual)}
+                  className="relative rounded-full border border-border bg-background p-2.5 text-primary md:p-3"
+                  aria-label="Carrinho"
+                >
+                  <ShoppingCart className="h-6 w-6" />
+                  <span className="absolute -right-1 -top-1 rounded-full bg-primary px-1.5 text-[10px] font-bold text-primary-foreground">
+                    {resumoCarrinho.totalItens}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMenuAberto((estadoAtual) => !estadoAtual)}
+                  className="rounded-lg border border-border bg-background p-2.5 text-foreground md:p-3"
+                  aria-label="Menu"
+                >
+                  <Menu className="h-6 w-6" />
+                </button>
+              </div>
             </div>
           </div>
 
@@ -559,13 +661,18 @@ export default function ClientePage() {
 
         <main className="space-y-5 px-4 py-4 md:px-6 md:py-5">
           <section className="rounded-xl border border-border bg-background p-4 md:p-5">
+            {window.localStorage.getItem('imperial-flow-nome') && (
+              <div className="mb-4 flex justify-end">
+                <Button onClick={repetirUltimoPedido} className="gold-gradient-bg text-accent-foreground font-semibold">Repetir último pedido</Button>
+              </div>
+            )}
             <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wider text-primary">Vitrine da Semana</p>
                 <h1 className="mt-1 text-2xl font-bold text-foreground md:text-3xl">Cortes especiais para seu churrasco</h1>
                 
               </div>
-              <Button type="button" onClick={() => setCarrinhoAberto(true)} className="gold-gradient-bg text-accent-foreground font-semibold">
+              <Button type="button" onClick={() => setCarrinhoAberto(true)} className="w-full gold-gradient-bg text-accent-foreground font-semibold md:w-auto">
                 Ver Carrinho ({precoFormatado(resumoCarrinho.totalValor)})
               </Button>
             </div>
@@ -578,8 +685,8 @@ export default function ClientePage() {
                 <Button size="sm" variant="outline" onClick={() => setProdutoParaCompra(null)}>Cancelar</Button>
               </div>
 
-              <div className="mt-3 grid gap-3 md:grid-cols-4">
-                <div>
+              <div className="mt-3 grid gap-3 grid-cols-1 sm:grid-cols-2 md:grid-cols-4">
+                <div className="min-w-0">
                   <label className="text-xs text-muted-foreground">Quantidade (LB)</label>
                   <input
                     type="number"
@@ -591,17 +698,30 @@ export default function ClientePage() {
                   />
                 </div>
 
-                <div>
+                <div className="min-w-0">
                   <label className="text-xs text-muted-foreground">Tipo de corte</label>
                   <select
                     value={compraTipoCorte}
-                    onChange={(e) => setCompraTipoCorte(e.target.value as TipoCorte)}
-                    className="mt-1 h-10 w-full rounded-md border border-border bg-card px-3 text-sm"
+                    onChange={(e) => {
+                      setCompraTipoCorte(e.target.value as TipoCorte);
+                      if (e.target.value !== 'Outro') setCompraOutroTipoCorte('');
+                    }}
+                    className="mt-1 h-10 w-full min-w-0 rounded-md border border-border bg-card px-3 text-sm"
                   >
-                    {(['Peça inteira', 'Bife', 'Cubos', 'Moído'] as TipoCorte[]).map((tipo) => (
-                      <option key={tipo} value={tipo}>{tipo}</option>
+                    {(['Peça inteira', 'Bife', 'Cubos', 'Moído', 'Outro'] as TipoCorte[]).map((tipo) => (
+                      <option key={tipo} value={tipo}>{tipo === 'Outro' ? 'Outro (especificar)' : tipo}</option>
                     ))}
                   </select>
+                  {compraTipoCorte === 'Outro' && (
+                    <input
+                      type="text"
+                      value={compraOutroTipoCorte}
+                      onChange={e => setCompraOutroTipoCorte(e.target.value)}
+                      placeholder="Descreva o tipo de corte"
+                      className="mt-2 h-10 w-full min-w-0 rounded-md border border-border bg-card px-3 text-sm"
+                      style={{maxWidth: '100%'}}
+                    />
+                  )}
                 </div>
 
                 <div className="md:col-span-2">
@@ -724,7 +844,7 @@ export default function ClientePage() {
                       </div>
                       <div className="md:col-span-2">
                         <label className="text-xs text-muted-foreground">E-mail</label>
-                        <input value={clienteEmail} onChange={(e) => setClienteEmail(e.target.value)} className="mt-1 h-10 w-full rounded-md border border-border bg-card px-3 text-sm" type="email" required />
+                        <input value={clienteEmail} readOnly className="mt-1 h-10 w-full rounded-md border border-border bg-card px-3 text-sm bg-muted" type="email" required />
                       </div>
                     </div>
                     <h2 className="text-lg font-bold text-foreground mt-6 mb-2">Endereço de entrega</h2>
@@ -817,19 +937,19 @@ export default function ClientePage() {
             </section>
           ) : null}
 
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-background px-3 py-2 md:px-4">
+          <div className="flex flex-col gap-2 rounded-lg border border-border bg-background px-3 py-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between md:px-4">
             <button
               type="button"
               onClick={() => setMostrarApenasOfertas((estadoAtual) => !estadoAtual)}
               className={cn(
-                'flex items-center gap-2 rounded-md px-2 py-1 text-sm',
+                'inline-flex items-center gap-2 self-start rounded-md px-2 py-1 text-sm',
                 mostrarApenasOfertas ? 'bg-primary/15 text-primary' : 'text-foreground',
               )}
             >
               <ListFilter className="h-4 w-4 text-primary" />
               {mostrarApenasOfertas ? 'Somente ofertas' : 'Filtros'}
             </button>
-            <div className="text-sm text-muted-foreground">
+            <div className="max-w-full overflow-x-auto whitespace-nowrap text-sm text-muted-foreground">
               Show:{' '}
               {[9, 12, 18, 24].map((valor) => (
                 <button
@@ -856,9 +976,12 @@ export default function ClientePage() {
             <button
               type="button"
               onClick={() => setOrdenacao((ordemAtual) => (ordemAtual === 'menor-maior' ? 'maior-menor' : 'menor-maior'))}
-              className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+              className="inline-flex items-center gap-1 self-start text-sm text-muted-foreground hover:text-foreground sm:self-auto"
             >
-              Ordenar por preço: <span className="text-foreground">{ordenacao === 'menor-maior' ? 'menor para maior' : 'maior para menor'}</span>
+              <span className="sm:hidden">{ordenacao === 'menor-maior' ? 'Menor preço' : 'Maior preço'}</span>
+              <span className="hidden sm:inline">
+                Ordenar por preço: <span className="text-foreground">{ordenacao === 'menor-maior' ? 'menor para maior' : 'maior para menor'}</span>
+              </span>
               <ChevronDown className="h-4 w-4" />
             </button>
           </div>
@@ -874,7 +997,7 @@ export default function ClientePage() {
               <article key={produto.id} className="overflow-hidden rounded-xl border border-border bg-card card-elevated">
                 <div className={cn(
                   'relative bg-[linear-gradient(160deg,hsl(var(--muted))_0%,hsl(var(--background))_65%,hsl(var(--muted))_100%)]',
-                  modoVisualizacao === 'compact' ? 'h-36' : 'h-52',
+                  modoVisualizacao === 'compact' ? 'h-32 md:h-36' : 'h-44 md:h-52',
                 )}>
                   <img
                     src={produto.imagem || ''}
@@ -898,7 +1021,7 @@ export default function ClientePage() {
                   ) : null}
                   <div>
                     <p className="text-xs text-muted-foreground line-through">de {precoFormatado(produto.precoAnterior)}</p>
-                    <p className="text-3xl font-bold text-primary">{precoFormatado(produto.preco)}</p>
+                    <p className="text-2xl font-bold text-primary md:text-3xl">{precoFormatado(produto.preco)}</p>
                     <p className="text-xs text-muted-foreground">preço por LB</p>
                   </div>
 
@@ -939,6 +1062,43 @@ export default function ClientePage() {
           </div>
         </footer>
       </div>
+
+      <nav className="fixed bottom-[max(1rem,env(safe-area-inset-bottom))] left-1/2 z-40 w-[min(92vw,520px)] -translate-x-1/2 rounded-3xl border border-border/70 bg-card/95 p-2 shadow-2xl backdrop-blur md:hidden">
+        <div className="grid grid-cols-3 gap-2">
+          <button
+            type="button"
+            onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+            className="flex flex-col items-center justify-center gap-1 rounded-2xl py-2 text-[11px] font-medium text-foreground/80 transition hover:bg-muted"
+          >
+            <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-muted text-foreground">
+              <House className="h-5 w-5" />
+            </span>
+            Início
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setCarrinhoAberto(true)}
+            className="flex flex-col items-center justify-center gap-1 rounded-2xl py-2 text-[11px] font-semibold text-primary"
+          >
+            <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-md">
+              <ShoppingCart className="h-5 w-5" />
+            </span>
+            Carrinho
+          </button>
+
+          <button
+            type="button"
+            onClick={() => navigate('/login')}
+            className="flex flex-col items-center justify-center gap-1 rounded-2xl py-2 text-[11px] font-medium text-foreground/80 transition hover:bg-muted"
+          >
+            <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-muted text-foreground">
+              <LogIn className="h-5 w-5" />
+            </span>
+            Login
+          </button>
+        </div>
+      </nav>
     </div>
   );
 }

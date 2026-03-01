@@ -74,8 +74,7 @@ export default function ClientePage() {
   // ...existing code...
   // Função para repetir último pedido
   const repetirUltimoPedido = async () => {
-    const email = window.localStorage.getItem('imperial-flow-email');
-    if (!email) {
+    if (!emailLogado) {
       toast.error('Faça login para repetir pedido');
       return;
     }
@@ -83,7 +82,7 @@ export default function ClientePage() {
     const { data: pedidos } = await supabase
       .from('orders')
       .select('id')
-      .eq('email_cliente', email)
+      .eq('email_cliente', emailLogado)
       .order('data_pedido', { ascending: false })
       .limit(1);
     if (!pedidos || !pedidos.length) {
@@ -115,6 +114,10 @@ export default function ClientePage() {
   };
   const { config } = useTenant();
   const navigate = useNavigate();
+  const [usuarioLogado, setUsuarioLogado] = useState(false);
+  const [emailLogado, setEmailLogado] = useState('');
+  const [nomeLogado, setNomeLogado] = useState('');
+  const [perfilCliente, setPerfilCliente] = useState<any | null>(null);
   const [categoriaAtiva, setCategoriaAtiva] = useState('Todos os cortes');
   const [busca, setBusca] = useState('');
   const [menuAberto, setMenuAberto] = useState(false);
@@ -213,6 +216,36 @@ export default function ClientePage() {
   const [horarioEntrega, setHorarioEntrega] = useState('');
   const [pagamento, setPagamento] = useState<Pagamento>('pix');
   const [trocoPara, setTrocoPara] = useState('');
+
+  useEffect(() => {
+    const carregarUsuario = async () => {
+      const { data: authData } = await supabase.auth.getUser();
+      const user = authData?.user;
+
+      if (!user) {
+        setUsuarioLogado(false);
+        setEmailLogado('');
+        setNomeLogado('');
+        setPerfilCliente(null);
+        return;
+      }
+
+      const email = user.email || '';
+      setUsuarioLogado(true);
+      setEmailLogado(email);
+
+      const { data: cliente } = await supabase
+        .from('clients')
+        .select('*')
+        .eq('email', email)
+        .maybeSingle();
+
+      setPerfilCliente(cliente || null);
+      setNomeLogado(cliente?.nome || user.user_metadata?.nome || user.email || 'Usuario');
+    };
+
+    carregarUsuario();
+  }, []);
 
   const [produtosCatalogo, setProdutosCatalogo] = useState<any[]>([]);
   useEffect(() => {
@@ -542,14 +575,14 @@ export default function ClientePage() {
             </div>
 
             <div className="ml-auto flex w-full flex-col gap-2 md:w-auto md:flex-row md:items-center">
-              {window.localStorage.getItem('imperial-flow-nome') ? (
+              {usuarioLogado ? (
                 <>
                   <Popover>
                     <PopoverTrigger asChild>
                       <button type="button" aria-label="Abrir perfil" className="flex w-full items-center justify-center gap-2 rounded-md border border-border bg-background px-4 py-2 transition hover:bg-accent focus:outline-none focus:ring-2 focus:ring-primary md:w-auto">
                         <CircleUserRound className="h-5 w-5 text-primary" />
                         <span className="font-semibold text-foreground text-sm md:text-base">
-                          {window.localStorage.getItem('imperial-flow-nome')}
+                          {nomeLogado}
                         </span>
                       </button>
                     </PopoverTrigger>
@@ -559,16 +592,20 @@ export default function ClientePage() {
                           <CircleUserRound className="h-6 w-6 text-primary-foreground" />
                         </div>
                         <div className="text-center">
-                          <p className="text-sm font-semibold text-foreground">{window.localStorage.getItem('imperial-flow-nome')}</p>
+                          <p className="text-sm font-semibold text-foreground">{nomeLogado}</p>
                         </div>
                       </div>
                       <div className="mt-4 flex flex-col gap-2">
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => {
-                            window.localStorage.removeItem('imperial-flow-nome');
-                            window.location.reload();
+                          onClick={async () => {
+                            await supabase.auth.signOut();
+                            setUsuarioLogado(false);
+                            setEmailLogado('');
+                            setNomeLogado('');
+                            setPerfilCliente(null);
+                            navigate('/login');
                           }}
                           className="gap-2 w-full"
                         >
@@ -661,7 +698,7 @@ export default function ClientePage() {
 
         <main className="space-y-5 px-4 py-4 md:px-6 md:py-5">
           <section className="rounded-xl border border-border bg-background p-4 md:p-5">
-            {window.localStorage.getItem('imperial-flow-nome') && (
+            {usuarioLogado && (
               <div className="mb-4 flex justify-end">
                 <Button onClick={repetirUltimoPedido} className="gold-gradient-bg text-accent-foreground font-semibold">Repetir último pedido</Button>
               </div>

@@ -7,7 +7,6 @@ import { useAuth } from '@/contexts/AuthContext';
 
 const pageTitleByPath: Record<string, string> = {
   '/admin': 'Dashboard',
-  '/admin/estoque': 'Estoque',
   '/admin/lotes/novo': 'Cadastro de Lote',
   '/admin/pedidos': 'Pedidos',
   '/admin/pedidos/novo': 'Novo Pedido',

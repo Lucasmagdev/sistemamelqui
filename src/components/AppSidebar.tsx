@@ -13,7 +13,6 @@ import {
 
 const navItems = [
   { title: 'Dashboard', url: '/admin', icon: LayoutDashboard },
-  { title: 'Estoque', url: '/admin/estoque', icon: Package },
   { title: 'Lotes', url: '/admin/lotes/novo', icon: Layers },
   { title: 'Pedidos', url: '/admin/pedidos', icon: ShoppingCart },
   { title: 'Clientes', url: '/admin/clientes', icon: Users },

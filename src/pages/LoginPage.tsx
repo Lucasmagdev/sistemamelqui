@@ -7,11 +7,13 @@ import { useAuth } from '@/contexts/AuthContext';
 import { toast } from 'sonner';
 import { useTenant } from '@/contexts/TenantContext';
 import { supabase } from '@/lib/supabaseClient';
+import { useI18n } from '@/contexts/I18nContext';
 
 export default function LoginPage() {
   const navigate = useNavigate();
   const { loginAs } = useAuth();
   const { config } = useTenant();
+  const { t } = useI18n();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -20,33 +22,32 @@ export default function LoginPage() {
     e.preventDefault();
     setLoading(true);
     try {
-      // 1. Autentica com Supabase Auth
       const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
         email: email.trim().toLowerCase(),
         password,
       });
       if (authError || !authData?.user) {
-        toast.error('Usuário ou senha inválidos');
+        toast.error(t('auth.invalidCredentials'));
         setLoading(false);
         return;
       }
-      const auth_user_id = authData.user.id;
-      // 2. Busca tipo do usuário na tabela users
+      const authUserId = authData.user.id;
       const { data: userData, error: userError } = await supabase
         .from('users')
         .select('tipo, nome')
-        .eq('auth_user_id', auth_user_id)
+        .eq('auth_user_id', authUserId)
         .single();
       if (userError || !userData) {
-        toast.error('Usuário sem perfil vinculado.');
+        toast.error(t('auth.noLinkedProfile'));
         setLoading(false);
         return;
       }
-      window.localStorage.setItem('imperial-flow-nome', userData.nome || 'Usuário');
+      window.localStorage.setItem('imperial-flow-nome', userData.nome || t('common.user'));
+      window.localStorage.setItem('imperial-flow-email', email.trim().toLowerCase());
       loginAs(userData.tipo === 'admin' ? 'admin' : 'cliente');
       navigate(userData.tipo === 'admin' ? '/admin' : '/');
-    } catch (err) {
-      toast.error('Erro ao tentar logar.');
+    } catch (_err) {
+      toast.error(t('auth.loginError'));
     } finally {
       setLoading(false);
     }
@@ -55,33 +56,49 @@ export default function LoginPage() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-background">
       <div className="w-full max-w-sm space-y-8 px-4">
-        {/* Logo */}
         <div className="flex flex-col items-center gap-3">
-          <div className="h-16 w-16 rounded-2xl gold-shadow overflow-hidden border border-primary/35">
+          <div className="gold-shadow h-16 w-16 overflow-hidden rounded-2xl border border-primary/35">
             <img src={config.logoUrl} alt={config.nomeEmpresa} className="h-full w-full object-cover" />
           </div>
           <div className="text-center">
             <h1 className="text-xl font-bold text-foreground">{config.nomeEmpresa}</h1>
-            <p className="text-xs text-muted-foreground uppercase tracking-widest mt-1">ERP Premium</p>
+            <p className="mt-1 text-xs uppercase tracking-widest text-muted-foreground">{t('common.erpPremium')}</p>
           </div>
         </div>
 
-        {/* Form */}
         <form onSubmit={handleLogin} className="space-y-4">
           <div className="space-y-1.5">
-            <Label htmlFor="email">E-mail</Label>
-            <Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Seu e-mail" required />
+            <Label htmlFor="email">{t('common.email')}</Label>
+            <Input
+              id="email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder={t('common.yourEmail')}
+              required
+            />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="password">Senha</Label>
-            <Input id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" required />
+            <Label htmlFor="password">{t('common.password')}</Label>
+            <Input
+              id="password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="........"
+              required
+            />
           </div>
-          <Button type="submit" className="w-full gold-gradient-bg text-accent-foreground font-semibold hover:opacity-90 gold-shadow h-11" disabled={loading}>
-            {loading ? 'Entrando...' : 'Entrar'}
+          <Button
+            type="submit"
+            className="gold-gradient-bg gold-shadow h-11 w-full font-semibold text-accent-foreground hover:opacity-90"
+            disabled={loading}
+          >
+            {loading ? t('common.loading') : t('common.login')}
           </Button>
         </form>
         <p className="text-center text-[11px] text-muted-foreground">
-          © 2025 Imperial Tec Solution. Todos os direitos reservados.
+          © 2025 Imperial Tec Solution. {t('common.rightsReserved')}
         </p>
       </div>
     </div>

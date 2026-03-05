@@ -4,28 +4,31 @@ import { Button } from '@/components/ui/button';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
+import { useI18n } from '@/contexts/I18nContext';
+import type { TranslationKey } from '@/i18n/messages';
 
-const pageTitleByPath: Record<string, string> = {
-  '/admin': 'Dashboard',
-  '/admin/lotes/novo': 'Cadastro de Lote',
-  '/admin/pedidos': 'Pedidos',
-  '/admin/pedidos/novo': 'Novo Pedido',
-  '/admin/alertas': 'Alertas',
-  '/admin/relatorios': 'Relatórios',
-  '/admin/configuracoes': 'Configurações',
+const pageTitleByPath: Record<string, TranslationKey> = {
+  '/admin': 'nav.dashboard',
+  '/admin/lotes/novo': 'page.batchRegistration',
+  '/admin/pedidos': 'nav.orders',
+  '/admin/pedidos/novo': 'common.newOrder',
+  '/admin/alertas': 'page.alerts',
+  '/admin/relatorios': 'nav.reports',
+  '/admin/configuracoes': 'page.settings',
 };
 
 export default function AppHeader() {
   const { config } = useTenant();
   const { logout } = useAuth();
+  const { t } = useI18n();
   const navigate = useNavigate();
   const location = useLocation();
 
-  // Busca nome do usuário logado
-  const userNome = window.localStorage.getItem('imperial-flow-nome') || 'Usuário';
-    const userRole = window.localStorage.getItem('imperial-flow-role') || 'cliente';
+  const userNome = window.localStorage.getItem('imperial-flow-nome') || t('common.user');
+  const userRole = window.localStorage.getItem('imperial-flow-role') || 'cliente';
 
-  const currentPageTitle = pageTitleByPath[location.pathname] ?? 'Painel Administrativo';
+  const currentPageTitleKey = pageTitleByPath[location.pathname];
+  const currentPageTitle = currentPageTitleKey ? t(currentPageTitleKey) : t('header.adminPanel');
 
   const handleLogout = () => {
     logout();
@@ -47,7 +50,7 @@ export default function AppHeader() {
           onClick={() => navigate('/admin/pedidos/novo')}
         >
           <Plus className="h-4 w-4" />
-          Novo Pedido
+          {t('common.newOrder')}
         </Button>
         <Button
           variant="outline"
@@ -56,7 +59,7 @@ export default function AppHeader() {
           onClick={() => navigate('/admin/lotes/novo')}
         >
           <Plus className="h-4 w-4" />
-          Novo Lote
+          {t('common.newBatch')}
         </Button>
         <Button variant="ghost" size="icon" className="relative" onClick={() => navigate('/admin/alertas')}>
           <Bell className="h-4 w-4" />
@@ -66,14 +69,20 @@ export default function AppHeader() {
         </Button>
         <Popover>
           <PopoverTrigger asChild>
-            <button type="button" aria-label="Abrir perfil" className="flex items-center gap-2 rounded-lg border border-border px-3 py-1.5 cursor-pointer hover:bg-accent transition focus:outline-none focus:ring-2 focus:ring-primary">
+            <button
+              type="button"
+              aria-label={t('header.openProfile')}
+              className="flex cursor-pointer items-center gap-2 rounded-lg border border-border px-3 py-1.5 transition hover:bg-accent focus:outline-none focus:ring-2 focus:ring-primary"
+            >
               <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary">
                 <User className="h-3.5 w-3.5 text-primary-foreground" />
               </div>
-              <div className="hidden sm:block text-left">
+              <div className="hidden text-left sm:block">
                 <span className="text-xs font-medium text-foreground">{userNome}</span>
                 <br />
-                <span className="text-[10px] text-muted-foreground">{userRole === 'admin' ? 'Admin' : 'Usuário'}</span>
+                <span className="text-[10px] text-muted-foreground">
+                  {userRole === 'admin' ? t('common.admin') : t('common.user')}
+                </span>
               </div>
             </button>
           </PopoverTrigger>
@@ -84,18 +93,19 @@ export default function AppHeader() {
               </div>
               <div className="text-center">
                 <p className="text-sm font-semibold text-foreground">{userNome}</p>
-                <p className="text-xs text-muted-foreground">{userRole === 'admin' ? 'Admin' : 'Usuário'}</p>
+                <p className="text-xs text-muted-foreground">
+                  {userRole === 'admin' ? t('common.admin') : t('common.user')}
+                </p>
               </div>
             </div>
             <div className="mt-4 flex flex-col gap-2">
-              <Button variant="outline" size="sm" onClick={handleLogout} className="gap-2 w-full">
+              <Button variant="outline" size="sm" onClick={handleLogout} className="w-full gap-2">
                 <LogOut className="h-4 w-4" />
-                Sair
+                {t('common.logout')}
               </Button>
             </div>
           </PopoverContent>
         </Popover>
-        {/* O botão de sair agora está apenas dentro do popover de perfil */}
       </div>
     </header>
   );

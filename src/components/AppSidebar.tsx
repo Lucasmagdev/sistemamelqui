@@ -1,49 +1,54 @@
 import { NavLink } from '@/components/NavLink';
 import { useTenant } from '@/contexts/TenantContext';
+import { useI18n } from '@/contexts/I18nContext';
+import type { TranslationKey } from '@/i18n/messages';
 import {
   LayoutDashboard,
   Package,
   Layers,
   ShoppingCart,
-  AlertTriangle,
   BarChart3,
-  Settings,
   Users,
 } from 'lucide-react';
 
-const navItems = [
-  { title: 'Dashboard', url: '/admin', icon: LayoutDashboard },
-  { title: 'Lotes', url: '/admin/lotes/novo', icon: Layers },
-  { title: 'Pedidos', url: '/admin/pedidos', icon: ShoppingCart },
-  { title: 'Clientes', url: '/admin/clientes', icon: Users },
-  { title: 'Produtos', url: '/admin/produtos', icon: Package },
-  { title: 'Relatórios', url: '/admin/relatorios', icon: BarChart3 },
+type NavItem = {
+  titleKey: TranslationKey;
+  url: string;
+  icon: React.ComponentType<{ className?: string }>;
+};
+
+const navItems: NavItem[] = [
+  { titleKey: 'nav.dashboard', url: '/admin', icon: LayoutDashboard },
+  { titleKey: 'nav.batches', url: '/admin/lotes/novo', icon: Layers },
+  { titleKey: 'nav.orders', url: '/admin/pedidos', icon: ShoppingCart },
+  { titleKey: 'nav.customers', url: '/admin/clientes', icon: Users },
+  { titleKey: 'nav.products', url: '/admin/produtos', icon: Package },
+  { titleKey: 'nav.reports', url: '/admin/relatorios', icon: BarChart3 },
 ];
 
 export default function AppSidebar() {
   const { config } = useTenant();
+  const { t } = useI18n();
 
   return (
-    <aside className="hidden md:flex fixed left-0 top-0 z-40 h-screen w-60 flex-col bg-sidebar text-sidebar-foreground">
-      {/* Logo */}
-      <div className="flex items-center gap-3 px-5 py-6 border-b border-sidebar-border">
+    <aside className="fixed left-0 top-0 z-40 hidden h-screen w-60 flex-col bg-sidebar text-sidebar-foreground md:flex">
+      <div className="flex items-center gap-3 border-b border-sidebar-border px-5 py-6">
         <img
           src={config.logoUrl}
           alt={config.nomeEmpresa}
-          className="h-[108px] w-[108px] rounded-lg object-cover border border-sidebar-border"
+          className="h-[108px] w-[108px] rounded-lg border border-sidebar-border object-cover"
         />
         <div className="flex flex-col">
-          <span className="text-sm font-bold text-sidebar-accent-foreground leading-tight">
+          <span className="text-sm font-bold leading-tight text-sidebar-accent-foreground">
             {config.nomeEmpresa}
           </span>
           <span className="text-[10px] uppercase tracking-widest text-sidebar-foreground/50">
-            ERP Premium
+            {t('common.erpPremium')}
           </span>
         </div>
       </div>
 
-      {/* Navigation */}
-      <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
+      <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
         {navItems.map((item) => (
           <NavLink
             key={item.url}
@@ -53,16 +58,13 @@ export default function AppSidebar() {
             activeClassName="bg-sidebar-accent text-sidebar-primary"
           >
             <item.icon className="h-4 w-4" />
-            <span>{item.title}</span>
+            <span>{t(item.titleKey)}</span>
           </NavLink>
         ))}
       </nav>
 
-      {/* Footer */}
       <div className="border-t border-sidebar-border px-5 py-4">
-        <p className="text-[10px] text-sidebar-foreground/40 uppercase tracking-wider">
-          v1.0.0 MVP
-        </p>
+        <p className="text-[10px] uppercase tracking-wider text-sidebar-foreground/40">v1.0.0 MVP</p>
       </div>
     </aside>
   );

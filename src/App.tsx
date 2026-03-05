@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate, Outlet } from "react-router-dom";
 import { TenantProvider } from "@/contexts/TenantContext";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
+import { I18nProvider } from "@/contexts/I18nContext";
 import DashboardLayout from "@/components/DashboardLayout";
 import LoginPage from "@/pages/LoginPage";
 import DashboardPage from "@/pages/DashboardPage";
@@ -28,36 +29,38 @@ const AdminRoute = () => {
 
 const App = () => (
   <QueryClientProvider client={queryClient}>
-    <AuthProvider>
-      <TenantProvider>
-        <TooltipProvider>
-          <Toaster />
-          <Sonner />
-          <BrowserRouter>
-            <Routes>
-              <Route path="/" element={<ClientePage />} />
-              <Route path="/login" element={<LoginPage />} />
-              <Route path="/cadastro" element={<CadastroPage />} />
+    <I18nProvider>
+      <AuthProvider>
+        <TenantProvider>
+          <TooltipProvider>
+            <Toaster />
+            <Sonner />
+            <BrowserRouter>
+              <Routes>
+                <Route path="/" element={<ClientePage />} />
+                <Route path="/login" element={<LoginPage />} />
+                <Route path="/cadastro" element={<CadastroPage />} />
 
-              <Route path="/admin" element={<AdminRoute />}>
-                <Route element={<DashboardLayout />}>
-                  <Route index element={<DashboardPage />} />
-                  <Route path="estoque" element={<EstoquePage />} />
-                  <Route path="lotes/novo" element={<CadastroLotePage />} />
-                  <Route path="pedidos" element={<PedidosPage />} />
-                  <Route path="pedidos/novo" element={<NovoPedidoPage />} />
-                  <Route path="clientes" element={<ClientesAdminPage />} />
-                  <Route path="produtos" element={<ProductsAdminPage />} />
-                  <Route path="relatorios" element={<RelatoriosPage />} />
+                <Route path="/admin" element={<AdminRoute />}>
+                  <Route element={<DashboardLayout />}>
+                    <Route index element={<DashboardPage />} />
+                    <Route path="estoque" element={<EstoquePage />} />
+                    <Route path="lotes/novo" element={<CadastroLotePage />} />
+                    <Route path="pedidos" element={<PedidosPage />} />
+                    <Route path="pedidos/novo" element={<NovoPedidoPage />} />
+                    <Route path="clientes" element={<ClientesAdminPage />} />
+                    <Route path="produtos" element={<ProductsAdminPage />} />
+                    <Route path="relatorios" element={<RelatoriosPage />} />
+                  </Route>
                 </Route>
-              </Route>
 
-              <Route path="*" element={<NotFound />} />
-            </Routes>
-          </BrowserRouter>
-        </TooltipProvider>
-      </TenantProvider>
-    </AuthProvider>
+                <Route path="*" element={<NotFound />} />
+              </Routes>
+            </BrowserRouter>
+          </TooltipProvider>
+        </TenantProvider>
+      </AuthProvider>
+    </I18nProvider>
   </QueryClientProvider>
 );
 

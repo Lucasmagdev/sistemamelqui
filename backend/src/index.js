@@ -153,28 +153,51 @@ app.post("/api/orders/:id/status", async (req, res) => {
 
     const { data: order, error: orderError } = await supabase
       .from("orders")
-      .select("id, status, cliente_id, client_id")
+      .select("*")
       .eq("id", orderId)
       .single();
 
     if (orderError || !order) {
-      return res.status(404).json({ error: "Pedido nao encontrado." });
+      return res.status(404).json({
+        error: "Pedido nao encontrado.",
+        detail: orderError?.message || null,
+      });
     }
 
     const previousStatus = Number(order.status ?? 0);
     const clientId = order.cliente_id || order.client_id || null;
-    if (!clientId) {
-      return res.status(400).json({ error: "Pedido sem cliente vinculado." });
+    const orderEmail = order.email_cliente || order.email || null;
+    let client = null;
+    let clientError = null;
+
+    if (clientId) {
+      const clientByIdResult = await supabase
+        .from("clients")
+        .select("id, nome, telefone, last_user_agent")
+        .eq("id", clientId)
+        .maybeSingle();
+      client = clientByIdResult.data;
+      clientError = clientByIdResult.error;
+    } else if (orderEmail) {
+      const clientByEmailResult = await supabase
+        .from("clients")
+        .select("id, nome, telefone, last_user_agent")
+        .eq("email", orderEmail)
+        .maybeSingle();
+      client = clientByEmailResult.data;
+      clientError = clientByEmailResult.error;
+    } else {
+      return res.status(400).json({
+        error: "Pedido sem cliente vinculado.",
+        detail: "Sem cliente_id/client_id e sem email_cliente no pedido.",
+      });
     }
 
-    const { data: client, error: clientError } = await supabase
-      .from("clients")
-      .select("id, nome, telefone, last_user_agent")
-      .eq("id", clientId)
-      .maybeSingle();
-
     if (clientError || !client) {
-      return res.status(404).json({ error: "Cliente do pedido nao encontrado." });
+      return res.status(404).json({
+        error: "Cliente do pedido nao encontrado.",
+        detail: clientError?.message || null,
+      });
     }
 
     const { error: updateError } = await supabase
@@ -212,4 +235,3 @@ app.post("/api/orders/:id/status", async (req, res) => {
 app.listen(PORT, () => {
   console.log(`Backend rodando em http://localhost:${PORT}`);
 });
-

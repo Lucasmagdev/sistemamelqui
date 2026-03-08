@@ -29,6 +29,19 @@ if (!supabaseUrl || !supabaseServiceRoleKey) {
 
 const supabase = createClient(supabaseUrl, supabaseServiceRoleKey);
 
+const formatQuantity = (value) => {
+  const num = Number(value || 0);
+  if (!Number.isFinite(num)) return "0";
+  if (Number.isInteger(num)) return String(num);
+  return num.toFixed(2).replace(/\.?0+$/, "");
+};
+
+const formatMoney = (value) => {
+  const num = Number(value || 0);
+  if (!Number.isFinite(num)) return null;
+  return num.toLocaleString("en-US", { style: "currency", currency: "USD" });
+};
+
 const normalizePhone = (rawPhone) => {
   const digits = String(rawPhone || "").replace(/\D/g, "");
   if (!digits) return "";
@@ -48,7 +61,17 @@ const getBrowserName = (userAgent) => {
   return "Navegador desconhecido";
 };
 
-const buildMessage = ({ type, name, code, browserName }) => {
+const buildMessage = ({ type, name, code, browserName, orderItems, orderTotal }) => {
+  const itemsLines = (orderItems || [])
+    .map((item) => `- ${item.nome}: ${formatQuantity(item.quantidade)}`)
+    .join("\n");
+  const itemsSection = itemsLines
+    ? ["", "Itens do pedido:", itemsLines].join("\n")
+    : "";
+
+  const totalLabel = formatMoney(orderTotal);
+  const totalSection = totalLabel ? `\n\nTotal estimado: ${totalLabel}` : "";
+
   if (type === "confirmed") {
     return [
       `Ola ${name}, seu pedido ${code} foi confirmado com sucesso.`,
@@ -58,6 +81,8 @@ const buildMessage = ({ type, name, code, browserName }) => {
       "Produtos vendidos por peso (KG/LB) podem ter pequena variacao de valor apos pesagem e embalagem.",
       "",
       `Canal detectado no seu ultimo acesso: ${browserName}.`,
+      itemsSection,
+      totalSection,
     ].join("\n");
   }
 
@@ -69,8 +94,57 @@ const buildMessage = ({ type, name, code, browserName }) => {
     "Obrigado pela preferencia.",
     "",
     `Canal detectado no seu ultimo acesso: ${browserName}.`,
+    itemsSection,
+    totalSection,
   ].join("\n");
 };
+
+async function fetchOrderItems(orderId) {
+  const byPedido = await supabase
+    .from("order_items")
+    .select("*")
+    .eq("pedido_id", orderId);
+
+  let items = !byPedido.error ? byPedido.data || [] : [];
+
+  if (!items.length) {
+    const byOrder = await supabase
+      .from("order_items")
+      .select("*")
+      .eq("order_id", orderId);
+    if (!byOrder.error) {
+      items = byOrder.data || [];
+    }
+  }
+
+  if (!items.length) return [];
+
+  const productIds = Array.from(
+    new Set(
+      items
+        .map((item) => item.produto_id || item.product_id)
+        .filter((id) => id !== null && id !== undefined),
+    ),
+  );
+
+  let productsMap = new Map();
+  if (productIds.length > 0) {
+    const productsResult = await supabase
+      .from("products")
+      .select("id, nome")
+      .in("id", productIds);
+    if (!productsResult.error) {
+      productsMap = new Map(
+        (productsResult.data || []).map((prod) => [String(prod.id), prod.nome || "Produto"]),
+      );
+    }
+  }
+
+  return items.map((item) => ({
+    nome: productsMap.get(String(item.produto_id || item.product_id)) || "Produto",
+    quantidade: item.quantidade ?? item.quantity ?? 0,
+  }));
+}
 
 async function sendWhatsAppViaZApi({ phone, message }) {
   const instanceId = process.env.ZAPI_INSTANCE_ID;
@@ -110,6 +184,8 @@ async function sendStatusNotification({
   clientPhone,
   orderId,
   userAgent,
+  orderItems,
+  orderTotal,
 }) {
   let type = null;
   if (previousStatus === STATUS.RECEBIDO && newStatus === STATUS.CONFIRMADO) {
@@ -129,6 +205,8 @@ async function sendStatusNotification({
     name: clientName || "cliente",
     code: `IMP${orderId}`,
     browserName,
+    orderItems,
+    orderTotal,
   });
 
   const sendResult = await sendWhatsAppViaZApi({ phone, message });
@@ -209,6 +287,9 @@ app.post("/api/orders/:id/status", async (req, res) => {
       return res.status(500).json({ error: `Erro ao atualizar status: ${updateError.message}` });
     }
 
+    const orderItems = await fetchOrderItems(orderId);
+    const orderTotal = order.valor_total ?? order.total ?? null;
+
     const notification = await sendStatusNotification({
       previousStatus,
       newStatus,
@@ -216,6 +297,8 @@ app.post("/api/orders/:id/status", async (req, res) => {
       clientPhone: client.telefone,
       orderId,
       userAgent: client.last_user_agent,
+      orderItems,
+      orderTotal,
     });
 
     return res.json({

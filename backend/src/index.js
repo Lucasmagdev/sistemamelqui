@@ -50,18 +50,25 @@ const normalizePhone = (rawPhone) => {
   return `${countryCode}${digits}`;
 };
 
-const getBrowserName = (userAgent) => {
-  const ua = String(userAgent || "").toLowerCase();
-  if (!ua) return "Navegador desconhecido";
-  if (ua.includes("edg/")) return "Microsoft Edge";
-  if (ua.includes("chrome/") && !ua.includes("edg/")) return "Google Chrome";
-  if (ua.includes("safari/") && !ua.includes("chrome/")) return "Safari";
-  if (ua.includes("firefox/")) return "Firefox";
-  if (ua.includes("opera") || ua.includes("opr/")) return "Opera";
-  return "Navegador desconhecido";
+const resolveOrderCode = (order) => {
+  const explicitCode =
+    order?.codigo_pedido ||
+    order?.numero_pedido ||
+    order?.codigo ||
+    order?.code ||
+    order?.numero ||
+    null;
+
+  if (explicitCode) {
+    const code = String(explicitCode).trim();
+    if (!code) return `IMP${order?.id}`;
+    return code.toUpperCase().startsWith("IMP") ? code : `IMP${code}`;
+  }
+
+  return `IMP${order?.id}`;
 };
 
-const buildMessage = ({ type, name, code, browserName, orderItems, orderTotal }) => {
+const buildMessage = ({ type, name, code, orderItems, orderTotal }) => {
   const itemsLines = (orderItems || [])
     .map((item) => `- ${item.nome}: ${formatQuantity(item.quantidade)}`)
     .join("\n");
@@ -74,26 +81,22 @@ const buildMessage = ({ type, name, code, browserName, orderItems, orderTotal })
 
   if (type === "confirmed") {
     return [
-      `Ola ${name}, seu pedido ${code} foi confirmado com sucesso.`,
+      `✅ Olá ${name}, seu pedido ${code} foi confirmado com sucesso!`,
       "",
-      "Ja comecamos a preparacao dos itens.",
+      "🥩 Já começamos a preparação dos itens.",
       "",
-      "Produtos vendidos por peso (KG/LB) podem ter pequena variacao de valor apos pesagem e embalagem.",
-      "",
-      `Canal detectado no seu ultimo acesso: ${browserName}.`,
+      "⚖️ Produtos vendidos por peso (KG/LB) podem ter pequena variação de valor após pesagem e embalagem.",
       itemsSection,
       totalSection,
     ].join("\n");
   }
 
   return [
-    `Ola ${name}, seu pedido ${code} saiu para entrega.`,
+    `🚚 Olá ${name}, seu pedido ${code} saiu para entrega!`,
     "",
-    "Em breve ele chegara ao endereco informado.",
+    "📍 Em breve ele chegará ao endereço informado.",
     "",
-    "Obrigado pela preferencia.",
-    "",
-    `Canal detectado no seu ultimo acesso: ${browserName}.`,
+    "🙏 Obrigado pela preferência.",
     itemsSection,
     totalSection,
   ].join("\n");
@@ -182,8 +185,7 @@ async function sendStatusNotification({
   newStatus,
   clientName,
   clientPhone,
-  orderId,
-  userAgent,
+  orderCode,
   orderItems,
   orderTotal,
 }) {
@@ -199,12 +201,10 @@ async function sendStatusNotification({
   const phone = normalizePhone(clientPhone);
   if (!phone) return { sent: false, reason: "missing-phone" };
 
-  const browserName = getBrowserName(userAgent);
   const message = buildMessage({
     type,
     name: clientName || "cliente",
-    code: `IMP${orderId}`,
-    browserName,
+    code: orderCode,
     orderItems,
     orderTotal,
   });
@@ -288,6 +288,7 @@ app.post("/api/orders/:id/status", async (req, res) => {
     }
 
     const orderItems = await fetchOrderItems(orderId);
+    const orderCode = resolveOrderCode(order);
     const orderTotal = order.valor_total ?? order.total ?? null;
 
     const notification = await sendStatusNotification({
@@ -295,8 +296,7 @@ app.post("/api/orders/:id/status", async (req, res) => {
       newStatus,
       clientName: client.nome,
       clientPhone: client.telefone,
-      orderId,
-      userAgent: client.last_user_agent,
+      orderCode,
       orderItems,
       orderTotal,
     });

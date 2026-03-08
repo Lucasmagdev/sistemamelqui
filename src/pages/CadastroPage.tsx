@@ -4,9 +4,11 @@ import { supabase } from '@/lib/supabaseClient';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
+import { useI18n } from '@/contexts/I18nContext';
 
 export default function CadastroPage() {
   const navigate = useNavigate();
+  const { locale } = useI18n();
   const [nome, setNome] = useState('');
   const [telefone, setTelefone] = useState('');
   const [email, setEmail] = useState('');
@@ -48,6 +50,7 @@ export default function CadastroPage() {
       tenant_id: 1,
       auth_user_id,
       last_user_agent: navigator.userAgent,
+      preferred_locale: locale,
     };
     const { error: clientError } = await supabase.from('clients').insert([clientePayload]);
     if (clientError) {

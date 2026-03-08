@@ -50,6 +50,35 @@ const normalizePhone = (rawPhone) => {
   return `${countryCode}${digits}`;
 };
 
+const normalizeLocale = (value) => {
+  const raw = String(value || "").toLowerCase().trim();
+  if (!raw) return "pt";
+  if (raw.startsWith("en")) return "en";
+  if (raw.startsWith("pt")) return "pt";
+  return "pt";
+};
+
+const resolveMessageLocale = (order, client) => {
+  const orderLocale =
+    order?.locale ||
+    order?.order_locale ||
+    order?.pedido_locale ||
+    order?.idioma ||
+    order?.language;
+
+  if (orderLocale) return normalizeLocale(orderLocale);
+
+  const clientLocale =
+    client?.preferred_locale ||
+    client?.locale ||
+    client?.idioma ||
+    client?.language;
+
+  if (clientLocale) return normalizeLocale(clientLocale);
+
+  return normalizeLocale(process.env.DEFAULT_MESSAGE_LOCALE || "pt");
+};
+
 const resolveOrderCode = (order) => {
   const explicitCode =
     order?.codigo_pedido ||
@@ -68,35 +97,63 @@ const resolveOrderCode = (order) => {
   return `IMP${order?.id}`;
 };
 
-const buildMessage = ({ type, name, code, orderItems, orderTotal }) => {
+const buildMessage = ({ type, name, code, orderItems, orderTotal, locale }) => {
+  const isEn = locale === "en";
+
   const itemsLines = (orderItems || [])
     .map((item) => `- ${item.nome}: ${formatQuantity(item.quantidade)}`)
     .join("\n");
   const itemsSection = itemsLines
-    ? ["", "Itens do pedido:", itemsLines].join("\n")
+    ? ["", isEn ? "Order items:" : "Itens do pedido:", itemsLines].join("\n")
     : "";
 
   const totalLabel = formatMoney(orderTotal);
-  const totalSection = totalLabel ? `\n\nTotal estimado: ${totalLabel}` : "";
+  const totalSection = totalLabel
+    ? `\n\n${isEn ? "Estimated total" : "Total estimado"}: ${totalLabel}`
+    : "";
 
   if (type === "confirmed") {
+    if (isEn) {
+      return [
+        `✅ Hi ${name}, your order ${code} was confirmed successfully!`,
+        "",
+        "🥩 We have already started preparing your items.",
+        "",
+        "⚖️ Products sold by weight (KG/LB) may have a small price variation after weighing and packaging.",
+        itemsSection,
+        totalSection,
+      ].join("\n");
+    }
+
     return [
-      `✅ Olá ${name}, seu pedido ${code} foi confirmado com sucesso!`,
+      `✅ Ola ${name}, seu pedido ${code} foi confirmado com sucesso!`,
       "",
-      "🥩 Já começamos a preparação dos itens.",
+      "🥩 Ja comecamos a preparacao dos itens.",
       "",
-      "⚖️ Produtos vendidos por peso (KG/LB) podem ter pequena variação de valor após pesagem e embalagem.",
+      "⚖️ Produtos vendidos por peso (KG/LB) podem ter pequena variacao de valor apos pesagem e embalagem.",
+      itemsSection,
+      totalSection,
+    ].join("\n");
+  }
+
+  if (isEn) {
+    return [
+      `🚚 Hi ${name}, your order ${code} is out for delivery!`,
+      "",
+      "📍 It will arrive at your address shortly.",
+      "",
+      "🙏 Thank you for your preference.",
       itemsSection,
       totalSection,
     ].join("\n");
   }
 
   return [
-    `🚚 Olá ${name}, seu pedido ${code} saiu para entrega!`,
+    `🚚 Ola ${name}, seu pedido ${code} saiu para entrega!`,
     "",
-    "📍 Em breve ele chegará ao endereço informado.",
+    "📍 Em breve ele chegara ao endereco informado.",
     "",
-    "🙏 Obrigado pela preferência.",
+    "🙏 Obrigado pela preferencia.",
     itemsSection,
     totalSection,
   ].join("\n");
@@ -188,6 +245,7 @@ async function sendStatusNotification({
   orderCode,
   orderItems,
   orderTotal,
+  locale,
 }) {
   let type = null;
   if (previousStatus === STATUS.RECEBIDO && newStatus === STATUS.CONFIRMADO) {
@@ -207,6 +265,7 @@ async function sendStatusNotification({
     code: orderCode,
     orderItems,
     orderTotal,
+    locale,
   });
 
   const sendResult = await sendWhatsAppViaZApi({ phone, message });
@@ -251,7 +310,7 @@ app.post("/api/orders/:id/status", async (req, res) => {
     if (clientId) {
       const clientByIdResult = await supabase
         .from("clients")
-        .select("id, nome, telefone, last_user_agent")
+        .select("*")
         .eq("id", clientId)
         .maybeSingle();
       client = clientByIdResult.data;
@@ -259,7 +318,7 @@ app.post("/api/orders/:id/status", async (req, res) => {
     } else if (orderEmail) {
       const clientByEmailResult = await supabase
         .from("clients")
-        .select("id, nome, telefone, last_user_agent")
+        .select("*")
         .eq("email", orderEmail)
         .maybeSingle();
       client = clientByEmailResult.data;
@@ -290,6 +349,7 @@ app.post("/api/orders/:id/status", async (req, res) => {
     const orderItems = await fetchOrderItems(orderId);
     const orderCode = resolveOrderCode(order);
     const orderTotal = order.valor_total ?? order.total ?? null;
+    const locale = resolveMessageLocale(order, client);
 
     const notification = await sendStatusNotification({
       previousStatus,
@@ -299,12 +359,14 @@ app.post("/api/orders/:id/status", async (req, res) => {
       orderCode,
       orderItems,
       orderTotal,
+      locale,
     });
 
     return res.json({
       ok: true,
       previousStatus,
       newStatus,
+      locale,
       notification,
     });
   } catch (error) {
@@ -318,3 +380,4 @@ app.post("/api/orders/:id/status", async (req, res) => {
 app.listen(PORT, () => {
   console.log(`Backend rodando em http://localhost:${PORT}`);
 });
+

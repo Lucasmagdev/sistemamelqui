@@ -357,7 +357,7 @@ export default function ClientePage() {
       if (email) {
         await supabase
           .from('clients')
-          .update({ last_user_agent: navigator.userAgent })
+          .update({ last_user_agent: navigator.userAgent, preferred_locale: locale })
           .eq('email', email);
       }
     };
@@ -538,6 +538,7 @@ export default function ClientePage() {
           estado: enderecoEstado,
           cep: enderecoZip,
           last_user_agent: navigator.userAgent,
+          preferred_locale: locale,
         }).eq('email', email);
         if (error) toast.error(ui.saveProfileError + error.message);
       })();
@@ -561,7 +562,7 @@ export default function ClientePage() {
         clienteId = clientes[0].id;
         await supabase
           .from('clients')
-          .update({ last_user_agent: navigator.userAgent })
+          .update({ last_user_agent: navigator.userAgent, preferred_locale: locale })
           .eq('id', clienteId);
       } else {
         // Insere cliente se nÃ£o existe
@@ -579,6 +580,7 @@ export default function ClientePage() {
             pais: 'USA',
             tenant_id: 1,
             last_user_agent: navigator.userAgent,
+            preferred_locale: locale,
           },
         ]).select('id');
         if (error) {
@@ -603,6 +605,7 @@ export default function ClientePage() {
           status: 0,
           valor_total: resumoCarrinho.totalValor,
           tenant_id: 1,
+          locale,
         },
       ]).select('id');
       if (error) {

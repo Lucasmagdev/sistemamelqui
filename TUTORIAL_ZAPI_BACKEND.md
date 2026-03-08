@@ -45,10 +45,17 @@ Execute no SQL Editor do Supabase:
 ```sql
 ALTER TABLE clients
 ADD COLUMN IF NOT EXISTS last_user_agent TEXT;
+
+ALTER TABLE clients
+ADD COLUMN IF NOT EXISTS preferred_locale VARCHAR(8) DEFAULT 'pt';
+
+ALTER TABLE orders
+ADD COLUMN IF NOT EXISTS locale VARCHAR(8) DEFAULT 'pt';
 ```
 
-Ou rode o arquivo:
+Ou rode os arquivos:
 - `banco de dados/add_last_user_agent_clients.sql`
+- `banco de dados/add_locale_fields.sql`
 
 ---
 
@@ -76,6 +83,7 @@ ZAPI_INSTANCE_TOKEN=SEU_INSTANCE_TOKEN
 ZAPI_CLIENT_TOKEN=SEU_CLIENT_TOKEN
 
 DEFAULT_COUNTRY_CODE=55
+DEFAULT_MESSAGE_LOCALE=pt
 ```
 
 ## Observacoes importantes

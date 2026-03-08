@@ -1,25 +1,25 @@
 # Imperial Flow Gold
 
-Sistema web construído com React + Vite + TypeScript.
+Sistema web construido com React + Vite + TypeScript.
 
 ## Requisitos
 
 - Node.js 18+
 - npm
 
-## Rodando localmente
+## Rodando frontend localmente
 
 ```sh
 npm install
 npm run dev
 ```
 
-Aplicação disponível em `http://localhost:8080`.
+Aplicacao em `http://localhost:8080`.
 
-## Scripts
+## Scripts frontend
 
 - `npm run dev` inicia o servidor de desenvolvimento
-- `npm run build` gera build de produção
+- `npm run build` gera build de producao
 - `npm run preview` executa preview da build
 - `npm run lint` roda o ESLint
 - `npm run test` executa os testes com Vitest
@@ -31,3 +31,11 @@ Aplicação disponível em `http://localhost:8080`.
 - Vite
 - Tailwind CSS
 - shadcn/ui
+
+## Fluxo WhatsApp com backend
+
+O envio WhatsApp por mudanca de status agora acontece no backend (`backend/`), integrado ao Z-API.
+
+Tutorial completo:
+- [TUTORIAL_ZAPI_BACKEND.md](./TUTORIAL_ZAPI_BACKEND.md)
+

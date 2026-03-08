@@ -353,6 +353,13 @@ export default function ClientePage() {
 
       setPerfilCliente(cliente || null);
       setNomeLogado(cliente?.nome || user.user_metadata?.nome || user.email || 'Usuario');
+
+      if (email) {
+        await supabase
+          .from('clients')
+          .update({ last_user_agent: navigator.userAgent })
+          .eq('email', email);
+      }
     };
 
     carregarUsuario();
@@ -530,6 +537,7 @@ export default function ClientePage() {
           cidade: enderecoCidade,
           estado: enderecoEstado,
           cep: enderecoZip,
+          last_user_agent: navigator.userAgent,
         }).eq('email', email);
         if (error) toast.error(ui.saveProfileError + error.message);
       })();
@@ -551,6 +559,10 @@ export default function ClientePage() {
         .eq('email', clienteEmail);
       if (clientes && clientes.length > 0) {
         clienteId = clientes[0].id;
+        await supabase
+          .from('clients')
+          .update({ last_user_agent: navigator.userAgent })
+          .eq('id', clienteId);
       } else {
         // Insere cliente se nÃ£o existe
         const { data: novoCliente, error } = await supabase.from('clients').insert([
@@ -566,6 +578,7 @@ export default function ClientePage() {
             cep: enderecoZip,
             pais: 'USA',
             tenant_id: 1,
+            last_user_agent: navigator.userAgent,
           },
         ]).select('id');
         if (error) {

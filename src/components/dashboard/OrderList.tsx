@@ -1,5 +1,8 @@
 import React from "react";
 import { supabase } from "@/lib/supabaseClient";
+import { toast } from "sonner";
+
+const backendBaseUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
 
 const orderStatusSteps = [
   { label: "Pedido Recebido", icon: (
@@ -76,8 +79,35 @@ export const OrderCard: React.FC<OrderCardProps> = ({ order, onStatusChange }) =
   }, [showPrepPanel, order.id, itensPedido.length]);
 
   const updateStatus = async (newStatus: number) => {
-    setStatus(newStatus);
-    await supabase.from('orders').update({ status: newStatus }).eq('id', order.id);
+    const previousStatus = status;
+
+    try {
+      const response = await fetch(`${backendBaseUrl}/api/orders/${order.id}/status`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ newStatus }),
+      });
+
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result?.error || "Falha ao atualizar status do pedido.");
+      }
+
+      setStatus(newStatus);
+
+      if (result?.notification?.sent) {
+        toast.success("Status atualizado e WhatsApp enviado automaticamente.");
+      } else if (previousStatus === 0 && newStatus === 1) {
+        toast.info(`Status atualizado. WhatsApp nao enviado (${result?.notification?.reason || "sem motivo"}).`);
+      } else if (previousStatus === 3 && newStatus === 4) {
+        toast.info(`Status atualizado. WhatsApp nao enviado (${result?.notification?.reason || "sem motivo"}).`);
+      }
+    } catch (error: any) {
+      toast.error(error?.message || "Erro ao atualizar status do pedido.");
+    }
+
     if (onStatusChange) onStatusChange();
   };
 

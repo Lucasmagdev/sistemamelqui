@@ -47,6 +47,7 @@ export default function CadastroPage() {
       pais: 'USA',
       tenant_id: 1,
       auth_user_id,
+      last_user_agent: navigator.userAgent,
     };
     const { error: clientError } = await supabase.from('clients').insert([clientePayload]);
     if (clientError) {

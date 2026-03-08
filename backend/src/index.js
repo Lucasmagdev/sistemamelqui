@@ -1,0 +1,215 @@
+import "dotenv/config";
+import express from "express";
+import cors from "cors";
+import { createClient } from "@supabase/supabase-js";
+
+const app = express();
+app.use(express.json());
+app.use(
+  cors({
+    origin: process.env.CORS_ORIGIN || "*",
+  }),
+);
+
+const PORT = Number(process.env.PORT || 3001);
+const STATUS = {
+  RECEBIDO: 0,
+  CONFIRMADO: 1,
+  PREPARO: 2,
+  PRONTO: 3,
+  ENTREGA: 4,
+  CONCLUIDO: 5,
+};
+
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+if (!supabaseUrl || !supabaseServiceRoleKey) {
+  throw new Error("Configure SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY no backend/.env");
+}
+
+const supabase = createClient(supabaseUrl, supabaseServiceRoleKey);
+
+const normalizePhone = (rawPhone) => {
+  const digits = String(rawPhone || "").replace(/\D/g, "");
+  if (!digits) return "";
+  if (digits.length >= 12) return digits;
+  const countryCode = process.env.DEFAULT_COUNTRY_CODE || "55";
+  return `${countryCode}${digits}`;
+};
+
+const getBrowserName = (userAgent) => {
+  const ua = String(userAgent || "").toLowerCase();
+  if (!ua) return "Navegador desconhecido";
+  if (ua.includes("edg/")) return "Microsoft Edge";
+  if (ua.includes("chrome/") && !ua.includes("edg/")) return "Google Chrome";
+  if (ua.includes("safari/") && !ua.includes("chrome/")) return "Safari";
+  if (ua.includes("firefox/")) return "Firefox";
+  if (ua.includes("opera") || ua.includes("opr/")) return "Opera";
+  return "Navegador desconhecido";
+};
+
+const buildMessage = ({ type, name, code, browserName }) => {
+  if (type === "confirmed") {
+    return [
+      `Ola ${name}, seu pedido ${code} foi confirmado com sucesso.`,
+      "",
+      "Ja comecamos a preparacao dos itens.",
+      "",
+      "Produtos vendidos por peso (KG/LB) podem ter pequena variacao de valor apos pesagem e embalagem.",
+      "",
+      `Canal detectado no seu ultimo acesso: ${browserName}.`,
+    ].join("\n");
+  }
+
+  return [
+    `Ola ${name}, seu pedido ${code} saiu para entrega.`,
+    "",
+    "Em breve ele chegara ao endereco informado.",
+    "",
+    "Obrigado pela preferencia.",
+    "",
+    `Canal detectado no seu ultimo acesso: ${browserName}.`,
+  ].join("\n");
+};
+
+async function sendWhatsAppViaZApi({ phone, message }) {
+  const instanceId = process.env.ZAPI_INSTANCE_ID;
+  const instanceToken = process.env.ZAPI_INSTANCE_TOKEN;
+  const clientToken = process.env.ZAPI_CLIENT_TOKEN;
+  const baseUrl = process.env.ZAPI_BASE_URL || "https://api.z-api.io";
+
+  if (!instanceId || !instanceToken) {
+    return { ok: false, reason: "missing-zapi-config" };
+  }
+
+  const endpoint = `${baseUrl}/instances/${instanceId}/token/${instanceToken}/send-text`;
+  const headers = { "Content-Type": "application/json" };
+  if (clientToken) headers["Client-Token"] = clientToken;
+
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      phone,
+      number: phone,
+      message,
+      text: message,
+    }),
+  });
+
+  if (!response.ok) {
+    return { ok: false, reason: `zapi-http-${response.status}` };
+  }
+  return { ok: true };
+}
+
+async function sendStatusNotification({
+  previousStatus,
+  newStatus,
+  clientName,
+  clientPhone,
+  orderId,
+  userAgent,
+}) {
+  let type = null;
+  if (previousStatus === STATUS.RECEBIDO && newStatus === STATUS.CONFIRMADO) {
+    type = "confirmed";
+  }
+  if (previousStatus === STATUS.PRONTO && newStatus === STATUS.ENTREGA) {
+    type = "out_for_delivery";
+  }
+  if (!type) return { sent: false, reason: "no-notification-transition" };
+
+  const phone = normalizePhone(clientPhone);
+  if (!phone) return { sent: false, reason: "missing-phone" };
+
+  const browserName = getBrowserName(userAgent);
+  const message = buildMessage({
+    type,
+    name: clientName || "cliente",
+    code: `IMP${orderId}`,
+    browserName,
+  });
+
+  const sendResult = await sendWhatsAppViaZApi({ phone, message });
+  if (!sendResult.ok) {
+    return { sent: false, reason: sendResult.reason };
+  }
+
+  return { sent: true };
+}
+
+app.get("/health", (_req, res) => {
+  res.json({ ok: true });
+});
+
+app.post("/api/orders/:id/status", async (req, res) => {
+  try {
+    const orderId = req.params.id;
+    const newStatus = Number(req.body?.newStatus);
+    if (!Number.isInteger(newStatus) || newStatus < 0 || newStatus > 5) {
+      return res.status(400).json({ error: "newStatus invalido. Use inteiro entre 0 e 5." });
+    }
+
+    const { data: order, error: orderError } = await supabase
+      .from("orders")
+      .select("id, status, cliente_id, client_id")
+      .eq("id", orderId)
+      .single();
+
+    if (orderError || !order) {
+      return res.status(404).json({ error: "Pedido nao encontrado." });
+    }
+
+    const previousStatus = Number(order.status ?? 0);
+    const clientId = order.cliente_id || order.client_id || null;
+    if (!clientId) {
+      return res.status(400).json({ error: "Pedido sem cliente vinculado." });
+    }
+
+    const { data: client, error: clientError } = await supabase
+      .from("clients")
+      .select("id, nome, telefone, last_user_agent")
+      .eq("id", clientId)
+      .maybeSingle();
+
+    if (clientError || !client) {
+      return res.status(404).json({ error: "Cliente do pedido nao encontrado." });
+    }
+
+    const { error: updateError } = await supabase
+      .from("orders")
+      .update({ status: newStatus })
+      .eq("id", orderId);
+
+    if (updateError) {
+      return res.status(500).json({ error: `Erro ao atualizar status: ${updateError.message}` });
+    }
+
+    const notification = await sendStatusNotification({
+      previousStatus,
+      newStatus,
+      clientName: client.nome,
+      clientPhone: client.telefone,
+      orderId,
+      userAgent: client.last_user_agent,
+    });
+
+    return res.json({
+      ok: true,
+      previousStatus,
+      newStatus,
+      notification,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      error: "Erro interno ao atualizar status do pedido.",
+      detail: String(error?.message || error),
+    });
+  }
+});
+
+app.listen(PORT, () => {
+  console.log(`Backend rodando em http://localhost:${PORT}`);
+});
+

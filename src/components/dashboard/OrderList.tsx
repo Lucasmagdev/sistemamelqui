@@ -48,11 +48,16 @@ export const OrderCard: React.FC<OrderCardProps> = ({ order, onStatusChange }) =
   );
 
   const [status, setStatus] = React.useState(order.status);
-  const [showPrepPanel, setShowPrepPanel] = React.useState(false);
+  const [showPrepPanel, setShowPrepPanel] = React.useState(order.status === 2);
   const [itensPedido, setItensPedido] = React.useState<string[]>(itensIniciais);
   const [itensConfirmados, setItensConfirmados] = React.useState<boolean[]>(
     () => Array(itensIniciais.length).fill(false)
   );
+
+  React.useEffect(() => {
+    setStatus(order.status);
+    if (order.status === 2) setShowPrepPanel(true);
+  }, [order.status]);
 
   React.useEffect(() => {
     setItensConfirmados((prev) =>
@@ -121,7 +126,7 @@ export const OrderCard: React.FC<OrderCardProps> = ({ order, onStatusChange }) =
 
   const totalItens = itensPedido.length;
   const itensMarcados = itensConfirmados.filter(Boolean).length;
-  const todosItensConfirmados = totalItens > 0 && itensMarcados === totalItens;
+  const todosItensConfirmados = totalItens === 0 || itensMarcados === totalItens;
 
   return (
     <div className="bg-[#18181b] border border-yellow-900 rounded-xl p-4 mb-4 flex flex-col md:flex-row md:items-center justify-between shadow-lg">
@@ -138,11 +143,11 @@ export const OrderCard: React.FC<OrderCardProps> = ({ order, onStatusChange }) =
               className={`w-8 h-8 flex items-center justify-center rounded-full border-2 transition-all duration-150 ${idx === status ? 'border-yellow-400 bg-yellow-400 text-black' : 'border-gray-600 bg-[#23232a] text-gray-400'} ${idx !== status + 1 ? 'opacity-50 cursor-not-allowed' : 'hover:border-yellow-400 hover:bg-yellow-400 hover:text-black cursor-pointer'}`}
               disabled={
                 idx !== status + 1 ||
-                (status === 2 && idx === 3 && (!showPrepPanel || !todosItensConfirmados))
+                (status === 2 && idx === 3 && !todosItensConfirmados)
               }
               onClick={() => {
                 // Só permite avançar para 'Finalizado/Pronto' se todos itens confirmados
-                if (status === 2 && idx === 3 && (!showPrepPanel || !todosItensConfirmados)) return;
+                if (status === 2 && idx === 3 && !todosItensConfirmados) return;
                 updateStatus(idx);
                 if (idx === 2) setShowPrepPanel(true);
                 if (idx === 3) setShowPrepPanel(false);
@@ -231,3 +236,4 @@ export const OrderList: React.FC<OrderListProps> = ({ orders, onStatusChange }) 
     </div>
   );
 };
+

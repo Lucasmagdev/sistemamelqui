@@ -177,6 +177,11 @@ export default function PedidosPage() {
     });
   }, [pedidosParaCards, filterSearch, filterState, filterCity]);
 
+  const pedidosEmAberto = useMemo(
+    () => pedidosParaCards.filter((p) => p.status < 5),
+    [pedidosParaCards],
+  );
+
   const exportarCSV = () => {
     const header = ['Nº Pedido', 'Cliente', 'Cidade', 'Endereco Completo', 'Produtos', 'Data', 'Valor Total', 'Status'];
     const rows = pedidosFiltrados.map((p) => [
@@ -219,8 +224,8 @@ export default function PedidosPage() {
       </div>
 
       <section className="relative z-20">
-        <h2 className="text-lg font-bold text-yellow-400 mb-2">Pedidos Recentes</h2>
-        <OrderList orders={pedidosParaCards} moeda="USD" unidadePeso="LB" onStatusChange={() => fetchPedidos({ reset: true })} />
+        <h2 className="text-lg font-bold text-yellow-400 mb-2">Pedidos em Aberto</h2>
+        <OrderList orders={pedidosEmAberto} moeda="USD" unidadePeso="LB" onStatusChange={() => fetchPedidos({ reset: true })} />
       </section>
 
       <div className="flex flex-wrap gap-3 mb-4 items-center">

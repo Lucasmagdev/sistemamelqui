@@ -42,8 +42,11 @@ CREATE TABLE clients (
 CREATE TABLE products (
   id SERIAL PRIMARY KEY,
   nome VARCHAR(100) NOT NULL,
+  nome_en VARCHAR(100),
   descricao TEXT,
+  descricao_en TEXT,
   categoria VARCHAR(50),
+  categoria_en VARCHAR(50),
   preco NUMERIC(10,2) NOT NULL,
   unidade VARCHAR(10) DEFAULT 'LB',
   tenant_id INTEGER REFERENCES tenants(id)

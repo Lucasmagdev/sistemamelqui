@@ -6,19 +6,38 @@ const ProductsAdminPage: React.FC = () => {
   const [form, setForm] = useState({
     nome: "",
     descricao: "",
+    nome_en: "",
+    descricao_en: "",
     preco: "",
     categoria: "",
+    categoria_en: "",
     foto: null as File | null,
   });
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [editProduct, setEditProduct] = useState<any | null>(null);
-  const [editForm, setEditForm] = useState({ nome: '', preco: '', foto: null as File | null, foto_url: '', id: null });
+  const [editForm, setEditForm] = useState({
+    nome: '',
+    nome_en: '',
+    descricao: '',
+    descricao_en: '',
+    categoria: '',
+    categoria_en: '',
+    preco: '',
+    foto: null as File | null,
+    foto_url: '',
+    id: null,
+  });
   const [editPreviewUrl, setEditPreviewUrl] = useState<string | null>(null);
     // Função para abrir modal de edição
     const handleEditClick = (prod: any) => {
       setEditProduct(prod);
       setEditForm({
         nome: prod.nome,
+        nome_en: prod.nome_en || '',
+        descricao: prod.descricao || '',
+        descricao_en: prod.descricao_en || '',
+        categoria: prod.categoria || '',
+        categoria_en: prod.categoria_en || '',
         preco: prod.preco,
         foto: null,
         foto_url: prod.foto_url || '',
@@ -28,7 +47,7 @@ const ProductsAdminPage: React.FC = () => {
     };
 
     // Função para lidar com mudanças no formulário de edição
-    const handleEditFormChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const handleEditFormChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
       const { name, value, type } = e.target;
       if (type === "file") {
         const file = (e.target as HTMLInputElement).files?.[0] || null;
@@ -74,7 +93,16 @@ const ProductsAdminPage: React.FC = () => {
         }
         const { error: updateError } = await supabase
           .from("products")
-          .update({ nome: editForm.nome, preco: parseFloat(editForm.preco), foto_url: fotoUrl })
+          .update({
+            nome: editForm.nome,
+            nome_en: editForm.nome_en.trim() || null,
+            descricao: editForm.descricao.trim() || null,
+            descricao_en: editForm.descricao_en.trim() || null,
+            categoria: editForm.categoria.trim() || null,
+            categoria_en: editForm.categoria_en.trim() || null,
+            preco: parseFloat(editForm.preco),
+            foto_url: fotoUrl,
+          })
           .eq("id", editForm.id);
         if (updateError) {
           setMessage(`Erro ao atualizar produto: ${updateError.message}`);
@@ -83,12 +111,23 @@ const ProductsAdminPage: React.FC = () => {
         }
         setMessage("Produto atualizado com sucesso!");
         setEditProduct(null);
-        setEditForm({ nome: '', preco: '', foto: null, foto_url: '', id: null });
+        setEditForm({
+          nome: '',
+          nome_en: '',
+          descricao: '',
+          descricao_en: '',
+          categoria: '',
+          categoria_en: '',
+          preco: '',
+          foto: null,
+          foto_url: '',
+          id: null,
+        });
         setEditPreviewUrl(null);
         // Atualizar lista de produtos
         const { data } = await supabase
           .from("products")
-          .select("id, nome, descricao, categoria, preco, unidade, foto_url");
+          .select("id, nome, descricao, nome_en, descricao_en, categoria, categoria_en, preco, unidade, foto_url");
         if (data) setProducts(data);
       } catch (err: any) {
         setMessage("Erro inesperado: " + err.message);
@@ -117,7 +156,7 @@ const ProductsAdminPage: React.FC = () => {
       setFetching(true);
       const { data, error } = await supabase
         .from("products")
-        .select("id, nome, descricao, categoria, preco, unidade, foto_url");
+        .select("id, nome, descricao, nome_en, descricao_en, categoria, categoria_en, preco, unidade, foto_url");
       if (!error && data) setProducts(data);
       setFetching(false);
     };
@@ -183,8 +222,11 @@ const ProductsAdminPage: React.FC = () => {
           {
             nome: form.nome,
             descricao: form.descricao,
+            nome_en: form.nome_en.trim() || null,
+            descricao_en: form.descricao_en.trim() || null,
             preco: parseFloat(form.preco),
             categoria: form.categoria,
+            categoria_en: form.categoria_en.trim() || null,
             foto_url: fotoUrl,
             // estoque removido
           },
@@ -195,13 +237,22 @@ const ProductsAdminPage: React.FC = () => {
         return;
       }
       setMessage("Produto cadastrado com sucesso!");
-      setForm({ nome: "", descricao: "", preco: "", categoria: "", foto: null });
+      setForm({
+        nome: "",
+        descricao: "",
+        nome_en: "",
+        descricao_en: "",
+        preco: "",
+        categoria: "",
+        categoria_en: "",
+        foto: null,
+      });
       setPreviewUrl(null);
       setShowForm(false);
       // Atualizar lista de produtos
       const { data } = await supabase
         .from("products")
-        .select("id, nome, descricao, categoria, preco, unidade, foto_url");
+        .select("id, nome, descricao, nome_en, descricao_en, categoria, categoria_en, preco, unidade, foto_url");
       if (data) setProducts(data);
     } catch (err: any) {
       setMessage("Erro inesperado: " + err.message);
@@ -243,10 +294,16 @@ const ProductsAdminPage: React.FC = () => {
                     <div className="flex flex-col gap-2 flex-1">
                       <label className="text-gold font-semibold text-sm">Nome do Produto</label>
                       <input name="nome" type="text" value={form.nome} onChange={handleChange} required className="bg-[#222] border border-gold rounded px-3 py-2 text-white w-full" />
+                      <label className="text-gold font-semibold text-sm">Nome do Produto (EN - opcional)</label>
+                      <input name="nome_en" type="text" value={form.nome_en} onChange={handleChange} className="bg-[#222] border border-gold rounded px-3 py-2 text-white w-full" />
                       <label className="text-gold font-semibold text-sm">Categoria</label>
                       <input name="categoria" type="text" value={form.categoria} onChange={handleChange} required className="bg-[#222] border border-gold rounded px-3 py-2 text-white w-full" />
+                      <label className="text-gold font-semibold text-sm">Categoria (EN - opcional)</label>
+                      <input name="categoria_en" type="text" value={form.categoria_en} onChange={handleChange} className="bg-[#222] border border-gold rounded px-3 py-2 text-white w-full" />
                       <label className="text-gold font-semibold text-sm">Descrição</label>
                       <textarea name="descricao" value={form.descricao} onChange={handleChange} required className="bg-[#222] border border-gold rounded px-3 py-2 text-white w-full" />
+                      <label className="text-gold font-semibold text-sm">Descricao (EN - opcional)</label>
+                      <textarea name="descricao_en" value={form.descricao_en} onChange={handleChange} className="bg-[#222] border border-gold rounded px-3 py-2 text-white w-full" />
                     </div>
                     <div className="flex flex-col gap-2 flex-1">
                       <label className="text-gold font-semibold text-sm">Imagem do Produto</label>
@@ -355,6 +412,16 @@ const ProductsAdminPage: React.FC = () => {
                                     <form onSubmit={handleEditSubmit} className="flex flex-col gap-4" encType="multipart/form-data">
                                       <label className="text-gold font-semibold text-sm">Nome do Produto</label>
                                       <input name="nome" type="text" value={editForm.nome} onChange={handleEditFormChange} required className="bg-[#222] border border-gold rounded px-3 py-2 text-white w-full" />
+                                      <label className="text-gold font-semibold text-sm">Nome do Produto (EN - opcional)</label>
+                                      <input name="nome_en" type="text" value={editForm.nome_en} onChange={handleEditFormChange} className="bg-[#222] border border-gold rounded px-3 py-2 text-white w-full" />
+                                      <label className="text-gold font-semibold text-sm">Categoria</label>
+                                      <input name="categoria" type="text" value={editForm.categoria} onChange={handleEditFormChange} className="bg-[#222] border border-gold rounded px-3 py-2 text-white w-full" />
+                                      <label className="text-gold font-semibold text-sm">Categoria (EN - opcional)</label>
+                                      <input name="categoria_en" type="text" value={editForm.categoria_en} onChange={handleEditFormChange} className="bg-[#222] border border-gold rounded px-3 py-2 text-white w-full" />
+                                      <label className="text-gold font-semibold text-sm">Descricao</label>
+                                      <textarea name="descricao" value={editForm.descricao} onChange={handleEditFormChange} className="bg-[#222] border border-gold rounded px-3 py-2 text-white w-full" />
+                                      <label className="text-gold font-semibold text-sm">Descricao (EN - opcional)</label>
+                                      <textarea name="descricao_en" value={editForm.descricao_en} onChange={handleEditFormChange} className="bg-[#222] border border-gold rounded px-3 py-2 text-white w-full" />
                                       <label className="text-gold font-semibold text-sm">Preço de Venda</label>
                                       <input name="preco" type="number" step="0.01" value={editForm.preco} onChange={handleEditFormChange} required className="bg-[#222] border border-gold rounded px-3 py-2 text-white w-full" />
                                       <label className="text-gold font-semibold text-sm">Imagem do Produto</label>
@@ -386,3 +453,4 @@ const ProductsAdminPage: React.FC = () => {
 };
 
 export default ProductsAdminPage;
+

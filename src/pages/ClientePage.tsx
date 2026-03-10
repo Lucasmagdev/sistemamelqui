@@ -89,22 +89,30 @@ export default function ClientePage() {
     // Buscar itens do pedido
     const { data: itens } = await supabase
       .from('order_items')
-      .select('produto_id, quantidade, preco_unitario, products(nome, foto_url)')
+      .select('produto_id, quantidade, preco_unitario, products(nome, nome_en, foto_url)')
       .eq('pedido_id', pedidoId);
     if (!itens || !itens.length) {
       toast.error(ui.noOrderItemsFound);
       return;
     }
-    setItensCarrinho(itens.map((item: any) => ({
-      id: `${item.produto_id}-${Date.now()}`,
-      produtoId: item.produto_id,
-      nome: item.products?.nome || 'Produto',
-      imagem: item.products?.foto_url || '',
-      precoKg: item.preco_unitario,
-      kg: item.quantidade,
-      tipoCorte: 'piece',
-      observacoes: '',
-    })));
+    setItensCarrinho(
+      itens.map((item: any) => {
+        const nomeProduto = isEn
+          ? (item.products?.nome_en || item.products?.nome || 'Produto')
+          : (item.products?.nome || item.products?.nome_en || 'Produto');
+
+        return {
+          id: `${item.produto_id}-${Date.now()}`,
+          produtoId: item.produto_id,
+          nome: nomeProduto,
+          imagem: item.products?.foto_url || '',
+          precoKg: item.preco_unitario,
+          kg: item.quantidade,
+          tipoCorte: 'piece',
+          observacoes: '',
+        };
+      }),
+    );
     toast.success(ui.cartFilledWithLastOrder);
     setCarrinhoAberto(true);
   };
@@ -377,20 +385,30 @@ export default function ClientePage() {
         return;
       }
       // Adiciona campos extras para manter compatibilidade visual
-      const produtos = (data || []).map((produto: any) => ({
-        id: produto.id,
-        nome: produto.nome,
-        imagem: produto.foto_url && produto.foto_url !== 'NULL' && produto.foto_url !== '' ? produto.foto_url : null,
-        preco: produto.preco,
-        precoAnterior: produto.precoAnterior || null,
-        destaque: produto.destaque || false,
-        selo: produto.selo || '',
-        categoria: produto.categoria || '',
-      }));
+      const produtos = (data || []).map((produto: any) => {
+        const nomeLocalizado = isEn
+          ? (produto.nome_en || produto.nome || '')
+          : (produto.nome || produto.nome_en || '');
+        const descricaoLocalizada = isEn
+          ? (produto.descricao_en || produto.descricao || '')
+          : (produto.descricao || produto.descricao_en || '');
+
+        return {
+          id: produto.id,
+          nome: nomeLocalizado,
+          descricao: descricaoLocalizada,
+          imagem: produto.foto_url && produto.foto_url !== 'NULL' && produto.foto_url !== '' ? produto.foto_url : null,
+          preco: produto.preco,
+          precoAnterior: produto.precoAnterior || null,
+          destaque: produto.destaque || false,
+          selo: produto.selo || '',
+          categoria: produto.categoria || '',
+        };
+      });
       setProdutosCatalogo(produtos);
     }
     fetchProdutos();
-  }, [config]);
+  }, [config, isEn]);
 
   const produtosFiltrados = useMemo(() => {
     let resultado = [...produtosCatalogo];

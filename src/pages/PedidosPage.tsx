@@ -10,39 +10,75 @@ type PedidoTableRow = Order & {
   data_pedido?: string;
 };
 
+const PEDIDOS_PAGE_SIZE = 10;
+
 export default function PedidosPage() {
   const [filterSearchInput, setFilterSearchInput] = useState('');
   const [filterSearch, setFilterSearch] = useState('');
   const [filterState, setFilterState] = useState('');
   const [filterCity, setFilterCity] = useState('');
   const [pedidosParaCards, setPedidosParaCards] = useState<PedidoTableRow[]>([]);
+  const [pedidosOffset, setPedidosOffset] = useState(0);
+  const [hasMorePedidos, setHasMorePedidos] = useState(true);
+  const [isLoadingMorePedidos, setIsLoadingMorePedidos] = useState(false);
   const navigate = useNavigate();
 
-  const fetchPedidos = async () => {
+  const fetchPedidos = async ({ reset = false }: { reset?: boolean } = {}) => {
+    if (!reset && (!hasMorePedidos || isLoadingMorePedidos)) return;
+
+    const start = reset ? 0 : pedidosOffset;
+    if (!reset) setIsLoadingMorePedidos(true);
+
     const { data: pedidosData, error } = await supabase
       .from('orders')
-      .select('id, cliente_id, data_pedido, status, valor_total');
-    if (error) return;
+      .select('id, cliente_id, data_pedido, status, valor_total')
+      .order('data_pedido', { ascending: false })
+      .order('id', { ascending: false })
+      .range(start, start + PEDIDOS_PAGE_SIZE - 1);
 
-    const clienteIds = (pedidosData || []).map((pedido: any) => pedido.cliente_id);
-    const { data: clientesData } = await supabase
-      .from('clients')
-      .select('id, nome, telefone, cidade, endereco_rua, endereco_numero, endereco_complemento, cep, estado')
-      .in('id', clienteIds);
+    if (error) {
+      setIsLoadingMorePedidos(false);
+      return;
+    }
 
-    const pedidoIds = (pedidosData || []).map((pedido: any) => pedido.id);
-    const { data: itensData } = await supabase
-      .from('order_items')
-      .select('pedido_id, produto_id, quantidade')
-      .in('pedido_id', pedidoIds);
+    const pedidosBase = pedidosData || [];
+    if (pedidosBase.length === 0) {
+      if (reset) setPedidosParaCards([]);
+      setHasMorePedidos(false);
+      setIsLoadingMorePedidos(false);
+      return;
+    }
 
-    const produtoIds = (itensData || []).map((item: any) => item.produto_id);
-    const { data: produtosData } = await supabase
-      .from('products')
-      .select('id, nome')
-      .in('id', produtoIds);
+    const clienteIds = pedidosBase
+      .map((pedido: any) => pedido.cliente_id)
+      .filter(Boolean);
 
-    const pedidos = (pedidosData || []).map((pedido: any) => {
+    const { data: clientesData } = clienteIds.length
+      ? await supabase
+          .from('clients')
+          .select('id, nome, telefone, cidade, endereco_rua, endereco_numero, endereco_complemento, cep, estado')
+          .in('id', clienteIds)
+      : { data: [] as any[] };
+
+    const pedidoIds = pedidosBase.map((pedido: any) => pedido.id);
+    const { data: itensData } = pedidoIds.length
+      ? await supabase
+          .from('order_items')
+          .select('pedido_id, produto_id, quantidade')
+          .in('pedido_id', pedidoIds)
+      : { data: [] as any[] };
+
+    const produtoIds = (itensData || [])
+      .map((item: any) => item.produto_id)
+      .filter(Boolean);
+    const { data: produtosData } = produtoIds.length
+      ? await supabase
+          .from('products')
+          .select('id, nome')
+          .in('id', produtoIds)
+      : { data: [] as any[] };
+
+    const pedidos = pedidosBase.map((pedido: any) => {
       const cliente = (clientesData || []).find((c: any) => c.id === pedido.cliente_id);
       const itensPedido = (itensData || []).filter((item: any) => item.pedido_id === pedido.id);
       const produtosPedido = itensPedido
@@ -72,11 +108,19 @@ export default function PedidosPage() {
       };
     });
 
-    setPedidosParaCards(pedidos);
+    setPedidosParaCards((prev) => {
+      if (reset) return pedidos;
+      const existingIds = new Set(prev.map((p) => p.id));
+      const uniqueNew = pedidos.filter((p) => !existingIds.has(p.id));
+      return [...prev, ...uniqueNew];
+    });
+    setPedidosOffset(start + pedidosBase.length);
+    setHasMorePedidos(pedidosBase.length === PEDIDOS_PAGE_SIZE);
+    setIsLoadingMorePedidos(false);
   };
 
   useEffect(() => {
-    fetchPedidos();
+    fetchPedidos({ reset: true });
   }, []);
 
   useEffect(() => {
@@ -176,7 +220,7 @@ export default function PedidosPage() {
 
       <section className="relative z-20">
         <h2 className="text-lg font-bold text-yellow-400 mb-2">Pedidos Recentes</h2>
-        <OrderList orders={pedidosParaCards} moeda="USD" unidadePeso="LB" onStatusChange={fetchPedidos} />
+        <OrderList orders={pedidosParaCards} moeda="USD" unidadePeso="LB" onStatusChange={() => fetchPedidos({ reset: true })} />
       </section>
 
       <div className="flex flex-wrap gap-3 mb-4 items-center">
@@ -277,6 +321,20 @@ export default function PedidosPage() {
           </table>
         </div>
       </div>
+
+      {hasMorePedidos ? (
+        <div className="flex justify-center">
+          <Button
+            type="button"
+            variant="outline"
+            className="border-sidebar-border bg-gold text-black font-bold hover:bg-gold-dark transition"
+            onClick={() => fetchPedidos()}
+            disabled={isLoadingMorePedidos}
+          >
+            {isLoadingMorePedidos ? 'Carregando...' : 'Carregar mais'}
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 }

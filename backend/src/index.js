@@ -5,9 +5,29 @@ import { createClient } from "@supabase/supabase-js";
 
 const app = express();
 app.use(express.json());
+
+const allowedOrigins = (process.env.CORS_ORIGINS || process.env.CORS_ORIGIN || "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
 app.use(
   cors({
-    origin: process.env.CORS_ORIGIN || "*",
+    origin: (origin, callback) => {
+      // Permite chamadas sem Origin (health checks/curl/server-to-server).
+      if (!origin) return callback(null, true);
+
+      // Se nada foi configurado, libera tudo (comportamento de fallback atual).
+      if (!allowedOrigins.length || allowedOrigins.includes("*")) {
+        return callback(null, true);
+      }
+
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(new Error(`CORS bloqueado para origin: ${origin}`));
+    },
   }),
 );
 
@@ -380,4 +400,3 @@ app.post("/api/orders/:id/status", async (req, res) => {
 app.listen(PORT, () => {
   console.log(`Backend rodando em http://localhost:${PORT}`);
 });
-

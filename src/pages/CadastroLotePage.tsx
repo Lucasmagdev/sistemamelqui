@@ -1,11 +1,11 @@
-﻿import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-import { backendRequest } from "@/lib/backendClient";
+import { BackendRequestError, backendRequest } from "@/lib/backendClient";
 
 type ProductOption = {
   product_id: number;
@@ -16,11 +16,42 @@ type ProductOption = {
 type InvoiceItem = {
   description: string;
   product_id: string;
+  product_query: string;
   quantity: string;
   unit: "LB" | "KG" | "UN";
   unit_cost: string;
   total: string;
   expiry_date: string;
+};
+
+type InvoiceItemValidation = {
+  row: number;
+  reasons: Array<"missing_product" | "invalid_quantity">;
+  message: string;
+};
+
+const parseDecimalOrNull = (value: string): number | null => {
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+
+  let normalized = raw.replace(/[^\d,.-]/g, "");
+  if (!normalized) return null;
+
+  const hasComma = normalized.includes(",");
+  const hasDot = normalized.includes(".");
+
+  if (hasComma && hasDot) {
+    if (normalized.lastIndexOf(",") > normalized.lastIndexOf(".")) {
+      normalized = normalized.replace(/\./g, "").replace(",", ".");
+    } else {
+      normalized = normalized.replace(/,/g, "");
+    }
+  } else if (hasComma) {
+    normalized = normalized.replace(",", ".");
+  }
+
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
 };
 
 const normalizeUnit = (value: string): "LB" | "KG" | "UN" => {
@@ -30,9 +61,35 @@ const normalizeUnit = (value: string): "LB" | "KG" | "UN" => {
   return "LB";
 };
 
+const normalizeSearchText = (value: string): string =>
+  String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+
+const similarityScore = (query: string, target: string): number => {
+  if (!query || !target) return 0;
+  if (query === target) return 1;
+  if (target.includes(query) || query.includes(target)) return 0.92;
+
+  const qTokens = query.split(" ").filter(Boolean);
+  const tTokens = target.split(" ").filter(Boolean);
+  if (!qTokens.length || !tTokens.length) return 0;
+
+  let hits = 0;
+  for (const q of qTokens) {
+    if (tTokens.some((t) => t.includes(q) || q.includes(t))) hits += 1;
+  }
+
+  return hits / Math.max(qTokens.length, tTokens.length);
+};
+
 const emptyItem = (): InvoiceItem => ({
   description: "",
   product_id: "",
+  product_query: "",
   quantity: "",
   unit: "LB",
   unit_cost: "",
@@ -70,6 +127,7 @@ export default function CadastroLotePage() {
     invoice_date: "",
   });
   const [invoiceItems, setInvoiceItems] = useState<InvoiceItem[]>([]);
+  const [invoiceValidation, setInvoiceValidation] = useState<InvoiceItemValidation[]>([]);
 
   useEffect(() => {
     const loadProducts = async () => {
@@ -94,6 +152,20 @@ export default function CadastroLotePage() {
   const selectedProduct = useMemo(
     () => products.find((item) => String(item.product_id) === manualForm.product_id),
     [products, manualForm.product_id],
+  );
+
+  const searchableProducts = useMemo(
+    () =>
+      products.map((item) => ({
+        ...item,
+        normalized_name: normalizeSearchText(item.product_name),
+      })),
+    [products],
+  );
+
+  const validationByRow = useMemo(
+    () => new Map(invoiceValidation.map((item) => [item.row, item])),
+    [invoiceValidation],
   );
 
   const handleManualChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
@@ -153,6 +225,7 @@ export default function CadastroLotePage() {
       return;
     }
 
+    setInvoiceValidation([]);
     setUploadingInvoice(true);
     try {
       const fileBase64 = await readFileAsDataUrl(invoiceFile);
@@ -180,9 +253,10 @@ export default function CadastroLotePage() {
       return;
     }
 
+    setInvoiceValidation([]);
     setProcessingInvoice(true);
     try {
-      const payload = await backendRequest<{ ai_json: any }>(`/api/stock/invoices/${invoiceId}/process`, {
+      const payload = await backendRequest<{ ai_json: any; warning?: string; detail?: string }>(`/api/stock/invoices/${invoiceId}/process`, {
         method: "POST",
         body: JSON.stringify({ locale: "pt" }),
       });
@@ -196,18 +270,32 @@ export default function CadastroLotePage() {
         invoice_date: ai.invoice_date || "",
       });
 
-      setInvoiceItems(items.map((item: any) => ({
-        description: item.description || item.descricao || "",
-        product_id: item.product_id ? String(item.product_id) : "",
-        quantity: item.quantity != null ? String(item.quantity) : "",
-        unit: normalizeUnit(item.unit || "LB"),
-        unit_cost: item.unit_cost != null ? String(item.unit_cost) : "",
-        total: item.total != null ? String(item.total) : "",
-        expiry_date: item.expiry_date || "",
-      })));
+      setInvoiceItems(items.map((item: any) => {
+        const description = item.product_service || item.productService || item.description || item.descricao || "";
+        const parsedId = Number.parseInt(String(item.product_id || "").replace(/[^\d]/g, ""), 10);
+        const normalizedProductId = Number.isFinite(parsedId) && parsedId > 0 ? String(parsedId) : "";
+        const matchedProduct = normalizedProductId
+          ? products.find((product) => String(product.product_id) === normalizedProductId)
+          : null;
+
+        return {
+          description,
+          product_id: normalizedProductId,
+          product_query: matchedProduct?.product_name || description,
+          quantity: item.quantity != null ? String(item.quantity) : "",
+          unit: normalizeUnit(item.unit || "LB"),
+          unit_cost: item.price != null ? String(item.price) : (item.unit_cost != null ? String(item.unit_cost) : ""),
+          total: item.total != null ? String(item.total) : "",
+          expiry_date: item.expiry_date || "",
+        };
+      }));
 
       if (!items.length) setInvoiceItems([emptyItem()]);
-      toast.success("Processamento concluido. Revise os itens antes de aplicar.");
+      if (payload.warning) {
+        toast.warning(payload.detail ? `${payload.warning} ${payload.detail}` : payload.warning);
+      } else {
+        toast.success("Processamento concluido. Revise os itens antes de aplicar.");
+      }
     } catch (error: any) {
       toast.error(error.message || "Erro ao processar nota");
     } finally {
@@ -216,10 +304,60 @@ export default function CadastroLotePage() {
   };
 
   const updateInvoiceItem = (index: number, patch: Partial<InvoiceItem>) => {
+    setInvoiceValidation((prev) => prev.filter((item) => item.row !== index));
     setInvoiceItems((prev) => prev.map((item, idx) => (idx === index ? { ...item, ...patch } : item)));
   };
 
+  const findBestProductMatch = (rawQuery: string) => {
+    const query = normalizeSearchText(rawQuery);
+    if (!query) return null;
+
+    let best: { product_id: number; product_name: string; score: number } | null = null;
+    for (const product of searchableProducts) {
+      const score = similarityScore(query, product.normalized_name);
+      if (!best || score > best.score) {
+        best = { product_id: product.product_id, product_name: product.product_name, score };
+      }
+    }
+
+    if (!best || best.score < 0.45) return null;
+    return best;
+  };
+
+  const handleInvoiceProductQueryChange = (index: number, rawQuery: string) => {
+    setInvoiceValidation((prev) => prev.filter((item) => item.row !== index));
+    const query = String(rawQuery || "");
+    const normalizedQuery = normalizeSearchText(query);
+
+    setInvoiceItems((prev) =>
+      prev.map((item, idx) => {
+        if (idx !== index) return item;
+
+        if (!normalizedQuery) {
+          return { ...item, product_query: "", product_id: "" };
+        }
+
+        const exact = searchableProducts.find((product) => product.normalized_name === normalizedQuery);
+        if (exact) {
+          return { ...item, product_query: query, product_id: String(exact.product_id) };
+        }
+
+        const best = findBestProductMatch(query);
+        if (best) {
+          return { ...item, product_query: query, product_id: String(best.product_id) };
+        }
+
+        return { ...item, product_query: query };
+      }),
+    );
+  };
+
   const removeInvoiceItem = (index: number) => {
+    setInvoiceValidation((prev) =>
+      prev
+        .filter((item) => item.row !== index)
+        .map((item) => (item.row > index ? { ...item, row: item.row - 1 } : item)),
+    );
     setInvoiceItems((prev) => prev.filter((_, idx) => idx !== index));
   };
 
@@ -241,10 +379,10 @@ export default function CadastroLotePage() {
             items: invoiceItems.map((item) => ({
               description: item.description,
               product_id: item.product_id ? Number(item.product_id) : null,
-              quantity: item.quantity ? Number(item.quantity) : null,
+              quantity: parseDecimalOrNull(item.quantity),
               unit: normalizeUnit(item.unit),
-              unit_cost: item.unit_cost ? Number(item.unit_cost) : null,
-              total: item.total ? Number(item.total) : null,
+              unit_cost: parseDecimalOrNull(item.unit_cost),
+              total: parseDecimalOrNull(item.total),
               expiry_date: item.expiry_date || null,
             })),
           },
@@ -252,9 +390,37 @@ export default function CadastroLotePage() {
       });
 
       toast.success("Nota aplicada no estoque com sucesso");
+      setInvoiceValidation([]);
       navigate("/admin/estoque");
     } catch (error: any) {
-      toast.error(error.message || "Erro ao aplicar nota no estoque");
+      if (error instanceof BackendRequestError) {
+        const invalidItemsRaw = Array.isArray(error.data?.invalid_items) ? error.data.invalid_items : [];
+        const parsedValidation: InvoiceItemValidation[] = invalidItemsRaw
+          .map((invalid: any) => {
+            const row = Number(invalid?.index);
+            const reasonList = Array.isArray(invalid?.reason) ? invalid.reason : [];
+            const reasons: Array<"missing_product" | "invalid_quantity"> = [];
+            if (reasonList.includes("missing_product")) reasons.push("missing_product");
+            if (reasonList.includes("invalid_quantity")) reasons.push("invalid_quantity");
+            if (!Number.isInteger(row) || row < 0 || !reasons.length) return null;
+
+            const message = reasons
+              .map((reason) => (reason === "missing_product" ? "Produto no estoque nao mapeado" : "Quantidade invalida"))
+              .join(" e ");
+
+            return { row, reasons, message };
+          })
+          .filter(Boolean) as InvoiceItemValidation[];
+
+        if (parsedValidation.length > 0) {
+          setInvoiceValidation(parsedValidation);
+          toast.error("Corrija os campos em vermelho antes de aplicar a nota.");
+        } else {
+          toast.error(error.message || "Erro ao aplicar nota no estoque");
+        }
+      } else {
+        toast.error(error.message || "Erro ao aplicar nota no estoque");
+      }
     } finally {
       setApplyingInvoice(false);
     }
@@ -342,27 +508,101 @@ export default function CadastroLotePage() {
 
         {invoiceItems.length > 0 ? (
           <div className="space-y-3">
-            {invoiceItems.map((item, idx) => (
-              <div key={`invoice-item-${idx}`} className="grid gap-2 rounded-lg border border-border p-3 md:grid-cols-12">
-                <Input className="md:col-span-3" placeholder="Descricao" value={item.description} onChange={(e) => updateInvoiceItem(idx, { description: e.target.value })} />
-                <select className="md:col-span-3 h-10 rounded-md border border-input bg-background px-3 text-sm" value={item.product_id} onChange={(e) => updateInvoiceItem(idx, { product_id: e.target.value })}>
-                  <option value="">Mapear produto...</option>
-                  {products.map((product) => (
-                    <option key={`${idx}-${product.product_id}`} value={product.product_id}>{product.product_name}</option>
+            <p className="text-xs text-muted-foreground">
+              Padrao da tabela da nota: <strong>Product/Service | Quantity | Price | Total</strong>. Abaixo de cada linha, revise as informacoes do lote.
+            </p>
+            {invoiceValidation.length > 0 ? (
+              <div className="rounded-lg border border-red-500/70 bg-red-500/10 p-3 text-sm text-red-200">
+                <p className="font-semibold">Corrija os itens destacados em vermelho:</p>
+                <ul className="mt-2 space-y-1 text-xs">
+                  {invoiceValidation.map((item) => (
+                    <li key={`invoice-validation-${item.row}`}>
+                      Linha {item.row + 1}: {item.message}
+                    </li>
                   ))}
-                </select>
-                <Input className="md:col-span-1" type="number" step="0.001" placeholder="Qtd" value={item.quantity} onChange={(e) => updateInvoiceItem(idx, { quantity: e.target.value })} />
-                <select className="md:col-span-1 h-10 rounded-md border border-input bg-background px-3 text-sm" value={item.unit} onChange={(e) => updateInvoiceItem(idx, { unit: normalizeUnit(e.target.value) })}>
-                  <option value="LB">LB</option>
-                  <option value="KG">KG</option>
-                  <option value="UN">UN</option>
-                </select>
-                <Input className="md:col-span-1" type="number" step="0.0001" placeholder="Unit" value={item.unit_cost} onChange={(e) => updateInvoiceItem(idx, { unit_cost: e.target.value })} />
-                <Input className="md:col-span-1" type="number" step="0.01" placeholder="Total" value={item.total} onChange={(e) => updateInvoiceItem(idx, { total: e.target.value })} />
-                <Input className="md:col-span-1" type="date" value={item.expiry_date} onChange={(e) => updateInvoiceItem(idx, { expiry_date: e.target.value })} />
-                <Button type="button" variant="outline" className="md:col-span-1" onClick={() => removeInvoiceItem(idx)}>Remover</Button>
+                </ul>
               </div>
-            ))}
+            ) : null}
+            <div className="overflow-x-auto rounded-lg border border-border">
+              <table className="min-w-full text-sm">
+                <thead className="bg-muted/40">
+                  <tr>
+                    <th className="px-3 py-2 text-left font-medium">Product/Service</th>
+                    <th className="px-3 py-2 text-left font-medium">Quantity</th>
+                    <th className="px-3 py-2 text-left font-medium">Price</th>
+                    <th className="px-3 py-2 text-left font-medium">Total</th>
+                    <th className="px-3 py-2 text-right font-medium">Acoes</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {invoiceItems.map((item, idx) => {
+                    const rowValidation = validationByRow.get(idx);
+                    const hasProductError = Boolean(rowValidation?.reasons.includes("missing_product"));
+                    const hasQuantityError = Boolean(rowValidation?.reasons.includes("invalid_quantity"));
+
+                    return (
+                    <Fragment key={`invoice-item-${idx}`}>
+                      <tr className={`border-t align-top ${rowValidation ? "border-red-500/70 bg-red-500/5" : "border-border"}`}>
+                        <td className="px-3 py-2">
+                          <Input placeholder="Descricao do produto/servico" value={item.description} onChange={(e) => updateInvoiceItem(idx, { description: e.target.value })} />
+                        </td>
+                        <td className="px-3 py-2">
+                          <Input className={hasQuantityError ? "border-red-500 text-red-200 focus-visible:ring-red-500" : ""} type="number" step="0.001" placeholder="0.000" value={item.quantity} onChange={(e) => updateInvoiceItem(idx, { quantity: e.target.value })} />
+                        </td>
+                        <td className="px-3 py-2">
+                          <Input type="number" step="0.0001" placeholder="0.0000" value={item.unit_cost} onChange={(e) => updateInvoiceItem(idx, { unit_cost: e.target.value })} />
+                        </td>
+                        <td className="px-3 py-2">
+                          <Input type="number" step="0.01" placeholder="0.00" value={item.total} onChange={(e) => updateInvoiceItem(idx, { total: e.target.value })} />
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          <Button type="button" variant="outline" onClick={() => removeInvoiceItem(idx)}>Remover</Button>
+                        </td>
+                      </tr>
+                      <tr className={`border-t border-dashed ${rowValidation ? "border-red-500/70 bg-red-500/5" : "border-border bg-muted/20"}`}>
+                        <td colSpan={5} className="px-3 py-3">
+                          <div className="grid gap-2 md:grid-cols-3">
+                            <div className="space-y-1">
+                              <Label className="text-xs text-muted-foreground">Produto no estoque</Label>
+                              <Input
+                                className={hasProductError ? "border-red-500 text-red-200 focus-visible:ring-red-500" : ""}
+                                placeholder="Buscar aproximado: ex. figado frango"
+                                value={item.product_query}
+                                list={`invoice-product-options-${idx}`}
+                                onChange={(e) => handleInvoiceProductQueryChange(idx, e.target.value)}
+                              />
+                              <datalist id={`invoice-product-options-${idx}`}>
+                                {products.map((product) => (
+                                  <option key={`${idx}-opt-${product.product_id}`} value={product.product_name} />
+                                ))}
+                              </datalist>
+                              <p className={`text-[11px] ${hasProductError ? "text-red-300" : "text-muted-foreground"}`}>
+                                {item.product_id
+                                  ? `Mapeado: ${products.find((product) => String(product.product_id) === item.product_id)?.product_name || `ID ${item.product_id}`}`
+                                  : "Sem mapeamento automatico. Continue digitando ou escolha na lista."}
+                              </p>
+                              {rowValidation ? <p className="text-[11px] text-red-300">{rowValidation.message}</p> : null}
+                            </div>
+                            <div className="space-y-1">
+                              <Label className="text-xs text-muted-foreground">Unidade do lote</Label>
+                              <select className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm" value={item.unit} onChange={(e) => updateInvoiceItem(idx, { unit: normalizeUnit(e.target.value) })}>
+                                <option value="LB">LB</option>
+                                <option value="KG">KG</option>
+                                <option value="UN">UN</option>
+                              </select>
+                            </div>
+                            <div className="space-y-1">
+                              <Label className="text-xs text-muted-foreground">Validade do lote</Label>
+                              <Input type="date" value={item.expiry_date} onChange={(e) => updateInvoiceItem(idx, { expiry_date: e.target.value })} />
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    </Fragment>
+                  )})}
+                </tbody>
+              </table>
+            </div>
 
             <div className="flex gap-2">
               <Button type="button" variant="outline" onClick={() => setInvoiceItems((prev) => [...prev, emptyItem()])}>Adicionar item</Button>

@@ -55,6 +55,33 @@ function parseNumber(value, fallback = 0) {
   return Number.isFinite(num) ? num : fallback;
 }
 
+function parseLooseNumber(value, fallback = NaN) {
+  if (value === null || value === undefined || value === "") return fallback;
+  if (typeof value === "number") return Number.isFinite(value) ? value : fallback;
+
+  let raw = String(value).trim();
+  if (!raw) return fallback;
+
+  raw = raw.replace(/[^\d,.-]/g, "");
+  if (!raw) return fallback;
+
+  const hasComma = raw.includes(",");
+  const hasDot = raw.includes(".");
+
+  if (hasComma && hasDot) {
+    if (raw.lastIndexOf(",") > raw.lastIndexOf(".")) {
+      raw = raw.replace(/\./g, "").replace(",", ".");
+    } else {
+      raw = raw.replace(/,/g, "");
+    }
+  } else if (hasComma) {
+    raw = raw.replace(",", ".");
+  }
+
+  const num = Number(raw);
+  return Number.isFinite(num) ? num : fallback;
+}
+
 function roundQty(value, digits = 3) {
   return Number(parseNumber(value, 0).toFixed(digits));
 }
@@ -91,6 +118,32 @@ function normalizeStockUnit(value, fallback = "LB") {
   if (["KG", "KGS"].includes(raw)) return "KG";
   if (["UN", "UNIT", "UNIDADE"].includes(raw)) return "UN";
   return fallback;
+}
+
+function normalizeSearchText(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function similarityScore(query, target) {
+  if (!query || !target) return 0;
+  if (query === target) return 1;
+  if (target.includes(query) || query.includes(target)) return 0.92;
+
+  const qTokens = query.split(" ").filter(Boolean);
+  const tTokens = target.split(" ").filter(Boolean);
+  if (!qTokens.length || !tTokens.length) return 0;
+
+  let hits = 0;
+  for (const q of qTokens) {
+    if (tTokens.some((t) => t.includes(q) || q.includes(t))) hits += 1;
+  }
+
+  return hits / Math.max(qTokens.length, tTokens.length);
 }
 
 function convertQuantity(value, fromUnit, toUnit) {
@@ -783,11 +836,13 @@ function buildFallbackInvoiceJson(ocrText = "") {
     invoice_number: null,
     invoice_date: null,
     items: lines.slice(0, 12).map((line) => ({
-      description: line,
+      product_service: line,
       quantity: null,
-      unit: "LB",
-      unit_cost: null,
+      price: null,
       total: null,
+      unit: "LB",
+      description: line,
+      unit_cost: null,
       product_id: null,
     })),
   };
@@ -841,24 +896,26 @@ async function callGeminiExtraction({ ocrText, locale = "pt", invoiceRecord = nu
       ? [
           "Extract invoice data from the provided OCR text and/or invoice image.",
           "Return ONLY valid JSON, without markdown and without comments.",
-          "Expected JSON schema:",
-          '{"supplier":null,"invoice_number":null,"invoice_date":null,"items":[{"description":"","quantity":null,"unit":"LB","unit_cost":null,"total":null,"product_id":null}]}',
+          "Expected JSON schema and table standard:",
+          '{"supplier":null,"invoice_number":null,"invoice_date":null,"items":[{"product_service":"","quantity":null,"price":null,"total":null,"unit":"LB","product_id":null,"expiry_date":null}]}',
           "Rules:",
           "- Keep values as null when uncertain.",
-          "- Preserve decimal numbers for quantity, unit_cost and total.",
+          "- Preserve decimal numbers for quantity, price and total.",
           "- Unit must be one of: LB, KG, UN.",
-          "- Items must contain the product line description from the invoice.",
+          "- Follow the invoice columns in this order: Product/Service, Quantity, Price, Total.",
+          "- product_service must keep only the product/service description from the line.",
         ].join("\n")
       : [
           "Extraia os dados da nota fiscal a partir do OCR e/ou da imagem enviada.",
           "Retorne APENAS JSON valido, sem markdown e sem comentarios.",
-          "Formato esperado:",
-          '{"supplier":null,"invoice_number":null,"invoice_date":null,"items":[{"description":"","quantity":null,"unit":"LB","unit_cost":null,"total":null,"product_id":null}]}',
+          "Formato esperado e padrao de tabela:",
+          '{"supplier":null,"invoice_number":null,"invoice_date":null,"items":[{"product_service":"","quantity":null,"price":null,"total":null,"unit":"LB","product_id":null,"expiry_date":null}]}',
           "Regras:",
           "- Se houver duvida, mantenha null.",
-          "- Mantenha casas decimais em quantity, unit_cost e total.",
+          "- Mantenha casas decimais em quantity, price e total.",
           "- unit deve ser somente: LB, KG ou UN.",
-          "- items deve manter a descricao da linha da nota.",
+          "- Siga as colunas da nota nesta ordem: Product/Service, Quantity, Price, Total.",
+          "- product_service deve conter somente a descricao do produto/servico da linha.",
         ].join("\n");
 
   const requestParts = [{ text: prompt }];
@@ -903,12 +960,15 @@ async function callGeminiExtraction({ ocrText, locale = "pt", invoiceRecord = nu
     invoice_date: parsed.invoice_date ?? null,
     items: Array.isArray(parsed.items)
       ? parsed.items.map((item) => ({
-          description: item?.description ?? item?.descricao ?? "",
+          product_service: item?.product_service ?? item?.productService ?? item?.description ?? item?.descricao ?? "",
+          description: item?.description ?? item?.descricao ?? item?.product_service ?? item?.productService ?? "",
           quantity: item?.quantity ?? item?.qty ?? null,
           unit: normalizeStockUnit(item?.unit || "LB", "LB"),
-          unit_cost: item?.unit_cost ?? item?.valor_unitario ?? null,
+          price: item?.price ?? item?.unit_cost ?? item?.valor_unitario ?? null,
+          unit_cost: item?.unit_cost ?? item?.valor_unitario ?? item?.price ?? null,
           total: item?.total ?? item?.valor_total ?? null,
           product_id: item?.product_id ?? item?.productId ?? null,
+          expiry_date: item?.expiry_date ?? null,
         }))
       : [],
   };
@@ -928,31 +988,42 @@ async function resolveProductIdsForInvoiceItems(items) {
     id: Number(product.id),
     names: [product.nome, product.nome_en]
       .filter(Boolean)
-      .map((name) => String(name).trim().toLowerCase())
+      .map((name) => normalizeSearchText(name))
       .filter(Boolean),
   }));
+  const existingProductIds = new Set(normalizedProducts.map((product) => Number(product.id)));
 
   return (items || []).map((item) => {
     const existingId = Number(item.product_id || item.productId || 0);
-    if (existingId > 0) return { ...item, product_id: existingId };
+    if (existingId > 0 && existingProductIds.has(existingId)) return { ...item, product_id: existingId };
 
-    const description = String(item.description || item.descricao || "").trim().toLowerCase();
-    if (!description) return { ...item, product_id: null };
+    const rawDescription = normalizeSearchText(
+      item.description || item.descricao || item.product_service || item.productService || "",
+    );
+    if (!rawDescription) return { ...item, product_id: null };
+
+    const cleanedDescription = rawDescription
+      .replace(/^#?\d+\s*-\s*/g, "")
+      .replace(/^\d+\s+\d+\s*-\s*/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    const candidates = Array.from(new Set([cleanedDescription, rawDescription].filter(Boolean)));
 
     let bestMatch = null;
-    let bestLen = 0;
+    let bestScore = 0;
     for (const product of normalizedProducts) {
       for (const alias of product.names) {
-        if (description === alias || description.includes(alias)) {
-          if (alias.length > bestLen) {
+        for (const candidate of candidates) {
+          const score = similarityScore(candidate, alias);
+          if (score > bestScore) {
             bestMatch = product.id;
-            bestLen = alias.length;
+            bestScore = score;
           }
         }
       }
     }
 
-    return { ...item, product_id: bestMatch };
+    return { ...item, product_id: bestScore >= 0.45 ? bestMatch : null };
   });
 }
 
@@ -1234,6 +1305,7 @@ app.post("/api/stock/invoices/:id/process", async (req, res) => {
       });
     } catch (geminiError) {
       aiJson = buildFallbackInvoiceJson(ocrText);
+      const geminiDetail = [geminiError?.message, geminiError?.detail].filter(Boolean).join(" | ");
 
       await supabase
         .from("invoice_imports")
@@ -1241,7 +1313,7 @@ app.post("/api/stock/invoices/:id/process", async (req, res) => {
           status: "review_required",
           ocr_text: ocrText || null,
           ai_json: aiJson,
-          error: geminiError?.message || "Falha na extracao IA",
+          error: geminiDetail || "Falha na extracao IA",
           processed_at: new Date().toISOString(),
         })
         .eq("id", invoiceId);
@@ -1249,6 +1321,7 @@ app.post("/api/stock/invoices/:id/process", async (req, res) => {
       return res.status(202).json({
         ok: true,
         warning: "Processamento da nota nao conseguiu extrair dados automaticamente. Revisao manual obrigatoria.",
+        detail: geminiError?.detail || geminiError?.message || null,
         ai_json: aiJson,
       });
     }
@@ -1305,18 +1378,29 @@ app.post("/api/stock/invoices/:id/apply", async (req, res) => {
       invoice_date: basePayload.invoice_date || null,
       items: resolvedItems.map((item) => ({
         product_id: item.product_id || null,
-        description: item.description || item.descricao || "",
-        quantity: parseNumber(item.quantity ?? item.qty, NaN),
+        description: item.description || item.descricao || item.product_service || item.productService || "",
+        quantity: parseLooseNumber(item.quantity ?? item.qty, NaN),
         unit: normalizeStockUnit(item.unit || "LB", "LB"),
-        unit_cost: parseNumber(item.unit_cost ?? item.valor_unitario, NaN),
-        total: parseNumber(item.total ?? item.valor_total, NaN),
+        unit_cost: parseLooseNumber(item.unit_cost ?? item.valor_unitario ?? item.price, NaN),
+        total: parseLooseNumber(item.total ?? item.valor_total, NaN),
         expiry_date: item.expiry_date || null,
       })),
     };
 
-    const invalidItems = normalizedPayload.items.filter(
-      (item) => !item.product_id || !Number.isFinite(item.quantity) || item.quantity <= 0,
-    );
+    const invalidItems = normalizedPayload.items
+      .map((item, index) => {
+        const missingProduct = !item.product_id;
+        const invalidQuantity = !Number.isFinite(item.quantity) || item.quantity <= 0;
+        return {
+          ...item,
+          index,
+          reason: [
+            missingProduct ? "missing_product" : null,
+            invalidQuantity ? "invalid_quantity" : null,
+          ].filter(Boolean),
+        };
+      })
+      .filter((item) => item.reason.length > 0);
 
     if (invalidItems.length > 0) {
       return res.status(400).json({

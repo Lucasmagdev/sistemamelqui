@@ -706,6 +706,15 @@ function sanitizeFileName(fileName) {
     .slice(-120);
 }
 
+function inferMimeTypeFromPath(filePath = "") {
+  const normalized = String(filePath || "").toLowerCase().trim();
+  if (normalized.endsWith(".pdf")) return "application/pdf";
+  if (normalized.endsWith(".png")) return "image/png";
+  if (normalized.endsWith(".webp")) return "image/webp";
+  if (normalized.endsWith(".jpg") || normalized.endsWith(".jpeg")) return "image/jpeg";
+  return "image/jpeg";
+}
+
 async function callPaperlessOcr({ invoiceRecord, ocrHint }) {
   if (ocrHint && String(ocrHint).trim()) return String(ocrHint).trim();
 
@@ -784,25 +793,86 @@ function buildFallbackInvoiceJson(ocrText = "") {
   };
 }
 
-async function callGeminiExtraction({ ocrText, locale = "pt" }) {
+async function loadInvoiceBinaryForGemini(invoiceRecord) {
+  if (!invoiceRecord) return null;
+
+  const bucket = String(invoiceRecord.file_bucket || "").trim();
+  const path = String(invoiceRecord.file_path || "").trim();
+  const fileUrl = String(invoiceRecord.file_url || "").trim();
+  const mimeType = inferMimeTypeFromPath(path || fileUrl);
+
+  if (bucket && path) {
+    const downloadResult = await supabase.storage.from(bucket).download(path);
+    if (!downloadResult.error && downloadResult.data) {
+      const arrayBuffer = await downloadResult.data.arrayBuffer();
+      const base64 = Buffer.from(arrayBuffer).toString("base64");
+      if (base64) {
+        return { base64, mimeType };
+      }
+    }
+  }
+
+  if (fileUrl) {
+    const response = await fetch(fileUrl);
+    if (response.ok) {
+      const arrayBuffer = await response.arrayBuffer();
+      const base64 = Buffer.from(arrayBuffer).toString("base64");
+      const remoteMime = response.headers.get("content-type") || mimeType;
+      if (base64) {
+        return { base64, mimeType: remoteMime };
+      }
+    }
+  }
+
+  return null;
+}
+
+async function callGeminiExtraction({ ocrText, locale = "pt", invoiceRecord = null }) {
   const apiKey = process.env.GEMINI_API_KEY;
   const model = process.env.GEMINI_MODEL || "gemini-1.5-pro";
-  if (!apiKey || !String(ocrText || "").trim()) return buildFallbackInvoiceJson(ocrText);
+  if (!apiKey) return buildFallbackInvoiceJson(ocrText);
+
+  const ocr = String(ocrText || "").trim();
+  const invoiceFile = await loadInvoiceBinaryForGemini(invoiceRecord);
+  if (!ocr && !invoiceFile) return buildFallbackInvoiceJson(ocrText);
 
   const prompt =
     locale === "en"
       ? [
-          "Extract invoice data from OCR text and return ONLY valid JSON.",
-          "Expected JSON shape:",
+          "Extract invoice data from the provided OCR text and/or invoice image.",
+          "Return ONLY valid JSON, without markdown and without comments.",
+          "Expected JSON schema:",
           '{"supplier":null,"invoice_number":null,"invoice_date":null,"items":[{"description":"","quantity":null,"unit":"LB","unit_cost":null,"total":null,"product_id":null}]}',
-          "If unsure, keep null.",
+          "Rules:",
+          "- Keep values as null when uncertain.",
+          "- Preserve decimal numbers for quantity, unit_cost and total.",
+          "- Unit must be one of: LB, KG, UN.",
+          "- Items must contain the product line description from the invoice.",
         ].join("\n")
       : [
-          "Extraia os dados da nota fiscal e retorne APENAS JSON valido.",
-          "Formato:",
+          "Extraia os dados da nota fiscal a partir do OCR e/ou da imagem enviada.",
+          "Retorne APENAS JSON valido, sem markdown e sem comentarios.",
+          "Formato esperado:",
           '{"supplier":null,"invoice_number":null,"invoice_date":null,"items":[{"description":"","quantity":null,"unit":"LB","unit_cost":null,"total":null,"product_id":null}]}',
-          "Se houver duvida, use null.",
+          "Regras:",
+          "- Se houver duvida, mantenha null.",
+          "- Mantenha casas decimais em quantity, unit_cost e total.",
+          "- unit deve ser somente: LB, KG ou UN.",
+          "- items deve manter a descricao da linha da nota.",
         ].join("\n");
+
+  const requestParts = [{ text: prompt }];
+  if (ocr) {
+    requestParts.push({ text: `OCR:\n${ocr}` });
+  }
+  if (invoiceFile?.base64) {
+    requestParts.push({
+      inlineData: {
+        mimeType: invoiceFile.mimeType || "image/jpeg",
+        data: invoiceFile.base64,
+      },
+    });
+  }
 
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
@@ -810,7 +880,7 @@ async function callGeminiExtraction({ ocrText, locale = "pt" }) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }, { text: `OCR:\n${ocrText}` }] }],
+        contents: [{ parts: requestParts }],
       }),
     },
   );
@@ -1157,7 +1227,11 @@ app.post("/api/stock/invoices/:id/process", async (req, res) => {
 
     let aiJson;
     try {
-      aiJson = await callGeminiExtraction({ ocrText, locale: normalizeLocale(req.body?.locale || "pt") });
+      aiJson = await callGeminiExtraction({
+        ocrText,
+        locale: normalizeLocale(req.body?.locale || "pt"),
+        invoiceRecord: invoice,
+      });
     } catch (geminiError) {
       aiJson = buildFallbackInvoiceJson(ocrText);
 
@@ -1174,7 +1248,7 @@ app.post("/api/stock/invoices/:id/process", async (req, res) => {
 
       return res.status(202).json({
         ok: true,
-        warning: "OCR concluido, mas extracao IA falhou. Revisao manual obrigatoria.",
+        warning: "Processamento da nota nao conseguiu extrair dados automaticamente. Revisao manual obrigatoria.",
         ai_json: aiJson,
       });
     }

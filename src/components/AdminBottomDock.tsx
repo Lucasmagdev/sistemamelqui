@@ -14,7 +14,7 @@ const dockItems: DockItem[] = [
   { labelKey: 'nav.orders', path: '/admin/pedidos', icon: ShoppingCart },
   { labelKey: 'nav.customers', path: '/admin/clientes', icon: Users },
   { labelKey: 'nav.products', path: '/admin/produtos', icon: Package },
-  { labelKey: 'nav.batches', path: '/admin/lotes/novo', icon: Layers },
+  { labelKey: 'nav.batches', path: '/admin/estoque', icon: Layers },
 ];
 
 export default function AdminBottomDock() {

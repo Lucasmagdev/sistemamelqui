@@ -32,6 +32,12 @@ import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { useI18n } from '@/contexts/I18nContext';
+import {
+  formatPhoneForDisplay,
+  isValidPhone,
+  normalizePhoneInput,
+  toStoragePhone,
+} from '@/lib/phone';
 
 type CategoryKey = 'all' | 'offers' | 'bbq' | 'premium' | 'subscription' | 'contact';
 const menuCategorias: CategoryKey[] = ['all', 'offers', 'bbq', 'premium', 'subscription', 'contact'];
@@ -48,6 +54,9 @@ const precoFormatado = (valor: number | null | undefined) => {
   if (typeof valor !== 'number' || isNaN(valor)) return '$0.00';
   return `$${valor.toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
 };
+
+const PHONE_DEFAULT_COUNTRY = '1';
+const toNormalizedPhone = (value: string) => toStoragePhone(value, PHONE_DEFAULT_COUNTRY);
 
 type ModoVisualizacao = 'grid' | 'compact' | 'list';
 type Ordenacao = 'menor-maior' | 'maior-menor';
@@ -70,17 +79,25 @@ export default function ClientePage() {
   // ...existing code...
   // FunÃ§Ã£o para repetir Ãºltimo pedido
   const repetirUltimoPedido = async () => {
-    if (!emailLogado) {
+    if (!perfilCliente?.id && !emailLogado) {
       toast.error(ui.repeatOrderMissingLogin);
       return;
     }
-    // Buscar Ãºltimo pedido pelo email_cliente
-    const { data: pedidos } = await supabase
+
+    // Busca ultimo pedido priorizando cliente_id e usa email como fallback.
+    let pedidosQuery = supabase
       .from('orders')
       .select('id')
-      .eq('email_cliente', emailLogado)
       .order('data_pedido', { ascending: false })
       .limit(1);
+
+    if (perfilCliente?.id) {
+      pedidosQuery = pedidosQuery.eq('cliente_id', perfilCliente.id);
+    } else {
+      pedidosQuery = pedidosQuery.eq('email_cliente', emailLogado);
+    }
+
+    const { data: pedidos } = await pedidosQuery;
     if (!pedidos || !pedidos.length) {
       toast.error(ui.noOrdersFound);
       return;
@@ -146,6 +163,7 @@ export default function ClientePage() {
     minWeightError: isEn ? 'Enter at least 0.3 LB to add' : 'Informe ao menos 0.3 LB para adicionar',
     contactSoon: isEn ? 'Contact channel coming soon' : 'Canal de contato em breve',
     fillNamePhone: isEn ? 'Fill in name and phone to continue' : 'Preencha nome e telefone para continuar',
+    invalidPhone: isEn ? 'Enter a valid phone number (10 to 15 digits)' : 'Informe um telefone valido (10 a 15 digitos)',
     fillChangeAmount: isEn ? 'Enter change amount' : 'Informe o valor para troco',
     saveProfileError: isEn ? 'Error saving profile: ' : 'Erro ao salvar perfil: ',
     saveClientError: isEn ? 'Error saving customer: ' : 'Erro ao salvar cliente: ',
@@ -247,65 +265,54 @@ export default function ClientePage() {
   const [itensCarrinho, setItensCarrinho] = useState<ItemCarrinho[]>([]);
   const [carrinhoAberto, setCarrinhoAberto] = useState(false);
   const [checkoutAberto, setCheckoutAberto] = useState(false);
-    // Preencher dados do usuÃ¡rio logado ao abrir checkout
-    useEffect(() => {
-      if (checkoutAberto) {
-        // Busca dados do usuÃ¡rio no banco
-        // O email do usuÃ¡rio logado deve vir do sistema de autenticaÃ§Ã£o (Supabase Auth)
-        let email = '';
-        const getUser = async () => {
-          const { data, error } = await supabase.auth.getUser();
-          if (data?.user) {
-            email = data.user.email || '';
-            // Busca dados do usuÃ¡rio no banco
-            const { data: clientes, error: clientError } = await supabase
-              .from('clients')
-              .select('*')
-              .eq('email', email);
-            if (clientError) {
-              toast.error(ui.clientDataFetchError);
-              return;
-            }
-            if (clientes && clientes.length > 0) {
-              const cliente = clientes[0];
-              setClienteNome(cliente.nome || '');
-              setClienteTelefone(cliente.telefone || '');
-              setClienteEmail(cliente.email || '');
-              setEnderecoNumero(cliente.endereco_numero || '');
-              setEnderecoRua(cliente.endereco_rua || '');
-              setEnderecoApt(cliente.endereco_complemento || '');
-              setEnderecoCidade(cliente.cidade || '');
-              setEnderecoEstado(cliente.estado || '');
-              setEnderecoZip(cliente.cep || '');
-            }
-          }
-        };
-        getUser();
-        if (!email) return;
-        (async () => {
-          const { data: clientes, error } = await supabase
-            .from('clients')
-            .select('*')
-            .eq('email', email);
-          if (error) {
-            toast.error(ui.clientDataFetchError);
-            return;
-          }
-          if (clientes && clientes.length > 0) {
-            const cliente = clientes[0];
-            setClienteNome(cliente.nome || '');
-            setClienteTelefone(cliente.telefone || '');
-            setClienteEmail(cliente.email || '');
-            setEnderecoNumero(cliente.endereco_numero || '');
-            setEnderecoRua(cliente.endereco_rua || '');
-            setEnderecoApt(cliente.endereco_complemento || '');
-            setEnderecoCidade(cliente.cidade || '');
-            setEnderecoEstado(cliente.estado || '');
-            setEnderecoZip(cliente.cep || '');
-          }
-        })();
+  // Preencher dados do usuario logado ao abrir checkout.
+  useEffect(() => {
+    if (!checkoutAberto) return;
+
+    const loadCheckoutClient = async () => {
+      const { data } = await supabase.auth.getUser();
+      const user = data?.user;
+      if (!user) return;
+
+      const email = (user.email || '').trim().toLowerCase();
+
+      let { data: clients, error: clientError } = await supabase
+        .from('clients')
+        .select('*')
+        .eq('auth_user_id', user.id)
+        .limit(1);
+
+      if ((!clients || !clients.length) && email) {
+        const byEmail = await supabase
+          .from('clients')
+          .select('*')
+          .eq('email', email)
+          .limit(1);
+        clients = byEmail.data;
+        clientError = byEmail.error;
       }
-    }, [checkoutAberto]);
+
+      if (clientError) {
+        toast.error(ui.clientDataFetchError);
+        return;
+      }
+
+      if (clients && clients.length > 0) {
+        const client = clients[0];
+        setClienteNome(client.nome || '');
+        setClienteTelefone(client.telefone || '');
+        setClienteEmail(client.email || '');
+        setEnderecoNumero(client.endereco_numero || '');
+        setEnderecoRua(client.endereco_rua || '');
+        setEnderecoApt(client.endereco_complemento || '');
+        setEnderecoCidade(client.cidade || '');
+        setEnderecoEstado(client.estado || '');
+        setEnderecoZip(client.cep || '');
+      }
+    };
+
+    loadCheckoutClient();
+  }, [checkoutAberto]);
   const [etapaCheckout, setEtapaCheckout] = useState(1);
   const [pedidoFinalizado, setPedidoFinalizado] = useState<{ numero: string; total: number } | null>(null);
   const [produtoParaCompra, setProdutoParaCompra] = useState<{
@@ -349,25 +356,32 @@ export default function ClientePage() {
         return;
       }
 
-      const email = user.email || '';
+      const email = (user.email || '').trim().toLowerCase();
       setUsuarioLogado(true);
       setEmailLogado(email);
 
-      const { data: cliente } = await supabase
+      let { data: cliente } = await supabase
         .from('clients')
         .select('*')
-        .eq('email', email)
+        .eq('auth_user_id', user.id)
         .maybeSingle();
+
+      if (!cliente && email) {
+        const byEmail = await supabase
+          .from('clients')
+          .select('*')
+          .eq('email', email)
+          .maybeSingle();
+        cliente = byEmail.data || null;
+      }
 
       setPerfilCliente(cliente || null);
       setNomeLogado(cliente?.nome || user.user_metadata?.nome || user.email || 'Usuario');
 
-      if (email) {
-        await supabase
-          .from('clients')
-          .update({ last_user_agent: navigator.userAgent, preferred_locale: locale })
-          .eq('email', email);
-      }
+      await supabase
+        .from('clients')
+        .update({ last_user_agent: navigator.userAgent, preferred_locale: locale })
+        .eq('auth_user_id', user.id);
     };
 
     carregarUsuario();
@@ -527,6 +541,11 @@ export default function ClientePage() {
         toast.error(ui.fillNamePhone);
         return false;
       }
+
+      if (!isValidPhone(clienteTelefone)) {
+        toast.error(ui.invalidPhone);
+        return false;
+      }
     }
 
     if (etapaCheckout === 2) {
@@ -544,11 +563,15 @@ export default function ClientePage() {
     if (!validarEtapaAtual()) return;
     // Salva alteraÃ§Ãµes de perfil no banco ao avanÃ§ar do perfil
     if (etapaCheckout === 1) {
-      const email = clienteEmail;
+      const email = clienteEmail.trim().toLowerCase();
+      const telefone = toNormalizedPhone(clienteTelefone);
       (async () => {
-        const { error } = await supabase.from('clients').update({
+        const { data: authData } = await supabase.auth.getUser();
+        const authUserId = authData?.user?.id || null;
+
+        let query = supabase.from('clients').update({
           nome: clienteNome,
-          telefone: clienteTelefone,
+          telefone,
           endereco_numero: enderecoNumero,
           endereco_rua: enderecoRua,
           endereco_complemento: enderecoApt,
@@ -557,7 +580,16 @@ export default function ClientePage() {
           cep: enderecoZip,
           last_user_agent: navigator.userAgent,
           preferred_locale: locale,
-        }).eq('email', email);
+          email: email || null,
+        });
+
+        if (authUserId) {
+          query = query.eq('auth_user_id', authUserId);
+        } else {
+          query = query.eq('telefone', telefone);
+        }
+
+        const { error } = await query;
         if (error) toast.error(ui.saveProfileError + error.message);
       })();
     }
@@ -569,38 +601,118 @@ export default function ClientePage() {
 
   // Salvar cliente no banco antes de finalizar pedido
   const finalizarPedido = async () => {
-    // Busca cliente pelo email (garante vÃ­nculo correto)
+    const telefoneNormalizado = toNormalizedPhone(clienteTelefone);
+    const emailNormalizado = clienteEmail.trim().toLowerCase();
+
+    if (!isValidPhone(clienteTelefone)) {
+      toast.error(ui.invalidPhone);
+      return;
+    }
+
     let clienteId = null;
     try {
-      const { data: clientes } = await supabase
-        .from('clients')
-        .select('id')
-        .eq('email', clienteEmail);
-      if (clientes && clientes.length > 0) {
-        clienteId = clientes[0].id;
-        await supabase
+      const { data: authData } = await supabase.auth.getUser();
+      const authUserId = authData?.user?.id || null;
+
+      let clienteEncontrado: { id: string | number } | null = null;
+
+      if (authUserId) {
+        const byAuth = await supabase
           .from('clients')
-          .update({ last_user_agent: navigator.userAgent, preferred_locale: locale })
+          .select('id')
+          .eq('auth_user_id', authUserId)
+          .limit(1);
+        if (byAuth.error) {
+          toast.error(ui.saveClientError + byAuth.error.message);
+          return;
+        }
+        if (byAuth.data && byAuth.data.length > 0) {
+          clienteEncontrado = byAuth.data[0];
+        }
+      }
+
+      if (!clienteEncontrado && emailNormalizado) {
+        const byEmail = await supabase
+          .from('clients')
+          .select('id')
+          .eq('email', emailNormalizado)
+          .limit(1);
+        if (byEmail.error) {
+          toast.error(ui.saveClientError + byEmail.error.message);
+          return;
+        }
+        if (byEmail.data && byEmail.data.length > 0) {
+          clienteEncontrado = byEmail.data[0];
+        }
+      }
+
+      if (!clienteEncontrado) {
+        const byPhone = await supabase
+          .from('clients')
+          .select('id')
+          .eq('telefone', telefoneNormalizado)
+          .limit(1);
+        if (byPhone.error) {
+          toast.error(ui.saveClientError + byPhone.error.message);
+          return;
+        }
+        if (byPhone.data && byPhone.data.length > 0) {
+          clienteEncontrado = byPhone.data[0];
+        }
+      }
+
+      if (clienteEncontrado) {
+        clienteId = clienteEncontrado.id;
+        const updatePayload: Record<string, any> = {
+          nome: clienteNome,
+          telefone: telefoneNormalizado,
+          email: emailNormalizado || null,
+          endereco_numero: enderecoNumero,
+          endereco_rua: enderecoRua,
+          endereco_complemento: enderecoApt,
+          cidade: enderecoCidade,
+          estado: enderecoEstado,
+          cep: enderecoZip,
+          last_user_agent: navigator.userAgent,
+          preferred_locale: locale,
+        };
+        if (authUserId) {
+          updatePayload.auth_user_id = authUserId;
+        }
+
+        const { error } = await supabase
+          .from('clients')
+          .update(updatePayload)
           .eq('id', clienteId);
+        if (error) {
+          toast.error(ui.saveClientError + error.message);
+          return;
+        }
       } else {
-        // Insere cliente se nÃ£o existe
-        const { data: novoCliente, error } = await supabase.from('clients').insert([
-          {
-            nome: clienteNome,
-            telefone: clienteTelefone,
-            email: clienteEmail,
-            endereco_numero: enderecoNumero,
-            endereco_rua: enderecoRua,
-            endereco_complemento: enderecoApt,
-            cidade: enderecoCidade,
-            estado: enderecoEstado,
-            cep: enderecoZip,
-            pais: 'USA',
-            tenant_id: 1,
-            last_user_agent: navigator.userAgent,
-            preferred_locale: locale,
-          },
-        ]).select('id');
+        // Insere cliente se nao existe
+        const insertPayload: Record<string, any> = {
+          nome: clienteNome,
+          telefone: telefoneNormalizado,
+          email: emailNormalizado || null,
+          endereco_numero: enderecoNumero,
+          endereco_rua: enderecoRua,
+          endereco_complemento: enderecoApt,
+          cidade: enderecoCidade,
+          estado: enderecoEstado,
+          cep: enderecoZip,
+          pais: 'USA',
+          tenant_id: 1,
+          last_user_agent: navigator.userAgent,
+          preferred_locale: locale,
+        };
+        if (authUserId) {
+          insertPayload.auth_user_id = authUserId;
+        }
+
+        const { data: novoCliente, error } = await supabase
+          .from('clients')
+          .insert([insertPayload])
+          .select('id');
         if (error) {
           toast.error(ui.saveClientError + error.message);
           return;
@@ -618,7 +730,7 @@ export default function ClientePage() {
       const { data: novoPedido, error } = await supabase.from('orders').insert([
         {
           cliente_id: clienteId,
-          email_cliente: clienteEmail,
+          email_cliente: usuarioLogado ? (emailNormalizado || null) : null,
           data_pedido: new Date().toISOString(),
           status: 0,
           valor_total: resumoCarrinho.totalValor,
@@ -1023,12 +1135,29 @@ export default function ClientePage() {
                       </div>
                       <div>
                         <label className="text-xs text-muted-foreground">{ui.phone} <span className="text-muted-foreground">{ui.phoneHint}</span></label>
-                        <input value={clienteTelefone} onChange={(e) => setClienteTelefone(e.target.value)} className="mt-1 h-10 w-full rounded-md border border-border bg-card px-3 text-sm" placeholder="+1 555-555-5555" required />
+                        <input
+                          value={clienteTelefone}
+                          onChange={(e) => setClienteTelefone(normalizePhoneInput(e.target.value))}
+                          onBlur={(e) => setClienteTelefone(formatPhoneForDisplay(e.target.value))}
+                          className="mt-1 h-10 w-full rounded-md border border-border bg-card px-3 text-sm"
+                          placeholder="+1 555-555-5555"
+                          type="tel"
+                          inputMode="tel"
+                          autoComplete="tel"
+                          required
+                        />
                       </div>
-                      <div className="md:col-span-2">
-                        <label className="text-xs text-muted-foreground">{ui.email}</label>
-                        <input value={clienteEmail} readOnly className="mt-1 h-10 w-full rounded-md border border-border bg-card px-3 text-sm bg-muted" type="email" required />
-                      </div>
+                      {usuarioLogado ? (
+                        <div className="md:col-span-2">
+                          <label className="text-xs text-muted-foreground">{ui.email} <span className="text-muted-foreground">{ui.optional}</span></label>
+                          <input
+                            value={clienteEmail}
+                            onChange={(e) => setClienteEmail(e.target.value)}
+                            className="mt-1 h-10 w-full rounded-md border border-border bg-card px-3 text-sm"
+                            type="email"
+                          />
+                        </div>
+                      ) : null}
                     </div>
                     <h2 className="text-lg font-bold text-foreground mt-6 mb-2">{ui.deliveryAddress}</h2>
                     <div className="grid gap-3 md:grid-cols-2">

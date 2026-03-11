@@ -1,10 +1,10 @@
-import "dotenv/config";
+﻿import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import { createClient } from "@supabase/supabase-js";
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: "20mb" }));
 
 const allowedOrigins = (process.env.CORS_ORIGINS || process.env.CORS_ORIGIN || "")
   .split(",")
@@ -14,24 +14,18 @@ const allowedOrigins = (process.env.CORS_ORIGINS || process.env.CORS_ORIGIN || "
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Permite chamadas sem Origin (health checks/curl/server-to-server).
       if (!origin) return callback(null, true);
-
-      // Se nada foi configurado, libera tudo (comportamento de fallback atual).
-      if (!allowedOrigins.length || allowedOrigins.includes("*")) {
-        return callback(null, true);
-      }
-
-      if (allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
-
+      if (!allowedOrigins.length || allowedOrigins.includes("*")) return callback(null, true);
+      if (allowedOrigins.includes(origin)) return callback(null, true);
       return callback(new Error(`CORS bloqueado para origin: ${origin}`));
     },
   }),
 );
 
 const PORT = Number(process.env.PORT || 3001);
+const KG_TO_LB = 2.2046226218;
+const MAX_B64_BYTES = Number(process.env.MAX_INVOICE_UPLOAD_BYTES || 15 * 1024 * 1024);
+
 const STATUS = {
   RECEBIDO: 0,
   CONFIRMADO: 1,
@@ -49,64 +43,81 @@ if (!supabaseUrl || !supabaseServiceRoleKey) {
 
 const supabase = createClient(supabaseUrl, supabaseServiceRoleKey);
 
-const formatQuantity = (value) => {
-  const num = Number(value || 0);
-  if (!Number.isFinite(num)) return "0";
+function createHttpError(status, message, detail = null) {
+  const error = new Error(message);
+  error.status = status;
+  error.detail = detail;
+  return error;
+}
+
+function parseNumber(value, fallback = 0) {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : fallback;
+}
+
+function roundQty(value, digits = 3) {
+  return Number(parseNumber(value, 0).toFixed(digits));
+}
+
+function formatQuantity(value) {
+  const num = parseNumber(value, 0);
   if (Number.isInteger(num)) return String(num);
   return num.toFixed(2).replace(/\.?0+$/, "");
-};
+}
 
-const formatMoney = (value) => {
-  const num = Number(value || 0);
+function formatMoney(value) {
+  const num = parseNumber(value, NaN);
   if (!Number.isFinite(num)) return null;
   return num.toLocaleString("en-US", { style: "currency", currency: "USD" });
-};
+}
 
-const normalizePhone = (rawPhone) => {
+function normalizePhone(rawPhone) {
   const digits = String(rawPhone || "").replace(/\D/g, "");
   if (!digits) return "";
   if (digits.length >= 12) return digits;
   const countryCode = process.env.DEFAULT_COUNTRY_CODE || "55";
   return `${countryCode}${digits}`;
-};
+}
 
-const normalizeLocale = (value) => {
+function normalizeLocale(value) {
   const raw = String(value || "").toLowerCase().trim();
-  if (!raw) return "pt";
   if (raw.startsWith("en")) return "en";
-  if (raw.startsWith("pt")) return "pt";
   return "pt";
-};
+}
 
-const resolveMessageLocale = (order, client) => {
-  const orderLocale =
-    order?.locale ||
-    order?.order_locale ||
-    order?.pedido_locale ||
-    order?.idioma ||
-    order?.language;
+function normalizeStockUnit(value, fallback = "LB") {
+  const raw = String(value || "").toUpperCase().trim();
+  if (["LB", "LBS"].includes(raw)) return "LB";
+  if (["KG", "KGS"].includes(raw)) return "KG";
+  if (["UN", "UNIT", "UNIDADE"].includes(raw)) return "UN";
+  return fallback;
+}
 
+function convertQuantity(value, fromUnit, toUnit) {
+  const qty = parseNumber(value, NaN);
+  if (!Number.isFinite(qty)) {
+    throw createHttpError(400, "Quantidade invalida para conversao de unidade.");
+  }
+
+  const from = normalizeStockUnit(fromUnit, "LB");
+  const to = normalizeStockUnit(toUnit, "LB");
+  if (from === to) return qty;
+  if (from === "KG" && to === "LB") return qty * KG_TO_LB;
+  if (from === "LB" && to === "KG") return qty / KG_TO_LB;
+  throw createHttpError(400, `Conversao de unidade nao suportada: ${from} -> ${to}`);
+}
+
+function resolveMessageLocale(order, client) {
+  const orderLocale = order?.locale || order?.order_locale || order?.pedido_locale || order?.idioma;
   if (orderLocale) return normalizeLocale(orderLocale);
-
-  const clientLocale =
-    client?.preferred_locale ||
-    client?.locale ||
-    client?.idioma ||
-    client?.language;
-
+  const clientLocale = client?.preferred_locale || client?.locale || client?.idioma;
   if (clientLocale) return normalizeLocale(clientLocale);
-
   return normalizeLocale(process.env.DEFAULT_MESSAGE_LOCALE || "pt");
-};
+}
 
-const resolveOrderCode = (order) => {
+function resolveOrderCode(order) {
   const explicitCode =
-    order?.codigo_pedido ||
-    order?.numero_pedido ||
-    order?.codigo ||
-    order?.code ||
-    order?.numero ||
-    null;
+    order?.codigo_pedido || order?.numero_pedido || order?.codigo || order?.code || order?.numero || null;
 
   if (explicitCode) {
     const code = String(explicitCode).trim();
@@ -115,115 +126,118 @@ const resolveOrderCode = (order) => {
   }
 
   return `IMP${order?.id}`;
-};
+}
 
-const buildMessage = ({ type, name, code, orderItems, orderTotal, locale }) => {
+function resolveDeliveryAddress(client) {
+  const street = [client?.endereco_rua, client?.endereco_numero]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .join(", ");
+  const complement = String(client?.endereco_complemento || "").trim();
+  const locality = [client?.cidade, client?.estado, client?.cep]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .join(", ");
+  const country = String(client?.pais || "").trim();
+  return [street, complement, locality, country].filter(Boolean).join(" - ");
+}
+
+function buildMessage({ type, name, code, orderItems, orderTotal, locale, deliveryAddress }) {
   const isEn = locale === "en";
-
-  const itemsLines = (orderItems || [])
-    .map((item) => `- ${item.nome}: ${formatQuantity(item.quantidade)}`)
-    .join("\n");
-  const itemsSection = itemsLines
-    ? ["", isEn ? "Order items:" : "Itens do pedido:", itemsLines].join("\n")
-    : "";
-
+  const safeName = String(name || "").trim() || (isEn ? "customer" : "cliente");
+  const itemsLines = (orderItems || []).map((item) => `- ${item.nome}: ${formatQuantity(item.quantidade)}`);
   const totalLabel = formatMoney(orderTotal);
-  const totalSection = totalLabel
-    ? `\n\n${isEn ? "Estimated total" : "Total estimado"}: ${totalLabel}`
-    : "";
+  const addressSuffix = deliveryAddress ? ` (${deliveryAddress})` : "";
+  const lines = [];
 
   if (type === "confirmed") {
     if (isEn) {
-      return [
-        `✅ Hi ${name}, your order ${code} was confirmed successfully!`,
-        "",
-        "🥩 We have already started preparing your items.",
-        "",
-        "⚖️ Products sold by weight (KG/LB) may have a small price variation after weighing and packaging.",
-        itemsSection,
-        totalSection,
-      ].join("\n");
+      lines.push(`Order update: Hi ${safeName}, your order ${code} was confirmed successfully!`);
+      lines.push("");
+      lines.push("We have already started preparing your items.");
+      lines.push("Products sold by weight (KG/LB) may have a small price variation after weighing and packaging.");
+    } else {
+      lines.push(`Atualizacao do pedido: Ola ${safeName}, seu pedido ${code} foi confirmado com sucesso!`);
+      lines.push("");
+      lines.push("Ja comecamos a preparacao dos itens.");
+      lines.push("Produtos vendidos por peso (KG/LB) podem ter pequena variacao de valor apos pesagem e embalagem.");
     }
-
-    return [
-      `✅ Ola ${name}, seu pedido ${code} foi confirmado com sucesso!`,
-      "",
-      "🥩 Ja comecamos a preparacao dos itens.",
-      "",
-      "⚖️ Produtos vendidos por peso (KG/LB) podem ter pequena variacao de valor apos pesagem e embalagem.",
-      itemsSection,
-      totalSection,
-    ].join("\n");
+  } else if (isEn) {
+    lines.push(`Delivery update: Hi ${safeName}, your order ${code} is out for delivery!`);
+    lines.push("");
+    lines.push(`It will arrive at your address shortly${addressSuffix}.`);
+    lines.push("");
+    lines.push("Thank you for your preference.");
+  } else {
+    lines.push(`Atualizacao de entrega: Ola ${safeName}, seu pedido ${code} saiu para entrega!`);
+    lines.push("");
+    lines.push(`Em breve ele chegara ao endereco informado${addressSuffix}.`);
+    lines.push("");
+    lines.push("Obrigado pela preferencia.");
   }
 
-  if (isEn) {
-    return [
-      `🚚 Hi ${name}, your order ${code} is out for delivery!`,
-      "",
-      "📍 It will arrive at your address shortly.",
-      "",
-      "🙏 Thank you for your preference.",
-      itemsSection,
-      totalSection,
-    ].join("\n");
+  if (itemsLines.length > 0) {
+    lines.push("");
+    lines.push(isEn ? "Order items:" : "Itens do pedido:");
+    lines.push(...itemsLines);
   }
 
-  return [
-    `🚚 Ola ${name}, seu pedido ${code} saiu para entrega!`,
-    "",
-    "📍 Em breve ele chegara ao endereco informado.",
-    "",
-    "🙏 Obrigado pela preferencia.",
-    itemsSection,
-    totalSection,
-  ].join("\n");
-};
+  if (totalLabel) {
+    lines.push("");
+    lines.push(`${isEn ? "Estimated total" : "Total estimado"}: ${totalLabel}`);
+  }
 
-async function fetchOrderItems(orderId) {
-  const byPedido = await supabase
-    .from("order_items")
-    .select("*")
-    .eq("pedido_id", orderId);
+  return lines.join("\n");
+}
 
+async function fetchOrderItems(orderId, locale = "pt") {
+  const isEn = locale === "en";
+
+  const byPedido = await supabase.from("order_items").select("*").eq("pedido_id", orderId);
   let items = !byPedido.error ? byPedido.data || [] : [];
 
   if (!items.length) {
-    const byOrder = await supabase
-      .from("order_items")
-      .select("*")
-      .eq("order_id", orderId);
-    if (!byOrder.error) {
-      items = byOrder.data || [];
-    }
+    const byOrder = await supabase.from("order_items").select("*").eq("order_id", orderId);
+    if (!byOrder.error) items = byOrder.data || [];
   }
 
   if (!items.length) return [];
 
-  const productIds = Array.from(
-    new Set(
-      items
-        .map((item) => item.produto_id || item.product_id)
-        .filter((id) => id !== null && id !== undefined),
-    ),
-  );
+  const productIds = Array.from(new Set(items.map((item) => item.produto_id || item.product_id).filter(Boolean)));
 
   let productsMap = new Map();
   if (productIds.length > 0) {
-    const productsResult = await supabase
-      .from("products")
-      .select("id, nome")
-      .in("id", productIds);
+    const productsResult = await supabase.from("products").select("id, nome, nome_en").in("id", productIds);
     if (!productsResult.error) {
-      productsMap = new Map(
-        (productsResult.data || []).map((prod) => [String(prod.id), prod.nome || "Produto"]),
-      );
+      productsMap = new Map((productsResult.data || []).map((prod) => {
+        const productName = isEn ? (prod.nome_en || prod.nome || "Product") : (prod.nome || prod.nome_en || "Produto");
+        return [String(prod.id), productName];
+      }));
     }
   }
 
   return items.map((item) => ({
-    nome: productsMap.get(String(item.produto_id || item.product_id)) || "Produto",
+    nome: productsMap.get(String(item.produto_id || item.product_id)) || (isEn ? "Product" : "Produto"),
     quantidade: item.quantidade ?? item.quantity ?? 0,
   }));
+}
+
+async function fetchOrderItemsForStock(orderId) {
+  const byPedido = await supabase.from("order_items").select("*").eq("pedido_id", orderId);
+  let items = !byPedido.error ? byPedido.data || [] : [];
+
+  if (!items.length) {
+    const byOrder = await supabase.from("order_items").select("*").eq("order_id", orderId);
+    if (!byOrder.error) items = byOrder.data || [];
+  }
+
+  return (items || [])
+    .map((item) => ({
+      productId: item.produto_id || item.product_id,
+      quantity: parseNumber(item.quantidade ?? item.quantity, 0),
+      unit: normalizeStockUnit(item.unidade || item.unit || null, "LB"),
+    }))
+    .filter((item) => item.productId && item.quantity > 0);
 }
 
 async function sendWhatsAppViaZApi({ phone, message }) {
@@ -243,67 +257,1026 @@ async function sendWhatsAppViaZApi({ phone, message }) {
   const response = await fetch(endpoint, {
     method: "POST",
     headers,
-    body: JSON.stringify({
-      phone,
-      number: phone,
-      message,
-      text: message,
-    }),
+    body: JSON.stringify({ phone, number: phone, message, text: message }),
   });
 
-  if (!response.ok) {
-    return { ok: false, reason: `zapi-http-${response.status}` };
-  }
+  if (!response.ok) return { ok: false, reason: `zapi-http-${response.status}` };
   return { ok: true };
 }
 
-async function sendStatusNotification({
-  previousStatus,
-  newStatus,
-  clientName,
-  clientPhone,
-  orderCode,
-  orderItems,
-  orderTotal,
-  locale,
-}) {
+async function sendStatusNotification({ previousStatus, newStatus, clientName, clientPhone, orderCode, orderItems, orderTotal, locale, deliveryAddress }) {
   let type = null;
-  if (previousStatus === STATUS.RECEBIDO && newStatus === STATUS.CONFIRMADO) {
-    type = "confirmed";
-  }
-  if (previousStatus === STATUS.PRONTO && newStatus === STATUS.ENTREGA) {
-    type = "out_for_delivery";
-  }
+  if (previousStatus === STATUS.RECEBIDO && newStatus === STATUS.CONFIRMADO) type = "confirmed";
+  if (previousStatus === STATUS.PRONTO && newStatus === STATUS.ENTREGA) type = "out_for_delivery";
   if (!type) return { sent: false, reason: "no-notification-transition" };
 
   const phone = normalizePhone(clientPhone);
   if (!phone) return { sent: false, reason: "missing-phone" };
 
-  const message = buildMessage({
-    type,
-    name: clientName || "cliente",
-    code: orderCode,
-    orderItems,
-    orderTotal,
-    locale,
-  });
+  const message = buildMessage({ type, name: clientName || "cliente", code: orderCode, orderItems, orderTotal, locale, deliveryAddress });
 
   const sendResult = await sendWhatsAppViaZApi({ phone, message });
-  if (!sendResult.ok) {
-    return { sent: false, reason: sendResult.reason };
+  if (!sendResult.ok) return { sent: false, reason: sendResult.reason };
+  return { sent: true };
+}
+
+async function fetchProductsByIds(productIds) {
+  if (!productIds.length) return new Map();
+
+  const { data, error } = await supabase
+    .from("products")
+    .select("id, nome, unidade, stock_unit, stock_enabled, stock_min")
+    .in("id", productIds);
+
+  if (error) {
+    throw createHttpError(500, "Erro ao buscar produtos para estoque.", error.message);
   }
 
-  return { sent: true };
+  return new Map(
+    (data || []).map((product) => {
+      const resolvedStockUnit = normalizeStockUnit(product.stock_unit || product.unidade || "LB", "LB");
+      return [
+        Number(product.id),
+        {
+          ...product,
+          stock_unit: resolvedStockUnit,
+          stock_enabled: Boolean(product.stock_enabled),
+          stock_min: parseNumber(product.stock_min, 0),
+        },
+      ];
+    }),
+  );
+}
+
+async function syncLowStockAlerts(productIds) {
+  const ids = Array.from(new Set((productIds || []).map((id) => Number(id)).filter(Boolean)));
+  if (!ids.length) return;
+
+  const [{ data: products, error: productsError }, { data: balances, error: balancesError }] = await Promise.all([
+    supabase.from("products").select("id, stock_enabled, stock_min").in("id", ids),
+    supabase.from("stock_balances").select("produto_id, saldo_qty").in("produto_id", ids),
+  ]);
+
+  if (productsError || balancesError) return;
+
+  const balanceMap = new Map((balances || []).map((row) => [Number(row.produto_id), parseNumber(row.saldo_qty, 0)]));
+
+  const { data: openEvents } = await supabase
+    .from("stock_alert_events")
+    .select("id, product_id")
+    .eq("alert_type", "low_stock")
+    .is("resolved_at", null)
+    .in("product_id", ids);
+
+  const openMap = new Map((openEvents || []).map((row) => [Number(row.product_id), row.id]));
+
+  for (const product of products || []) {
+    const productId = Number(product.id);
+    const enabled = Boolean(product.stock_enabled);
+    const min = parseNumber(product.stock_min, 0);
+    const saldo = parseNumber(balanceMap.get(productId), 0);
+    const isLow = enabled && saldo <= min;
+    const openEventId = openMap.get(productId);
+
+    if (isLow && !openEventId) {
+      await supabase.from("stock_alert_events").insert([
+        {
+          product_id: productId,
+          alert_type: "low_stock",
+          payload: { saldo, stock_min: min },
+        },
+      ]);
+    }
+
+    if (!isLow && openEventId) {
+      await supabase.from("stock_alert_events").update({ resolved_at: new Date().toISOString() }).eq("id", openEventId);
+    }
+  }
+}
+
+async function applyOrderStockExit(orderId) {
+  const sourceId = String(orderId);
+
+  const { data: alreadyApplied } = await supabase
+    .from("stock_movements")
+    .select("id")
+    .eq("source_type", "order")
+    .eq("source_id", sourceId)
+    .eq("tipo", "exit")
+    .limit(1);
+
+  if ((alreadyApplied || []).length > 0) {
+    return { applied: false, reason: "already_applied", changedProducts: [] };
+  }
+
+  const itemRows = await fetchOrderItemsForStock(orderId);
+  if (!itemRows.length) {
+    return { applied: false, reason: "no_items", changedProducts: [] };
+  }
+
+  const aggregated = new Map();
+  for (const row of itemRows) {
+    const key = Number(row.productId);
+    const current = aggregated.get(key) || { quantity: 0, unit: row.unit };
+    current.quantity += row.quantity;
+    aggregated.set(key, current);
+  }
+
+  const productIds = Array.from(aggregated.keys());
+  const productMap = await fetchProductsByIds(productIds);
+
+  const requiredByProduct = [];
+  for (const productId of productIds) {
+    const product = productMap.get(productId);
+    if (!product || !product.stock_enabled) continue;
+
+    const entry = aggregated.get(productId);
+    const qtyInStockUnit = roundQty(convertQuantity(entry.quantity, entry.unit, product.stock_unit), 3);
+
+    requiredByProduct.push({
+      productId,
+      productName: product.nome || `Produto ${productId}`,
+      unit: product.stock_unit,
+      required: qtyInStockUnit,
+    });
+  }
+
+  if (!requiredByProduct.length) {
+    return {
+      applied: false,
+      reason: "no_stock_controlled_items",
+      changedProducts: [],
+    };
+  }
+
+  const shortages = [];
+  const consumptionPlan = [];
+
+  for (const required of requiredByProduct) {
+    const { data: batchesData, error: batchesError } = await supabase
+      .from("batches")
+      .select("id, produto_id, quantidade_disponivel, unidade, data_validade")
+      .eq("produto_id", required.productId)
+      .gt("quantidade_disponivel", 0)
+      .order("data_validade", { ascending: true, nullsFirst: false })
+      .order("id", { ascending: true });
+
+    if (batchesError) throw createHttpError(500, "Erro ao buscar lotes para baixa de estoque.", batchesError.message);
+
+    let remaining = required.required;
+    const productPlan = [];
+
+    for (const batch of batchesData || []) {
+      if (remaining <= 0) break;
+
+      const batchUnit = normalizeStockUnit(batch.unidade || required.unit, required.unit);
+      const availableInBatchUnit = parseNumber(batch.quantidade_disponivel, 0);
+      const availableInStockUnit = convertQuantity(availableInBatchUnit, batchUnit, required.unit);
+      const consumeInStockUnit = Math.min(availableInStockUnit, remaining);
+      const consumeInBatchUnit = roundQty(convertQuantity(consumeInStockUnit, required.unit, batchUnit), 3);
+
+      if (consumeInBatchUnit <= 0) continue;
+
+      productPlan.push({
+        batchId: Number(batch.id),
+        productId: required.productId,
+        productUnit: required.unit,
+        consumeInBatchUnit,
+        consumeInStockUnit: roundQty(consumeInStockUnit, 3),
+        availableBefore: availableInBatchUnit,
+      });
+
+      remaining = roundQty(remaining - consumeInStockUnit, 6);
+    }
+
+    if (remaining > 0) {
+      shortages.push({
+        product_id: required.productId,
+        product_name: required.productName,
+        required_qty: required.required,
+        available_qty: roundQty(required.required - remaining, 3),
+        unit: required.unit,
+      });
+      continue;
+    }
+
+    consumptionPlan.push(...productPlan);
+  }
+
+  if (shortages.length > 0) {
+    throw createHttpError(409, "Estoque insuficiente para concluir o pedido.", { shortages });
+  }
+
+  const changedProducts = new Set();
+
+  for (const step of consumptionPlan) {
+    const nextQty = roundQty(step.availableBefore - step.consumeInBatchUnit, 3);
+
+    const { error: updateBatchError } = await supabase
+      .from("batches")
+      .update({ quantidade_disponivel: nextQty })
+      .eq("id", step.batchId);
+
+    if (updateBatchError) throw createHttpError(500, "Erro ao atualizar saldo do lote.", updateBatchError.message);
+
+    const { error: movementError } = await supabase
+      .from("stock_movements")
+      .insert([
+        {
+          tipo: "exit",
+          produto_id: step.productId,
+          batch_id: step.batchId,
+          qty: step.consumeInStockUnit,
+          unit: step.productUnit,
+          source_type: "order",
+          source_id: sourceId,
+          metadata: { reason: "order_concluded" },
+        },
+      ]);
+
+    if (movementError) {
+      const duplicated = String(movementError.message || "").toLowerCase().includes("duplicate") ||
+        String(movementError.code || "") === "23505";
+      if (!duplicated) throw createHttpError(500, "Erro ao registrar movimentacao de saida.", movementError.message);
+    }
+
+    changedProducts.add(step.productId);
+  }
+
+  await syncLowStockAlerts(Array.from(changedProducts));
+
+  return {
+    applied: true,
+    reason: "exit_created",
+    changedProducts: Array.from(changedProducts),
+  };
+}
+
+async function applyOrderStockReversal(orderId, reason = "manual_status_reversal") {
+  const sourceId = String(orderId);
+
+  const { data: existingReversal } = await supabase
+    .from("stock_movements")
+    .select("id")
+    .eq("source_type", "order")
+    .eq("source_id", sourceId)
+    .eq("tipo", "reversal")
+    .limit(1);
+
+  if ((existingReversal || []).length > 0) {
+    return { applied: false, reason: "already_reversed", changedProducts: [] };
+  }
+
+  const { data: exits, error: exitsError } = await supabase
+    .from("stock_movements")
+    .select("id, produto_id, batch_id, qty, unit")
+    .eq("source_type", "order")
+    .eq("source_id", sourceId)
+    .eq("tipo", "exit");
+
+  if (exitsError) throw createHttpError(500, "Erro ao buscar movimentacoes para estorno.", exitsError.message);
+  if (!(exits || []).length) return { applied: false, reason: "no_exit_to_reverse", changedProducts: [] };
+
+  const changedProducts = new Set();
+
+  for (const movement of exits) {
+    if (movement.batch_id) {
+      const { data: batch, error: batchError } = await supabase
+        .from("batches")
+        .select("id, quantidade_disponivel")
+        .eq("id", movement.batch_id)
+        .single();
+
+      if (!batchError && batch) {
+        const nextQty = roundQty(parseNumber(batch.quantidade_disponivel, 0) + parseNumber(movement.qty, 0), 3);
+        const { error: batchUpdateError } = await supabase
+          .from("batches")
+          .update({ quantidade_disponivel: nextQty })
+          .eq("id", movement.batch_id);
+
+        if (batchUpdateError) throw createHttpError(500, "Erro ao atualizar lote no estorno de estoque.", batchUpdateError.message);
+      }
+    }
+
+    const { error: reversalError } = await supabase
+      .from("stock_movements")
+      .insert([
+        {
+          tipo: "reversal",
+          produto_id: movement.produto_id,
+          batch_id: movement.batch_id,
+          qty: movement.qty,
+          unit: normalizeStockUnit(movement.unit, "LB"),
+          source_type: "order",
+          source_id: sourceId,
+          metadata: { reversed_from_movement_id: movement.id, reason },
+        },
+      ]);
+
+    if (reversalError) {
+      const duplicated = String(reversalError.message || "").toLowerCase().includes("duplicate") ||
+        String(reversalError.code || "") === "23505";
+      if (!duplicated) throw createHttpError(500, "Erro ao registrar movimentacao de estorno.", reversalError.message);
+    }
+
+    changedProducts.add(Number(movement.produto_id));
+  }
+
+  await syncLowStockAlerts(Array.from(changedProducts));
+
+  return {
+    applied: true,
+    reason: "reversal_created",
+    changedProducts: Array.from(changedProducts),
+  };
+}
+
+async function getStockBalanceRows() {
+  const [{ data: products, error: productsError }, { data: balances, error: balancesError }] = await Promise.all([
+    supabase
+      .from("products")
+      .select("id, nome, categoria, preco, unidade, stock_enabled, stock_min, stock_unit")
+      .order("nome", { ascending: true }),
+    supabase.from("stock_balances").select("produto_id, saldo_qty, last_movement_at"),
+  ]);
+
+  if (productsError || balancesError) {
+    throw createHttpError(
+      500,
+      "Erro ao carregar painel de estoque.",
+      productsError?.message || balancesError?.message,
+    );
+  }
+
+  const balanceMap = new Map((balances || []).map((row) => [
+    Number(row.produto_id),
+    { saldo_qty: parseNumber(row.saldo_qty, 0), last_movement_at: row.last_movement_at },
+  ]));
+
+  const now = new Date();
+  const in7Days = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const in30Days = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+  const { data: lots, error: lotsError } = await supabase
+    .from("batches")
+    .select("id, produto_id, data_validade, quantidade_disponivel")
+    .gt("quantidade_disponivel", 0)
+    .not("data_validade", "is", null)
+    .lte("data_validade", in30Days);
+
+  if (lotsError) throw createHttpError(500, "Erro ao carregar lotes do estoque.", lotsError.message);
+
+  const lots7Map = new Map();
+  const lots30Map = new Map();
+  for (const lot of lots || []) {
+    const productId = Number(lot.produto_id);
+    const exp = String(lot.data_validade || "");
+    lots30Map.set(productId, (lots30Map.get(productId) || 0) + 1);
+    if (exp <= in7Days) lots7Map.set(productId, (lots7Map.get(productId) || 0) + 1);
+  }
+
+  const rows = (products || []).map((product) => {
+    const productId = Number(product.id);
+    const balance = balanceMap.get(productId) || { saldo_qty: 0, last_movement_at: null };
+    const stockEnabled = Boolean(product.stock_enabled);
+    const stockMin = parseNumber(product.stock_min, 0);
+    const stockUnit = normalizeStockUnit(product.stock_unit || product.unidade || "LB", "LB");
+    const saldo = roundQty(balance.saldo_qty, 3);
+    const isLow = stockEnabled && saldo <= stockMin;
+
+    return {
+      product_id: productId,
+      product_name: product.nome,
+      category: product.categoria || "-",
+      sale_price: parseNumber(product.preco, 0),
+      stock_enabled: stockEnabled,
+      stock_min: stockMin,
+      stock_unit: stockUnit,
+      saldo_qty: saldo,
+      low_stock: isLow,
+      status: stockEnabled ? (isLow ? "low" : "ok") : "disabled",
+      lots_expiring_7d: lots7Map.get(productId) || 0,
+      lots_expiring_30d: lots30Map.get(productId) || 0,
+      last_movement_at: balance.last_movement_at,
+    };
+  });
+
+  const summary = {
+    total_products: rows.length,
+    stock_enabled_products: rows.filter((row) => row.stock_enabled).length,
+    low_stock_products: rows.filter((row) => row.low_stock).length,
+    expiring_7d_products: rows.filter((row) => row.lots_expiring_7d > 0).length,
+  };
+
+  return { rows, summary };
+}
+
+async function getLowStockAlerts() {
+  const { rows } = await getStockBalanceRows();
+  const lowRows = rows
+    .filter((row) => row.low_stock)
+    .sort((a, b) => (a.saldo_qty - a.stock_min) - (b.saldo_qty - b.stock_min));
+
+  const { data: openEvents } = await supabase
+    .from("stock_alert_events")
+    .select("id, product_id, alert_type, payload, triggered_at")
+    .eq("alert_type", "low_stock")
+    .is("resolved_at", null)
+    .order("triggered_at", { ascending: false });
+
+  return { current: lowRows, open_events: openEvents || [] };
+}
+
+function parseBase64Input(base64Input) {
+  const raw = String(base64Input || "").trim();
+  if (!raw) throw createHttpError(400, "Arquivo em base64 nao informado.");
+
+  const match = raw.match(/^data:(.+);base64,(.+)$/);
+  if (match) {
+    return { mimeType: match[1], base64: match[2] };
+  }
+
+  return { mimeType: null, base64: raw };
+}
+
+function sanitizeFileName(fileName) {
+  return String(fileName || "nota-fiscal.jpg")
+    .replace(/[^a-zA-Z0-9._-]/g, "_")
+    .replace(/_+/g, "_")
+    .slice(-120);
+}
+
+async function callPaperlessOcr({ invoiceRecord, ocrHint }) {
+  if (ocrHint && String(ocrHint).trim()) return String(ocrHint).trim();
+
+  const endpoint = process.env.PAPERLESS_OCR_ENDPOINT;
+  const token = process.env.PAPERLESS_API_TOKEN;
+  if (!endpoint) return String(invoiceRecord?.ocr_text || "");
+
+  const headers = { "Content-Type": "application/json" };
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      invoice_id: invoiceRecord.id,
+      file_url: invoiceRecord.file_url,
+      file_path: invoiceRecord.file_path,
+      file_bucket: invoiceRecord.file_bucket,
+    }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw createHttpError(502, "Falha ao processar OCR no Paperless.", text || `HTTP ${response.status}`);
+  }
+
+  const payload = await response.json().catch(() => ({}));
+  return String(payload?.ocr_text || payload?.text || payload?.content || "");
+}
+
+function extractFirstJsonObject(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return null;
+
+  const fenced = raw.match(/```json\s*([\s\S]*?)\s*```/i) || raw.match(/```\s*([\s\S]*?)\s*```/i);
+  const candidate = fenced ? fenced[1] : raw;
+
+  try {
+    return JSON.parse(candidate);
+  } catch {
+    // noop
+  }
+
+  const start = candidate.indexOf("{");
+  const end = candidate.lastIndexOf("}");
+  if (start >= 0 && end > start) {
+    const sliced = candidate.slice(start, end + 1);
+    try {
+      return JSON.parse(sliced);
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+function buildFallbackInvoiceJson(ocrText = "") {
+  const lines = String(ocrText || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  return {
+    supplier: null,
+    invoice_number: null,
+    invoice_date: null,
+    items: lines.slice(0, 12).map((line) => ({
+      description: line,
+      quantity: null,
+      unit: "LB",
+      unit_cost: null,
+      total: null,
+      product_id: null,
+    })),
+  };
+}
+
+async function callGeminiExtraction({ ocrText, locale = "pt" }) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  const model = process.env.GEMINI_MODEL || "gemini-1.5-pro";
+  if (!apiKey || !String(ocrText || "").trim()) return buildFallbackInvoiceJson(ocrText);
+
+  const prompt =
+    locale === "en"
+      ? [
+          "Extract invoice data from OCR text and return ONLY valid JSON.",
+          "Expected JSON shape:",
+          '{"supplier":null,"invoice_number":null,"invoice_date":null,"items":[{"description":"","quantity":null,"unit":"LB","unit_cost":null,"total":null,"product_id":null}]}',
+          "If unsure, keep null.",
+        ].join("\n")
+      : [
+          "Extraia os dados da nota fiscal e retorne APENAS JSON valido.",
+          "Formato:",
+          '{"supplier":null,"invoice_number":null,"invoice_date":null,"items":[{"description":"","quantity":null,"unit":"LB","unit_cost":null,"total":null,"product_id":null}]}',
+          "Se houver duvida, use null.",
+        ].join("\n");
+
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }, { text: `OCR:\n${ocrText}` }] }],
+      }),
+    },
+  );
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw createHttpError(502, "Falha ao extrair JSON no Gemini.", text || `HTTP ${response.status}`);
+  }
+
+  const payload = await response.json();
+  const parts = payload?.candidates?.[0]?.content?.parts || [];
+  const rawText = parts.map((part) => part?.text || "").join("\n");
+  const parsed = extractFirstJsonObject(rawText);
+
+  if (!parsed || typeof parsed !== "object") return buildFallbackInvoiceJson(ocrText);
+
+  return {
+    supplier: parsed.supplier ?? null,
+    invoice_number: parsed.invoice_number ?? null,
+    invoice_date: parsed.invoice_date ?? null,
+    items: Array.isArray(parsed.items)
+      ? parsed.items.map((item) => ({
+          description: item?.description ?? item?.descricao ?? "",
+          quantity: item?.quantity ?? item?.qty ?? null,
+          unit: normalizeStockUnit(item?.unit || "LB", "LB"),
+          unit_cost: item?.unit_cost ?? item?.valor_unitario ?? null,
+          total: item?.total ?? item?.valor_total ?? null,
+          product_id: item?.product_id ?? item?.productId ?? null,
+        }))
+      : [],
+  };
+}
+
+async function resolveProductIdsForInvoiceItems(items) {
+  const { data: products, error } = await supabase
+    .from("products")
+    .select("id, nome, nome_en")
+    .order("id", { ascending: true });
+
+  if (error) {
+    throw createHttpError(500, "Erro ao buscar produtos para mapear itens da nota.", error.message);
+  }
+
+  const normalizedProducts = (products || []).map((product) => ({
+    id: Number(product.id),
+    names: [product.nome, product.nome_en]
+      .filter(Boolean)
+      .map((name) => String(name).trim().toLowerCase())
+      .filter(Boolean),
+  }));
+
+  return (items || []).map((item) => {
+    const existingId = Number(item.product_id || item.productId || 0);
+    if (existingId > 0) return { ...item, product_id: existingId };
+
+    const description = String(item.description || item.descricao || "").trim().toLowerCase();
+    if (!description) return { ...item, product_id: null };
+
+    let bestMatch = null;
+    let bestLen = 0;
+    for (const product of normalizedProducts) {
+      for (const alias of product.names) {
+        if (description === alias || description.includes(alias)) {
+          if (alias.length > bestLen) {
+            bestMatch = product.id;
+            bestLen = alias.length;
+          }
+        }
+      }
+    }
+
+    return { ...item, product_id: bestMatch };
+  });
 }
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true });
 });
 
+app.patch("/api/stock/products/:id/settings", async (req, res) => {
+  try {
+    const productId = Number(req.params.id);
+    if (!Number.isInteger(productId) || productId <= 0) {
+      return res.status(400).json({ error: "product_id invalido." });
+    }
+
+    const payload = {};
+    if (Object.prototype.hasOwnProperty.call(req.body, "stock_enabled")) {
+      payload.stock_enabled = Boolean(req.body.stock_enabled);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(req.body, "stock_min")) {
+      const stockMin = parseNumber(req.body.stock_min, NaN);
+      if (!Number.isFinite(stockMin) || stockMin < 0) {
+        return res.status(400).json({ error: "stock_min invalido. Informe numero >= 0." });
+      }
+      payload.stock_min = roundQty(stockMin, 3);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(req.body, "stock_unit")) {
+      payload.stock_unit = normalizeStockUnit(req.body.stock_unit, "LB");
+    }
+
+    if (!Object.keys(payload).length) {
+      return res.status(400).json({ error: "Nenhum campo de configuracao informado." });
+    }
+
+    const { data, error } = await supabase
+      .from("products")
+      .update(payload)
+      .eq("id", productId)
+      .select("id, nome, stock_enabled, stock_min, stock_unit")
+      .single();
+
+    if (error || !data) {
+      return res.status(500).json({ error: "Erro ao atualizar configuracao do produto.", detail: error?.message || null });
+    }
+
+    await syncLowStockAlerts([productId]);
+    return res.json({ ok: true, product: data });
+  } catch (error) {
+    return res.status(500).json({
+      error: "Erro interno ao atualizar configuracao de estoque.",
+      detail: String(error?.message || error),
+    });
+  }
+});
+
+app.post("/api/stock/entries/manual", async (req, res) => {
+  try {
+    const productId = Number(req.body?.product_id);
+    const qtyRaw = parseNumber(req.body?.qty, NaN);
+    const inputUnit = normalizeStockUnit(req.body?.unit || "LB", "LB");
+
+    if (!Number.isInteger(productId) || productId <= 0) {
+      return res.status(400).json({ error: "product_id invalido." });
+    }
+
+    if (!Number.isFinite(qtyRaw) || qtyRaw <= 0) {
+      return res.status(400).json({ error: "qty invalido. Informe numero > 0." });
+    }
+
+    const { data: product, error: productError } = await supabase
+      .from("products")
+      .select("id, nome, unidade, stock_unit, stock_enabled")
+      .eq("id", productId)
+      .single();
+
+    if (productError || !product) {
+      return res.status(404).json({ error: "Produto nao encontrado.", detail: productError?.message || null });
+    }
+
+    const stockUnit = normalizeStockUnit(product.stock_unit || product.unidade || "LB", "LB");
+    const qtyInStockUnit = roundQty(convertQuantity(qtyRaw, inputUnit, stockUnit), 3);
+
+    const costTotal = parseNumber(req.body?.custo_total, NaN);
+    const unitCost = parseNumber(req.body?.custo_unitario, NaN);
+    const safeCostTotal = Number.isFinite(costTotal) ? roundQty(costTotal, 2) : null;
+    const safeUnitCost = Number.isFinite(unitCost)
+      ? roundQty(unitCost, 4)
+      : (safeCostTotal != null ? roundQty(safeCostTotal / qtyRaw, 4) : null);
+
+    const { data: newBatch, error: batchError } = await supabase
+      .from("batches")
+      .insert([
+        {
+          produto_id: productId,
+          quantidade: qtyInStockUnit,
+          quantidade_disponivel: qtyInStockUnit,
+          unidade: stockUnit,
+          origem: req.body?.origem || null,
+          custo_total: safeCostTotal,
+          custo_unitario: safeUnitCost,
+          observacoes: req.body?.observacoes || null,
+          data_validade: req.body?.data_validade || null,
+          data_entrada: req.body?.data_entrada || new Date().toISOString(),
+        },
+      ])
+      .select("id, produto_id, quantidade, quantidade_disponivel, unidade, data_validade, data_entrada")
+      .single();
+
+    if (batchError || !newBatch) {
+      return res.status(500).json({ error: "Erro ao cadastrar lote manual.", detail: batchError?.message || null });
+    }
+
+    const { data: movement, error: movementError } = await supabase
+      .from("stock_movements")
+      .insert([
+        {
+          tipo: "entry",
+          produto_id: productId,
+          batch_id: newBatch.id,
+          qty: qtyInStockUnit,
+          unit: stockUnit,
+          source_type: "manual",
+          source_id: String(newBatch.id),
+          metadata: {
+            origem: req.body?.origem || null,
+            notes: req.body?.observacoes || null,
+            input_qty: qtyRaw,
+            input_unit: inputUnit,
+          },
+        },
+      ])
+      .select("id, created_at")
+      .single();
+
+    if (movementError) {
+      return res.status(500).json({ error: "Erro ao registrar movimentacao manual.", detail: movementError.message });
+    }
+
+    if (!product.stock_enabled) {
+      await supabase
+        .from("products")
+        .update({ stock_enabled: true, stock_unit: stockUnit })
+        .eq("id", productId);
+    }
+
+    await syncLowStockAlerts([productId]);
+
+    const { data: balanceRow } = await supabase
+      .from("stock_balances")
+      .select("saldo_qty, last_movement_at")
+      .eq("produto_id", productId)
+      .maybeSingle();
+
+    return res.json({ ok: true, batch: newBatch, movement, balance: balanceRow || null });
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro interno ao cadastrar entrada manual.",
+      detail: error?.detail || null,
+    });
+  }
+});
+
+app.get("/api/stock/balance", async (_req, res) => {
+  try {
+    const { rows, summary } = await getStockBalanceRows();
+    return res.json({ ok: true, rows, summary, generated_at: new Date().toISOString() });
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro interno ao carregar saldo de estoque.",
+      detail: error?.detail || null,
+    });
+  }
+});
+
+app.get("/api/stock/alerts", async (_req, res) => {
+  try {
+    const alerts = await getLowStockAlerts();
+    return res.json({ ok: true, alerts, generated_at: new Date().toISOString() });
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro interno ao carregar alertas de estoque.",
+      detail: error?.detail || null,
+    });
+  }
+});
+
+app.post("/api/stock/invoices/upload", async (req, res) => {
+  try {
+    const fileName = sanitizeFileName(req.body?.fileName || "nota-fiscal.jpg");
+    const base64Parsed = parseBase64Input(req.body?.fileBase64);
+    const mimeType = req.body?.mimeType || base64Parsed.mimeType || "image/jpeg";
+
+    const buffer = Buffer.from(base64Parsed.base64, "base64");
+    if (!buffer.length) return res.status(400).json({ error: "Arquivo base64 invalido." });
+    if (buffer.length > MAX_B64_BYTES) {
+      return res.status(400).json({ error: `Arquivo excede limite de ${MAX_B64_BYTES} bytes para upload de nota fiscal.` });
+    }
+
+    const bucket = process.env.SUPABASE_INVOICE_BUCKET || "invoice-imports";
+    const now = new Date();
+    const yyyy = now.getUTCFullYear();
+    const mm = String(now.getUTCMonth() + 1).padStart(2, "0");
+    const uniqueName = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${fileName}`;
+    const filePath = `stock-invoices/${yyyy}/${mm}/${uniqueName}`;
+
+    const { error: uploadError } = await supabase.storage.from(bucket).upload(filePath, buffer, {
+      contentType: mimeType,
+      upsert: false,
+    });
+
+    if (uploadError) {
+      return res.status(500).json({
+        error: "Erro ao subir arquivo da nota fiscal no Storage.",
+        detail: uploadError.message,
+      });
+    }
+
+    const { data: publicUrlData } = supabase.storage.from(bucket).getPublicUrl(filePath);
+    const fileUrl = publicUrlData?.publicUrl || null;
+
+    const { data: invoice, error: insertError } = await supabase
+      .from("invoice_imports")
+      .insert([{ status: "uploaded", file_bucket: bucket, file_path: filePath, file_url: fileUrl, created_by: req.body?.createdBy || null }])
+      .select("*")
+      .single();
+
+    if (insertError || !invoice) {
+      return res.status(500).json({
+        error: "Erro ao criar registro de importacao da nota.",
+        detail: insertError?.message || null,
+      });
+    }
+
+    return res.json({ ok: true, invoice });
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro interno no upload da nota fiscal.",
+      detail: error?.detail || null,
+    });
+  }
+});
+
+app.post("/api/stock/invoices/:id/process", async (req, res) => {
+  try {
+    const invoiceId = Number(req.params.id);
+    if (!Number.isInteger(invoiceId) || invoiceId <= 0) {
+      return res.status(400).json({ error: "invoice_id invalido." });
+    }
+
+    const { data: invoice, error: invoiceError } = await supabase
+      .from("invoice_imports")
+      .select("*")
+      .eq("id", invoiceId)
+      .single();
+
+    if (invoiceError || !invoice) {
+      return res.status(404).json({ error: "Importacao da nota nao encontrada.", detail: invoiceError?.message || null });
+    }
+
+    let ocrText = "";
+    try {
+      ocrText = await callPaperlessOcr({ invoiceRecord: invoice, ocrHint: req.body?.ocr_text });
+    } catch (ocrError) {
+      await supabase
+        .from("invoice_imports")
+        .update({ status: "failed", error: ocrError?.message || "Falha no OCR" })
+        .eq("id", invoiceId);
+
+      throw ocrError;
+    }
+
+    let aiJson;
+    try {
+      aiJson = await callGeminiExtraction({ ocrText, locale: normalizeLocale(req.body?.locale || "pt") });
+    } catch (geminiError) {
+      aiJson = buildFallbackInvoiceJson(ocrText);
+
+      await supabase
+        .from("invoice_imports")
+        .update({
+          status: "review_required",
+          ocr_text: ocrText || null,
+          ai_json: aiJson,
+          error: geminiError?.message || "Falha na extracao IA",
+          processed_at: new Date().toISOString(),
+        })
+        .eq("id", invoiceId);
+
+      return res.status(202).json({
+        ok: true,
+        warning: "OCR concluido, mas extracao IA falhou. Revisao manual obrigatoria.",
+        ai_json: aiJson,
+      });
+    }
+
+    const hasItems = Array.isArray(aiJson?.items) && aiJson.items.length > 0;
+
+    const { error: updateError } = await supabase
+      .from("invoice_imports")
+      .update({
+        status: hasItems ? "processed" : "review_required",
+        ocr_text: ocrText || null,
+        ai_json: aiJson,
+        error: null,
+        processed_at: new Date().toISOString(),
+      })
+      .eq("id", invoiceId);
+
+    if (updateError) {
+      return res.status(500).json({ error: "Erro ao salvar resultado de processamento da nota.", detail: updateError.message });
+    }
+
+    return res.json({ ok: true, ai_json: aiJson, status: hasItems ? "processed" : "review_required" });
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro interno ao processar nota fiscal.",
+      detail: error?.detail || null,
+    });
+  }
+});
+
+app.post("/api/stock/invoices/:id/apply", async (req, res) => {
+  try {
+    const invoiceId = Number(req.params.id);
+    if (!Number.isInteger(invoiceId) || invoiceId <= 0) {
+      return res.status(400).json({ error: "invoice_id invalido." });
+    }
+
+    const { data: invoice, error: invoiceError } = await supabase
+      .from("invoice_imports")
+      .select("id, status, ai_json, review_json")
+      .eq("id", invoiceId)
+      .single();
+
+    if (invoiceError || !invoice) {
+      return res.status(404).json({ error: "Importacao da nota nao encontrada.", detail: invoiceError?.message || null });
+    }
+
+    const basePayload = req.body?.review_json || req.body || invoice.review_json || invoice.ai_json || {};
+    const resolvedItems = await resolveProductIdsForInvoiceItems(basePayload.items || []);
+
+    const normalizedPayload = {
+      supplier: basePayload.supplier || null,
+      invoice_number: basePayload.invoice_number || null,
+      invoice_date: basePayload.invoice_date || null,
+      items: resolvedItems.map((item) => ({
+        product_id: item.product_id || null,
+        description: item.description || item.descricao || "",
+        quantity: parseNumber(item.quantity ?? item.qty, NaN),
+        unit: normalizeStockUnit(item.unit || "LB", "LB"),
+        unit_cost: parseNumber(item.unit_cost ?? item.valor_unitario, NaN),
+        total: parseNumber(item.total ?? item.valor_total, NaN),
+        expiry_date: item.expiry_date || null,
+      })),
+    };
+
+    const invalidItems = normalizedPayload.items.filter(
+      (item) => !item.product_id || !Number.isFinite(item.quantity) || item.quantity <= 0,
+    );
+
+    if (invalidItems.length > 0) {
+      return res.status(400).json({
+        error: "Revisao obrigatoria: existem itens sem produto mapeado ou quantidade invalida.",
+        invalid_items: invalidItems,
+      });
+    }
+
+    const { data: applied, error: applyError } = await supabase.rpc("apply_invoice_import", {
+      p_invoice_id: invoiceId,
+      p_payload: normalizedPayload,
+    });
+
+    if (applyError) {
+      return res.status(500).json({ error: "Erro ao aplicar nota fiscal no estoque.", detail: applyError.message });
+    }
+
+    const changedProducts = normalizedPayload.items.map((item) => Number(item.product_id)).filter(Boolean);
+    await syncLowStockAlerts(changedProducts);
+
+    return res.json({ ok: true, result: applied });
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro interno ao aplicar nota fiscal.",
+      detail: error?.detail || null,
+    });
+  }
+});
+
 app.post("/api/orders/:id/status", async (req, res) => {
   try {
     const orderId = req.params.id;
     const newStatus = Number(req.body?.newStatus);
+
     if (!Number.isInteger(newStatus) || newStatus < 0 || newStatus > 5) {
       return res.status(400).json({ error: "newStatus invalido. Use inteiro entre 0 e 5." });
     }
@@ -315,84 +1288,86 @@ app.post("/api/orders/:id/status", async (req, res) => {
       .single();
 
     if (orderError || !order) {
-      return res.status(404).json({
-        error: "Pedido nao encontrado.",
-        detail: orderError?.message || null,
-      });
+      return res.status(404).json({ error: "Pedido nao encontrado.", detail: orderError?.message || null });
     }
 
     const previousStatus = Number(order.status ?? 0);
+
+    let stock = { applied: false, reason: "not_required", changedProducts: [] };
+
+    if (previousStatus !== STATUS.CONCLUIDO && newStatus === STATUS.CONCLUIDO) {
+      stock = await applyOrderStockExit(orderId);
+    }
+
+    if (previousStatus === STATUS.CONCLUIDO && newStatus < STATUS.CONCLUIDO) {
+      stock = await applyOrderStockReversal(orderId, `status_${previousStatus}_to_${newStatus}`);
+    }
+
+    const { error: updateError } = await supabase.from("orders").update({ status: newStatus }).eq("id", orderId);
+
+    if (updateError) {
+      if (previousStatus !== STATUS.CONCLUIDO && newStatus === STATUS.CONCLUIDO && stock.applied) {
+        try {
+          await applyOrderStockReversal(orderId, "cleanup_after_order_status_update_failure");
+        } catch {
+          // noop
+        }
+      }
+      return res.status(500).json({ error: `Erro ao atualizar status: ${updateError.message}` });
+    }
+
     const clientId = order.cliente_id || order.client_id || null;
     const orderEmail = order.email_cliente || order.email || null;
+
     let client = null;
     let clientError = null;
 
     if (clientId) {
-      const clientByIdResult = await supabase
-        .from("clients")
-        .select("*")
-        .eq("id", clientId)
-        .maybeSingle();
+      const clientByIdResult = await supabase.from("clients").select("*").eq("id", clientId).maybeSingle();
       client = clientByIdResult.data;
       clientError = clientByIdResult.error;
     } else if (orderEmail) {
-      const clientByEmailResult = await supabase
-        .from("clients")
-        .select("*")
-        .eq("email", orderEmail)
-        .maybeSingle();
+      const clientByEmailResult = await supabase.from("clients").select("*").eq("email", orderEmail).maybeSingle();
       client = clientByEmailResult.data;
       clientError = clientByEmailResult.error;
-    } else {
-      return res.status(400).json({
-        error: "Pedido sem cliente vinculado.",
-        detail: "Sem cliente_id/client_id e sem email_cliente no pedido.",
+    }
+
+    let notification = { sent: false, reason: "missing-client" };
+
+    if (client && !clientError) {
+      const orderCode = resolveOrderCode(order);
+      const orderTotal = order.valor_total ?? order.total ?? null;
+      const locale = resolveMessageLocale(order, client);
+      const orderItems = await fetchOrderItems(orderId, locale);
+      const deliveryAddress = resolveDeliveryAddress(client);
+
+      notification = await sendStatusNotification({
+        previousStatus,
+        newStatus,
+        clientName: client.nome,
+        clientPhone: client.telefone,
+        orderCode,
+        orderItems,
+        orderTotal,
+        locale,
+        deliveryAddress,
       });
+
+      return res.json({ ok: true, previousStatus, newStatus, locale, stock, notification });
     }
-
-    if (clientError || !client) {
-      return res.status(404).json({
-        error: "Cliente do pedido nao encontrado.",
-        detail: clientError?.message || null,
-      });
-    }
-
-    const { error: updateError } = await supabase
-      .from("orders")
-      .update({ status: newStatus })
-      .eq("id", orderId);
-
-    if (updateError) {
-      return res.status(500).json({ error: `Erro ao atualizar status: ${updateError.message}` });
-    }
-
-    const orderItems = await fetchOrderItems(orderId);
-    const orderCode = resolveOrderCode(order);
-    const orderTotal = order.valor_total ?? order.total ?? null;
-    const locale = resolveMessageLocale(order, client);
-
-    const notification = await sendStatusNotification({
-      previousStatus,
-      newStatus,
-      clientName: client.nome,
-      clientPhone: client.telefone,
-      orderCode,
-      orderItems,
-      orderTotal,
-      locale,
-    });
 
     return res.json({
       ok: true,
       previousStatus,
       newStatus,
-      locale,
+      locale: normalizeLocale(order.locale || "pt"),
+      stock,
       notification,
     });
   } catch (error) {
-    return res.status(500).json({
-      error: "Erro interno ao atualizar status do pedido.",
-      detail: String(error?.message || error),
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro interno ao atualizar status do pedido.",
+      detail: error?.detail || String(error?.message || error),
     });
   }
 });

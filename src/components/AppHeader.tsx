@@ -9,6 +9,7 @@ import type { TranslationKey } from '@/i18n/messages';
 
 const pageTitleByPath: Record<string, TranslationKey> = {
   '/admin': 'nav.dashboard',
+  '/admin/estoque': 'nav.batches',
   '/admin/lotes/novo': 'page.batchRegistration',
   '/admin/pedidos': 'nav.orders',
   '/admin/pedidos/novo': 'common.newOrder',

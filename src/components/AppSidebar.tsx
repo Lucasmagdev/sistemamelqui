@@ -19,7 +19,7 @@ type NavItem = {
 
 const navItems: NavItem[] = [
   { titleKey: 'nav.dashboard', url: '/admin', icon: LayoutDashboard },
-  { titleKey: 'nav.batches', url: '/admin/lotes/novo', icon: Layers },
+  { titleKey: 'nav.batches', url: '/admin/estoque', icon: Layers },
   { titleKey: 'nav.orders', url: '/admin/pedidos', icon: ShoppingCart },
   { titleKey: 'nav.customers', url: '/admin/clientes', icon: Users },
   { titleKey: 'nav.products', url: '/admin/produtos', icon: Package },

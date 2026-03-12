@@ -29,6 +29,18 @@ type InvoiceItemValidation = {
   message: string;
 };
 
+type ProductDedupSuggestion = {
+  product_id: number;
+  product_name: string;
+  score: number;
+};
+
+type RowConflictState = {
+  suggested_name: string;
+  matches: ProductDedupSuggestion[];
+  message: string;
+};
+
 const parseDecimalOrNull = (value: string): number | null => {
   const raw = String(value ?? "").trim();
   if (!raw) return null;
@@ -126,6 +138,8 @@ export default function CadastroLotePage() {
   });
   const [invoiceItems, setInvoiceItems] = useState<InvoiceItem[]>([]);
   const [invoiceValidation, setInvoiceValidation] = useState<InvoiceItemValidation[]>([]);
+  const [createConflicts, setCreateConflicts] = useState<Record<number, RowConflictState>>({});
+  const [creatingRow, setCreatingRow] = useState<number | null>(null);
 
   useEffect(() => {
     const loadProducts = async () => {
@@ -224,6 +238,7 @@ export default function CadastroLotePage() {
     }
 
     setInvoiceValidation([]);
+    setCreateConflicts({});
     setUploadingInvoice(true);
     try {
       const fileBase64 = await readFileAsDataUrl(invoiceFile);
@@ -252,6 +267,7 @@ export default function CadastroLotePage() {
     }
 
     setInvoiceValidation([]);
+    setCreateConflicts({});
     setProcessingInvoice(true);
     try {
       const payload = await backendRequest<{ ai_json: any; warning?: string; detail?: string }>(`/api/stock/invoices/${invoiceId}/process`, {
@@ -310,6 +326,11 @@ export default function CadastroLotePage() {
 
   const updateInvoiceItem = (index: number, patch: Partial<InvoiceItem>) => {
     setInvoiceValidation((prev) => prev.filter((item) => item.row !== index));
+    setCreateConflicts((prev) => {
+      const next = { ...prev };
+      delete next[index];
+      return next;
+    });
     setInvoiceItems((prev) => prev.map((item, idx) => (idx === index ? { ...item, ...patch } : item)));
   };
 
@@ -331,6 +352,11 @@ export default function CadastroLotePage() {
 
   const handleInvoiceProductQueryChange = (index: number, rawQuery: string) => {
     setInvoiceValidation((prev) => prev.filter((item) => item.row !== index));
+    setCreateConflicts((prev) => {
+      const next = { ...prev };
+      delete next[index];
+      return next;
+    });
     const query = String(rawQuery || "");
     const normalizedQuery = normalizeSearchText(query);
 
@@ -357,12 +383,108 @@ export default function CadastroLotePage() {
     );
   };
 
+  const mapRowToExistingProduct = (index: number, product: ProductDedupSuggestion) => {
+    updateInvoiceItem(index, { product_id: String(product.product_id), product_query: product.product_name });
+    setCreateConflicts((prev) => {
+      const next = { ...prev };
+      delete next[index];
+      return next;
+    });
+  };
+
+  const createProductFromInvoiceRow = async (index: number, forceCreate = false) => {
+    const item = invoiceItems[index];
+    if (!item) return;
+
+    const candidateName = String(item.product_query || item.description || "").trim();
+    if (!candidateName) {
+      toast.error("Informe um nome para criar o produto.");
+      return;
+    }
+
+    setCreatingRow(index);
+    try {
+      const payload = await backendRequest<{
+        product: { id: number; nome: string; stock_unit?: string; unidade?: string };
+      }>("/api/stock/products/create-from-invoice", {
+        method: "POST",
+        body: JSON.stringify({
+          name: candidateName,
+          stock_unit: item.unit,
+          category: "Nao categorizado",
+          force_create: forceCreate,
+        }),
+      });
+
+      const created = payload.product;
+      const createdOption: ProductOption = {
+        product_id: Number(created.id),
+        product_name: created.nome,
+        stock_unit: normalizeUnit(created.stock_unit || created.unidade || item.unit),
+      };
+
+      setProducts((prev) => {
+        if (prev.some((product) => product.product_id === createdOption.product_id)) return prev;
+        return [...prev, createdOption].sort((a, b) => a.product_name.localeCompare(b.product_name, "pt-BR"));
+      });
+
+      updateInvoiceItem(index, {
+        product_id: String(createdOption.product_id),
+        product_query: createdOption.product_name,
+        unit: createdOption.stock_unit,
+      });
+
+      setCreateConflicts((prev) => {
+        const next = { ...prev };
+        delete next[index];
+        return next;
+      });
+
+      toast.success("Produto criado e mapeado na linha.");
+    } catch (error: any) {
+      if (error instanceof BackendRequestError && error.status === 409) {
+        const matchesRaw = Array.isArray(error.data?.suggested_matches) ? error.data.suggested_matches : [];
+        const matches: ProductDedupSuggestion[] = matchesRaw
+          .map((m: any) => ({
+            product_id: Number(m.product_id),
+            product_name: String(m.product_name || ""),
+            score: Number(m.score || 0),
+          }))
+          .filter((m) => Number.isFinite(m.product_id) && m.product_id > 0 && m.product_name);
+
+        setCreateConflicts((prev) => ({
+          ...prev,
+          [index]: {
+            suggested_name: String(error.data?.suggested_name || candidateName),
+            matches,
+            message: error.data?.error || "Produto parecido encontrado. Revise antes de criar.",
+          },
+        }));
+
+        toast.warning("Encontramos produto parecido. Escolha um existente ou force a criação.");
+      } else {
+        toast.error(error.message || "Erro ao criar produto.");
+      }
+    } finally {
+      setCreatingRow((current) => (current === index ? null : current));
+    }
+  };
+
   const removeInvoiceItem = (index: number) => {
     setInvoiceValidation((prev) =>
       prev
         .filter((item) => item.row !== index)
         .map((item) => (item.row > index ? { ...item, row: item.row - 1 } : item)),
     );
+    setCreateConflicts((prev) => {
+      const next: Record<number, RowConflictState> = {};
+      for (const [key, value] of Object.entries(prev)) {
+        const row = Number(key);
+        if (row === index) continue;
+        next[row > index ? row - 1 : row] = value;
+      }
+      return next;
+    });
     setInvoiceItems((prev) => prev.filter((_, idx) => idx !== index));
   };
 
@@ -395,6 +517,7 @@ export default function CadastroLotePage() {
 
       toast.success("Nota aplicada no estoque com sucesso");
       setInvoiceValidation([]);
+      setCreateConflicts({});
       navigate("/admin/estoque");
     } catch (error: any) {
       if (error instanceof BackendRequestError) {
@@ -543,6 +666,7 @@ export default function CadastroLotePage() {
                     const rowValidation = validationByRow.get(idx);
                     const hasProductError = Boolean(rowValidation?.reasons.includes("missing_product"));
                     const hasQuantityError = Boolean(rowValidation?.reasons.includes("invalid_quantity"));
+                    const rowConflict = createConflicts[idx];
 
                     return (
                     <Fragment key={`invoice-item-${idx}`}>
@@ -586,6 +710,49 @@ export default function CadastroLotePage() {
                                   : "Sem mapeamento automatico. Continue digitando ou escolha na lista."}
                               </p>
                               {rowValidation ? <p className="text-[11px] text-red-300">{rowValidation.message}</p> : null}
+                              {!item.product_id ? (
+                                <div className="mt-2 flex flex-wrap items-center gap-2">
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    className="h-8 text-xs"
+                                    onClick={() => createProductFromInvoiceRow(idx, false)}
+                                    disabled={creatingRow === idx}
+                                  >
+                                    {creatingRow === idx ? "Criando..." : "Criar novo produto"}
+                                  </Button>
+                                </div>
+                              ) : null}
+                              {rowConflict ? (
+                                <div className="mt-2 rounded-md border border-amber-500/70 bg-amber-500/10 p-2">
+                                  <p className="text-[11px] font-semibold text-amber-300">{rowConflict.message}</p>
+                                  {rowConflict.matches.length > 0 ? (
+                                    <div className="mt-2 flex flex-wrap gap-2">
+                                      {rowConflict.matches.map((match) => (
+                                        <Button
+                                          key={`row-${idx}-match-${match.product_id}`}
+                                          type="button"
+                                          variant="outline"
+                                          className="h-7 text-[11px]"
+                                          onClick={() => mapRowToExistingProduct(idx, match)}
+                                        >
+                                          Usar {match.product_name} ({Math.round(match.score * 100)}%)
+                                        </Button>
+                                      ))}
+                                    </div>
+                                  ) : null}
+                                  <div className="mt-2 flex flex-wrap gap-2">
+                                    <Button
+                                      type="button"
+                                      className="h-7 text-[11px]"
+                                      onClick={() => createProductFromInvoiceRow(idx, true)}
+                                      disabled={creatingRow === idx}
+                                    >
+                                      {creatingRow === idx ? "Criando..." : "Forcar criacao mesmo assim"}
+                                    </Button>
+                                  </div>
+                                </div>
+                              ) : null}
                             </div>
                             <div className="space-y-1">
                               <Label className="text-xs text-muted-foreground">Unidade do lote</Label>

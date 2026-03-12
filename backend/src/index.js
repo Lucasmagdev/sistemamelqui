@@ -146,6 +146,18 @@ function similarityScore(query, target) {
   return hits / Math.max(qTokens.length, tTokens.length);
 }
 
+function sanitizeInvoiceProductName(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+
+  return raw
+    .replace(/^#?\d+\s*-\s*\d+\s*-\s*/i, "")
+    .replace(/^#?\d+\s*-\s*/i, "")
+    .replace(/^\d+\s+\d+\s*-\s*/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function convertQuantity(value, fromUnit, toUnit) {
   const qty = parseNumber(value, NaN);
   if (!Number.isFinite(qty)) {
@@ -1029,6 +1041,96 @@ async function resolveProductIdsForInvoiceItems(items) {
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true });
+});
+
+app.post("/api/stock/products/create-from-invoice", async (req, res) => {
+  try {
+    const rawName = String(req.body?.name || req.body?.description || "").trim();
+    const cleanedName = sanitizeInvoiceProductName(rawName);
+    if (!cleanedName) {
+      return res.status(400).json({ error: "Nome do produto invalido para criacao." });
+    }
+
+    const stockUnit = normalizeStockUnit(req.body?.stock_unit || req.body?.unit || "LB", "LB");
+    const category = String(req.body?.category || "Nao categorizado").trim() || "Nao categorizado";
+    const forceCreate = Boolean(req.body?.force_create);
+
+    const { data: products, error: productsError } = await supabase
+      .from("products")
+      .select("id, nome, nome_en")
+      .order("id", { ascending: true });
+
+    if (productsError) {
+      return res.status(500).json({ error: "Erro ao verificar duplicidade de produto.", detail: productsError.message });
+    }
+
+    const candidate = normalizeSearchText(cleanedName);
+    const suggestions = (products || [])
+      .map((product) => {
+        const aliases = [product.nome, product.nome_en]
+          .filter(Boolean)
+          .map((item) => normalizeSearchText(item));
+
+        let best = 0;
+        for (const alias of aliases) {
+          best = Math.max(best, similarityScore(candidate, alias));
+        }
+
+        return {
+          product_id: Number(product.id),
+          product_name: product.nome,
+          score: Number(best.toFixed(3)),
+        };
+      })
+      .filter((item) => item.score >= 0.45)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 5);
+
+    const topSuggestion = suggestions[0] || null;
+    if (topSuggestion && topSuggestion.score >= 0.6 && !forceCreate) {
+      return res.status(409).json({
+        error: "Produto parecido encontrado. Revise antes de criar para evitar duplicacao.",
+        require_force: true,
+        suggested_name: cleanedName,
+        suggested_matches: suggestions,
+      });
+    }
+
+    const { data: created, error: createError } = await supabase
+      .from("products")
+      .insert([
+        {
+          nome: cleanedName,
+          categoria: category,
+          unidade: stockUnit,
+          stock_unit: stockUnit,
+          stock_enabled: true,
+          stock_min: 0,
+          preco: 0,
+        },
+      ])
+      .select("id, nome, categoria, unidade, stock_unit, stock_enabled, stock_min")
+      .single();
+
+    if (createError || !created) {
+      return res.status(500).json({
+        error: "Erro ao criar novo produto a partir da nota.",
+        detail: createError?.message || null,
+      });
+    }
+
+    return res.json({
+      ok: true,
+      product: created,
+      suggested_matches: suggestions,
+      dedup_checked: true,
+    });
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro interno ao criar produto da nota.",
+      detail: error?.detail || null,
+    });
+  }
 });
 
 app.patch("/api/stock/products/:id/settings", async (req, res) => {

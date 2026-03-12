@@ -1,6 +1,32 @@
 import React, { useState, useEffect } from "react";
 import { supabase } from "../lib/supabaseClient";
 
+const normalizeProductKey = (value: any) =>
+  String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+
+const getMissingProductIssues = (prod: any): string[] => {
+  const issues: string[] = [];
+  const nome = String(prod?.nome || "").trim();
+  const categoria = String(prod?.categoria || "").trim();
+  const unidade = String(prod?.unidade || "").trim();
+  const descricaoPt = String(prod?.descricao || "").trim();
+  const descricaoEn = String(prod?.descricao_en || "").trim();
+  const precoNum = Number(prod?.preco);
+
+  if (!nome) issues.push("sem nome");
+  if (!categoria) issues.push("sem categoria");
+  if (!unidade) issues.push("sem unidade");
+  if (!Number.isFinite(precoNum) || precoNum <= 0) issues.push("sem preco valido");
+  if (!descricaoPt && !descricaoEn) issues.push("sem descricao");
+
+  return issues;
+};
+
 const ProductsAdminPage: React.FC = () => {
     // ...existing code...
   const [form, setForm] = useState({
@@ -143,6 +169,22 @@ const ProductsAdminPage: React.FC = () => {
   const [filterNome, setFilterNome] = useState("");
   const [filterCategoria, setFilterCategoria] = useState("");
   const [filterUnidade, setFilterUnidade] = useState("");
+
+    const duplicateGroupsMap = products.reduce((acc, prod) => {
+      const key = normalizeProductKey(prod?.nome);
+      if (!key) return acc;
+      if (!acc[key]) acc[key] = [];
+      acc[key].push(prod);
+      return acc;
+    }, {} as Record<string, any[]>);
+
+    const duplicateGroups = Object.values(duplicateGroupsMap).filter((group) => group.length > 1);
+    const duplicateIds = new Set(duplicateGroups.flat().map((prod) => Number(prod.id)));
+
+    const incompleteProducts = products
+      .map((prod) => ({ prod, issues: getMissingProductIssues(prod) }))
+      .filter((item) => item.issues.length > 0);
+
     // Filtragem dos produtos
     const filteredProducts = products.filter((prod) => {
       const nomeMatch = filterNome === "" || prod.nome.toLowerCase().includes(filterNome.toLowerCase());
@@ -360,6 +402,42 @@ const ProductsAdminPage: React.FC = () => {
               className="border border-sidebar-border rounded px-3 py-2 bg-sidebar-foreground text-sidebar-primary placeholder-gold-dark focus:ring-gold focus-border-gold"
             />
           </div>
+          {(duplicateGroups.length > 0 || incompleteProducts.length > 0) && (
+            <div className="mb-4 grid gap-3 md:grid-cols-2">
+              <div className="rounded-lg border border-amber-500/60 bg-amber-500/10 p-3">
+                <p className="text-sm font-bold text-amber-300">
+                  Alerta de duplicidade: {duplicateGroups.length} grupos / {duplicateIds.size} produtos
+                </p>
+                {duplicateGroups.length > 0 ? (
+                  <ul className="mt-2 space-y-1 text-xs text-amber-100">
+                    {duplicateGroups.slice(0, 6).map((group, index) => (
+                      <li key={`dup-${index}`}>
+                        Nome "{group[0]?.nome}" em IDs {group.map((item) => item.id).join(", ")}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="mt-2 text-xs text-amber-100">Nenhuma duplicidade detectada.</p>
+                )}
+              </div>
+              <div className="rounded-lg border border-red-500/60 bg-red-500/10 p-3">
+                <p className="text-sm font-bold text-red-300">
+                  Alerta de cadastro incompleto: {incompleteProducts.length} produtos
+                </p>
+                {incompleteProducts.length > 0 ? (
+                  <ul className="mt-2 space-y-1 text-xs text-red-100">
+                    {incompleteProducts.slice(0, 6).map(({ prod, issues }) => (
+                      <li key={`inc-${prod.id}`}>
+                        {prod.nome || `ID ${prod.id}`}: {issues.join(", ")}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="mt-2 text-xs text-red-100">Nenhum produto incompleto.</p>
+                )}
+              </div>
+            </div>
+          )}
           {fetching ? (
             <div>Carregando produtos...</div>
           ) : (
@@ -374,16 +452,27 @@ const ProductsAdminPage: React.FC = () => {
                       <th className="px-1 py-1 text-gold text-xs md:text-lg">Categoria</th>
                       <th className="px-1 py-1 text-gold text-xs md:text-lg">Preço</th>
                       <th className="px-1 py-1 text-gold text-xs md:text-lg">Unidade</th>
+                      <th className="px-1 py-1 text-gold text-xs md:text-lg">Alertas</th>
+                      <th className="px-1 py-1 text-gold text-xs md:text-lg">Ações</th>
                     </tr>
                   </thead>
                   <tbody>
                     {filteredProducts.length === 0 ? (
                       <tr>
-                        <td colSpan={6} className="px-1 py-4 text-center text-muted">Nenhum produto encontrado.</td>
+                        <td colSpan={8} className="px-1 py-4 text-center text-muted">Nenhum produto encontrado.</td>
                       </tr>
                     ) : (
-                      filteredProducts.map((prod) => (
-                        <tr key={prod.id} className="border-b border-gold-dark last:border-none hover:bg-gold-light/10 transition">
+                      filteredProducts.map((prod) => {
+                        const rowIssues = getMissingProductIssues(prod);
+                        const isDuplicate = duplicateIds.has(Number(prod.id));
+                        const hasIssues = rowIssues.length > 0;
+                        return (
+                        <tr
+                          key={prod.id}
+                          className={`border-b border-gold-dark last:border-none hover:bg-gold-light/10 transition ${
+                            isDuplicate ? "bg-amber-500/10" : hasIssues ? "bg-red-500/10" : ""
+                          }`}
+                        >
                           <td className="px-1 py-1 text-center">
                             {prod.foto_url ? (
                               <img src={prod.foto_url} alt={prod.nome} className="h-6 w-6 md:h-12 md:w-12 object-cover rounded border border-gold-dark mx-auto" />
@@ -396,6 +485,21 @@ const ProductsAdminPage: React.FC = () => {
                           <td className="px-1 py-1 text-white/80">{prod.categoria || '-'}</td>
                           <td className="px-1 py-1 text-gold-dark">R$ {prod.preco}</td>
                           <td className="px-1 py-1 text-white/80">{prod.unidade || '-'}</td>
+                          <td className="px-1 py-1">
+                            <div className="flex flex-wrap gap-1">
+                              {isDuplicate ? (
+                                <span className="rounded border border-amber-500/70 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-200">Duplicado</span>
+                              ) : null}
+                              {rowIssues.map((issue) => (
+                                <span key={`issue-${prod.id}-${issue}`} className="rounded border border-red-500/70 bg-red-500/10 px-2 py-0.5 text-[10px] text-red-200">
+                                  {issue}
+                                </span>
+                              ))}
+                              {!isDuplicate && rowIssues.length === 0 ? (
+                                <span className="rounded border border-emerald-500/70 bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-200">OK</span>
+                              ) : null}
+                            </div>
+                          </td>
                           <td className="px-1 py-1">
                             <button className="bg-gold text-black rounded px-2 py-1 text-xs font-bold hover:bg-gold-dark" onClick={() => handleEditClick(prod)}>
                               Editar
@@ -441,7 +545,7 @@ const ProductsAdminPage: React.FC = () => {
                                 </div>
                               )}
                         </tr>
-                      ))
+                      )})
                     )}
                   </tbody>
                 </table>

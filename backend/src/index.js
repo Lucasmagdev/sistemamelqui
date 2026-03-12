@@ -1418,10 +1418,27 @@ app.post("/api/stock/invoices/:id/apply", async (req, res) => {
       return res.status(500).json({ error: "Erro ao aplicar nota fiscal no estoque.", detail: applyError.message });
     }
 
-    const changedProducts = normalizedPayload.items.map((item) => Number(item.product_id)).filter(Boolean);
+    const changedProducts = Array.from(
+      new Set(normalizedPayload.items.map((item) => Number(item.product_id)).filter(Boolean)),
+    );
+
+    if (changedProducts.length > 0) {
+      const { error: enableError } = await supabase
+        .from("products")
+        .update({ stock_enabled: true })
+        .in("id", changedProducts);
+
+      if (enableError) {
+        return res.status(500).json({
+          error: "Nota aplicada, mas falhou ao ativar controle de estoque dos produtos.",
+          detail: enableError.message,
+        });
+      }
+    }
+
     await syncLowStockAlerts(changedProducts);
 
-    return res.json({ ok: true, result: applied });
+    return res.json({ ok: true, result: applied, changed_products: changedProducts });
   } catch (error) {
     return res.status(error?.status || 500).json({
       error: error?.message || "Erro interno ao aplicar nota fiscal.",

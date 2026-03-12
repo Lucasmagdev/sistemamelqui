@@ -1111,6 +1111,10 @@ app.post("/api/stock/products/create-from-invoice", async (req, res) => {
     const stockUnit = normalizeStockUnit(req.body?.stock_unit || req.body?.unit || "LB", "LB");
     const category = String(req.body?.category || "Nao categorizado").trim() || "Nao categorizado";
     const forceCreate = Boolean(req.body?.force_create);
+    const requestedTenantId = Number.parseInt(String(req.body?.tenant_id || ""), 10);
+    const safeRequestedTenantId = Number.isFinite(requestedTenantId) && requestedTenantId > 0
+      ? requestedTenantId
+      : null;
 
     const { data: products, error: productsError } = await supabase
       .from("products")
@@ -1153,21 +1157,59 @@ app.post("/api/stock/products/create-from-invoice", async (req, res) => {
       });
     }
 
-    const { data: created, error: createError } = await supabase
+    const baseInsertPayload = {
+      nome: cleanedName,
+      categoria: category,
+      unidade: stockUnit,
+      stock_unit: stockUnit,
+      stock_enabled: true,
+      stock_min: 0,
+      preco: 0,
+    };
+
+    let { data: created, error: createError } = await supabase
       .from("products")
-      .insert([
-        {
-          nome: cleanedName,
-          categoria: category,
-          unidade: stockUnit,
-          stock_unit: stockUnit,
-          stock_enabled: true,
-          stock_min: 0,
-          preco: 0,
-        },
-      ])
-      .select("id, nome, categoria, unidade, stock_unit, stock_enabled, stock_min")
+      .insert([baseInsertPayload])
+      .select("id, nome, categoria, unidade, stock_unit, stock_enabled, stock_min, tenant_id")
       .single();
+
+    // Compatibilidade com bases em que products.tenant_id eh obrigatorio.
+    if (createError && String(createError.message || "").toLowerCase().includes("tenant_id")) {
+      let tenantIdToUse = safeRequestedTenantId;
+
+      if (!tenantIdToUse) {
+        const { data: tenantSample } = await supabase
+          .from("products")
+          .select("tenant_id")
+          .not("tenant_id", "is", null)
+          .order("id", { ascending: true })
+          .limit(1)
+          .maybeSingle();
+
+        const sampleTenantId = Number.parseInt(String(tenantSample?.tenant_id || ""), 10);
+        if (Number.isFinite(sampleTenantId) && sampleTenantId > 0) {
+          tenantIdToUse = sampleTenantId;
+        }
+      }
+
+      if (!tenantIdToUse) {
+        const envTenantId = Number.parseInt(String(process.env.DEFAULT_TENANT_ID || "1"), 10);
+        if (Number.isFinite(envTenantId) && envTenantId > 0) {
+          tenantIdToUse = envTenantId;
+        }
+      }
+
+      if (tenantIdToUse) {
+        const retry = await supabase
+          .from("products")
+          .insert([{ ...baseInsertPayload, tenant_id: tenantIdToUse }])
+          .select("id, nome, categoria, unidade, stock_unit, stock_enabled, stock_min, tenant_id")
+          .single();
+
+        created = retry.data;
+        createError = retry.error;
+      }
+    }
 
     if (createError || !created) {
       return res.status(500).json({

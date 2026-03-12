@@ -25,7 +25,7 @@ type InvoiceItem = {
 
 type InvoiceItemValidation = {
   row: number;
-  reasons: Array<"missing_product" | "invalid_quantity">;
+  reasons: Array<"missing_product" | "invalid_quantity" | "invalid_unit">;
   message: string;
 };
 
@@ -112,6 +112,21 @@ const emptyItem = (): InvoiceItem => ({
   unit_cost: "",
   total: "",
 });
+
+const isUnitPairConvertible = (fromUnit: "LB" | "KG" | "UN", toUnit: "LB" | "KG" | "UN") => {
+  if (fromUnit === toUnit) return true;
+  if ((fromUnit === "KG" && toUnit === "LB") || (fromUnit === "LB" && toUnit === "KG")) return true;
+  return false;
+};
+
+const resolveInvoiceUnitForProduct = (
+  currentUnit: "LB" | "KG" | "UN",
+  productUnit?: "LB" | "KG" | "UN",
+): "LB" | "KG" | "UN" => {
+  if (!productUnit) return currentUnit;
+  if (isUnitPairConvertible(currentUnit, productUnit)) return currentUnit;
+  return productUnit;
+};
 
 export default function CadastroLotePage() {
   const navigate = useNavigate();
@@ -324,13 +339,15 @@ export default function CadastroLotePage() {
         const matchedProduct = normalizedProductId
           ? products.find((product) => product.product_id === normalizedProductId)
           : null;
+        const productStockUnit = matchedProduct ? normalizeUnit(matchedProduct.stock_unit) : undefined;
+        const aiUnit = normalizeUnit(item.unit || "LB");
 
         return {
           description,
           product_id: matchedProduct ? String(matchedProduct.product_id) : "",
           product_query: matchedProduct?.product_name || rawObserved,
           quantity: item.quantity != null ? String(item.quantity) : "",
-          unit: normalizeUnit(item.unit || "LB"),
+          unit: resolveInvoiceUnitForProduct(aiUnit, productStockUnit),
           unit_cost: item.price != null ? String(item.price) : (item.unit_cost != null ? String(item.unit_cost) : ""),
           total: item.total != null ? String(item.total) : "",
         };
@@ -395,12 +412,17 @@ export default function CadastroLotePage() {
 
         const exact = searchableProducts.find((product) => product.normalized_name === normalizedQuery);
         if (exact) {
-          return { ...item, product_query: query, product_id: String(exact.product_id) };
+          const productUnit = normalizeUnit(exact.stock_unit);
+          const resolvedUnit = resolveInvoiceUnitForProduct(item.unit, productUnit);
+          return { ...item, product_query: query, product_id: String(exact.product_id), unit: resolvedUnit };
         }
 
         const best = findBestProductMatch(query);
         if (best) {
-          return { ...item, product_query: query, product_id: String(best.product_id) };
+          const product = products.find((p) => p.product_id === best.product_id);
+          const productUnit = product ? normalizeUnit(product.stock_unit) : undefined;
+          const resolvedUnit = resolveInvoiceUnitForProduct(item.unit, productUnit);
+          return { ...item, product_query: query, product_id: String(best.product_id), unit: resolvedUnit };
         }
 
         return { ...item, product_query: query, product_id: "" };
@@ -409,7 +431,16 @@ export default function CadastroLotePage() {
   };
 
   const mapRowToExistingProduct = (index: number, product: ProductDedupSuggestion) => {
-    updateInvoiceItem(index, { product_id: String(product.product_id), product_query: product.product_name });
+    const productOption = products.find((item) => item.product_id === product.product_id);
+    const productUnit = productOption ? normalizeUnit(productOption.stock_unit) : undefined;
+    const currentItem = invoiceItems[index];
+    const currentUnit = currentItem ? normalizeUnit(currentItem.unit) : "LB";
+    const resolvedUnit = resolveInvoiceUnitForProduct(currentUnit, productUnit);
+    updateInvoiceItem(index, {
+      product_id: String(product.product_id),
+      product_query: product.product_name,
+      unit: resolvedUnit,
+    });
     setCreateConflicts((prev) => {
       const next = { ...prev };
       delete next[index];
@@ -437,6 +468,7 @@ export default function CadastroLotePage() {
           name: candidateName,
           stock_unit: item.unit,
           category: "Nao categorizado",
+          tenant_id: 1,
           force_create: forceCreate,
         }),
       });
@@ -519,6 +551,33 @@ export default function CadastroLotePage() {
       return;
     }
 
+    const preValidation: InvoiceItemValidation[] = invoiceItems
+      .map((item, index) => {
+        if (!item.product_id) return null;
+        const quantity = parseDecimalOrNull(item.quantity);
+        if (quantity == null || quantity <= 0) return null;
+
+        const mappedProduct = products.find((product) => String(product.product_id) === item.product_id);
+        if (!mappedProduct) return null;
+
+        const fromUnit = normalizeUnit(item.unit);
+        const toUnit = normalizeUnit(mappedProduct.stock_unit);
+        if (isUnitPairConvertible(fromUnit, toUnit)) return null;
+
+        return {
+          row: index,
+          reasons: ["invalid_unit"] as Array<"invalid_unit">,
+          message: `Unidade invalida para o produto (${fromUnit} -> ${toUnit})`,
+        };
+      })
+      .filter(Boolean) as InvoiceItemValidation[];
+
+    if (preValidation.length > 0) {
+      setInvoiceValidation(preValidation);
+      toast.error("Corrija as unidades destacadas em vermelho antes de aplicar a nota.");
+      return;
+    }
+
     setApplyingInvoice(true);
     try {
       await backendRequest(`/api/stock/invoices/${invoiceId}/apply`, {
@@ -551,13 +610,20 @@ export default function CadastroLotePage() {
           .map((invalid: any) => {
             const row = Number(invalid?.index);
             const reasonList = Array.isArray(invalid?.reason) ? invalid.reason : [];
-            const reasons: Array<"missing_product" | "invalid_quantity"> = [];
+            const reasons: Array<"missing_product" | "invalid_quantity" | "invalid_unit"> = [];
             if (reasonList.includes("missing_product")) reasons.push("missing_product");
             if (reasonList.includes("invalid_quantity")) reasons.push("invalid_quantity");
+            if (reasonList.includes("invalid_unit")) reasons.push("invalid_unit");
             if (!Number.isInteger(row) || row < 0 || !reasons.length) return null;
 
             const message = reasons
-              .map((reason) => (reason === "missing_product" ? "Produto no estoque nao mapeado" : "Quantidade invalida"))
+              .map((reason) =>
+                reason === "missing_product"
+                  ? "Produto no estoque nao mapeado"
+                  : reason === "invalid_quantity"
+                    ? "Quantidade invalida"
+                    : "Unidade invalida para o produto",
+              )
               .join(" e ");
 
             return { row, reasons, message };
@@ -717,7 +783,17 @@ export default function CadastroLotePage() {
                     const rowValidation = validationByRow.get(idx);
                     const hasProductError = Boolean(rowValidation?.reasons.includes("missing_product"));
                     const hasQuantityError = Boolean(rowValidation?.reasons.includes("invalid_quantity"));
+                    const hasUnitError = Boolean(rowValidation?.reasons.includes("invalid_unit"));
                     const rowConflict = createConflicts[idx];
+                    const mappedProduct = item.product_id
+                      ? products.find((product) => String(product.product_id) === item.product_id)
+                      : null;
+                    const mappedUnit = mappedProduct ? normalizeUnit(mappedProduct.stock_unit) : null;
+                    const availableUnits = !mappedUnit
+                      ? (["LB", "KG", "UN"] as const)
+                      : mappedUnit === "UN"
+                        ? (["UN"] as const)
+                        : (["LB", "KG"] as const);
 
                     return (
                     <Fragment key={`invoice-item-${idx}`}>
@@ -810,11 +886,22 @@ export default function CadastroLotePage() {
                             </div>
                             <div className="space-y-1">
                               <Label className="text-xs text-muted-foreground">Unidade do lote</Label>
-                              <select className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm" value={item.unit} onChange={(e) => updateInvoiceItem(idx, { unit: normalizeUnit(e.target.value) })}>
-                                <option value="LB">LB</option>
-                                <option value="KG">KG</option>
-                                <option value="UN">UN</option>
+                              <select
+                                className={`h-10 w-full rounded-md border bg-background px-3 text-sm ${hasUnitError ? "border-red-500 text-red-200 focus-visible:ring-red-500" : "border-input"}`}
+                                value={item.unit}
+                                onChange={(e) => updateInvoiceItem(idx, { unit: normalizeUnit(e.target.value) })}
+                              >
+                                {availableUnits.map((unit) => (
+                                  <option key={`row-${idx}-unit-${unit}`} value={unit}>
+                                    {unit}
+                                  </option>
+                                ))}
                               </select>
+                              {mappedUnit ? (
+                                <p className={`text-[11px] ${hasUnitError ? "text-red-300" : "text-muted-foreground"}`}>
+                                  Unidade do produto mapeado: {mappedUnit}
+                                </p>
+                              ) : null}
                             </div>
                           </div>
                         </td>

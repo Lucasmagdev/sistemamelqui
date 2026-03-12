@@ -837,6 +837,40 @@ function extractFirstJsonObject(text) {
   return null;
 }
 
+function parsePositiveInteger(value) {
+  const parsed = Number.parseInt(String(value ?? "").replace(/[^\d]/g, ""), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return parsed;
+}
+
+function extractDeclaredItemsCountFromText(text = "") {
+  const normalized = String(text || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+
+  if (!normalized) return null;
+
+  const patterns = [
+    /quantity\s*total\s*[:#-]?\s*(\d{1,4})\b/,
+    /total\s*quantity\s*[:#-]?\s*(\d{1,4})\b/,
+    /total\s*items?\s*[:#-]?\s*(\d{1,4})\b/,
+    /itens?\s*totais?\s*[:#-]?\s*(\d{1,4})\b/,
+    /total\s*de\s*itens?\s*[:#-]?\s*(\d{1,4})\b/,
+    /qtd(?:ade)?\s*total\s*[:#-]?\s*(\d{1,4})\b/,
+  ];
+
+  for (const pattern of patterns) {
+    const match = normalized.match(pattern);
+    if (match?.[1]) {
+      const parsed = parsePositiveInteger(match[1]);
+      if (parsed) return parsed;
+    }
+  }
+
+  return null;
+}
+
 function buildFallbackInvoiceJson(ocrText = "") {
   const lines = String(ocrText || "")
     .split(/\r?\n/)
@@ -847,7 +881,8 @@ function buildFallbackInvoiceJson(ocrText = "") {
     supplier: null,
     invoice_number: null,
     invoice_date: null,
-    items: lines.slice(0, 12).map((line) => ({
+    declared_items_count: extractDeclaredItemsCountFromText(ocrText),
+    items: lines.slice(0, 80).map((line) => ({
       product_service: line,
       quantity: null,
       price: null,
@@ -909,24 +944,30 @@ async function callGeminiExtraction({ ocrText, locale = "pt", invoiceRecord = nu
           "Extract invoice data from the provided OCR text and/or invoice image.",
           "Return ONLY valid JSON, without markdown and without comments.",
           "Expected JSON schema and table standard:",
-          '{"supplier":null,"invoice_number":null,"invoice_date":null,"items":[{"product_service":"","quantity":null,"price":null,"total":null,"unit":"LB","product_id":null,"expiry_date":null}]}',
+          '{"supplier":null,"invoice_number":null,"invoice_date":null,"declared_items_count":null,"items":[{"product_service":"","quantity":null,"price":null,"total":null,"unit":"LB","product_id":null,"expiry_date":null}]}',
           "Rules:",
           "- Keep values as null when uncertain.",
           "- Preserve decimal numbers for quantity, price and total.",
           "- Unit must be one of: LB, KG, UN.",
           "- Follow the invoice columns in this order: Product/Service, Quantity, Price, Total.",
+          "- Do not skip item rows. If the invoice shows a total line count, keep the same number of items whenever possible.",
+          "- Some item descriptions can wrap into the next line; merge wrapped lines into the same item when needed.",
+          "- If the invoice has an explicit item count (e.g. Quantity Total / Total Items), fill declared_items_count.",
           "- product_service must keep only the product/service description from the line.",
         ].join("\n")
       : [
           "Extraia os dados da nota fiscal a partir do OCR e/ou da imagem enviada.",
           "Retorne APENAS JSON valido, sem markdown e sem comentarios.",
           "Formato esperado e padrao de tabela:",
-          '{"supplier":null,"invoice_number":null,"invoice_date":null,"items":[{"product_service":"","quantity":null,"price":null,"total":null,"unit":"LB","product_id":null,"expiry_date":null}]}',
+          '{"supplier":null,"invoice_number":null,"invoice_date":null,"declared_items_count":null,"items":[{"product_service":"","quantity":null,"price":null,"total":null,"unit":"LB","product_id":null,"expiry_date":null}]}',
           "Regras:",
           "- Se houver duvida, mantenha null.",
           "- Mantenha casas decimais em quantity, price e total.",
           "- unit deve ser somente: LB, KG ou UN.",
           "- Siga as colunas da nota nesta ordem: Product/Service, Quantity, Price, Total.",
+          "- Nao pule linhas de itens. Se a nota mostrar quantidade total de itens, mantenha o mesmo total sempre que possivel.",
+          "- Algumas descricoes podem quebrar em mais de uma linha; una as linhas quebradas no mesmo item quando necessario.",
+          "- Se a nota tiver contagem explicita de itens (ex.: Quantity Total / Total de itens), preencha declared_items_count.",
           "- product_service deve conter somente a descricao do produto/servico da linha.",
         ].join("\n");
 
@@ -950,6 +991,11 @@ async function callGeminiExtraction({ ocrText, locale = "pt", invoiceRecord = nu
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         contents: [{ parts: requestParts }],
+        generationConfig: {
+          responseMimeType: "application/json",
+          temperature: 0.1,
+          maxOutputTokens: 8192,
+        },
       }),
     },
   );
@@ -966,10 +1012,21 @@ async function callGeminiExtraction({ ocrText, locale = "pt", invoiceRecord = nu
 
   if (!parsed || typeof parsed !== "object") return buildFallbackInvoiceJson(ocrText);
 
+  const declaredItemsCount =
+    parsePositiveInteger(
+      parsed.declared_items_count
+      ?? parsed.items_total
+      ?? parsed.total_items
+      ?? parsed.quantity_total
+      ?? parsed.qtd_total,
+    )
+    ?? extractDeclaredItemsCountFromText(ocr);
+
   return {
     supplier: parsed.supplier ?? null,
     invoice_number: parsed.invoice_number ?? null,
     invoice_date: parsed.invoice_date ?? null,
+    declared_items_count: declaredItemsCount,
     items: Array.isArray(parsed.items)
       ? parsed.items.map((item) => ({
           product_service: item?.product_service ?? item?.productService ?? item?.description ?? item?.descricao ?? "",

@@ -72,6 +72,12 @@ const normalizeUnit = (value: string): "LB" | "KG" | "UN" => {
   return "LB";
 };
 
+const parsePositiveInteger = (value: unknown): number | null => {
+  const parsed = Number.parseInt(String(value ?? "").replace(/[^\d]/g, ""), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return parsed;
+};
+
 const normalizeSearchText = (value: string): string =>
   String(value || "")
     .normalize("NFD")
@@ -140,6 +146,7 @@ export default function CadastroLotePage() {
   const [invoiceValidation, setInvoiceValidation] = useState<InvoiceItemValidation[]>([]);
   const [createConflicts, setCreateConflicts] = useState<Record<number, RowConflictState>>({});
   const [creatingRow, setCreatingRow] = useState<number | null>(null);
+  const [declaredItemsCountInput, setDeclaredItemsCountInput] = useState("");
 
   useEffect(() => {
     const loadProducts = async () => {
@@ -179,6 +186,19 @@ export default function CadastroLotePage() {
     () => new Map(invoiceValidation.map((item) => [item.row, item])),
     [invoiceValidation],
   );
+  const extractedItemsCount = useMemo(
+    () =>
+      invoiceItems.filter((item) =>
+        Boolean(String(item.description || item.product_query || "").trim()),
+      ).length,
+    [invoiceItems],
+  );
+  const declaredItemsCount = useMemo(
+    () => parsePositiveInteger(declaredItemsCountInput),
+    [declaredItemsCountInput],
+  );
+  const hasItemsCountMismatch =
+    declaredItemsCount != null && extractedItemsCount !== declaredItemsCount;
 
   const handleManualChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
@@ -239,6 +259,7 @@ export default function CadastroLotePage() {
 
     setInvoiceValidation([]);
     setCreateConflicts({});
+    setDeclaredItemsCountInput("");
     setUploadingInvoice(true);
     try {
       const fileBase64 = await readFileAsDataUrl(invoiceFile);
@@ -277,12 +298,16 @@ export default function CadastroLotePage() {
 
       const ai = payload.ai_json || {};
       const items = Array.isArray(ai.items) ? ai.items : [];
+      const detectedDeclaredCount = parsePositiveInteger(
+        ai.declared_items_count ?? ai.total_items ?? ai.items_total ?? ai.quantity_total,
+      );
 
       setInvoiceMeta({
         supplier: ai.supplier || "",
         invoice_number: ai.invoice_number || "",
         invoice_date: ai.invoice_date || "",
       });
+      setDeclaredItemsCountInput(detectedDeclaredCount ? String(detectedDeclaredCount) : "");
 
       setInvoiceItems(items.map((item: any) => {
         const rawObserved = String(
@@ -638,6 +663,31 @@ export default function CadastroLotePage() {
             <p className="text-xs text-muted-foreground">
               Padrao da tabela da nota: <strong>Product/Service | Quantity | Price | Total</strong>. Abaixo de cada linha, revise as informacoes do lote.
             </p>
+            <div className={`rounded-lg border p-3 ${hasItemsCountMismatch ? "border-amber-500/70 bg-amber-500/10" : "border-border bg-muted/20"}`}>
+              <p className="text-sm">
+                Itens extraidos: <strong>{extractedItemsCount}</strong> / Total da nota: <strong>{declaredItemsCount ?? "--"}</strong>
+              </p>
+              <div className="mt-3 grid gap-1 md:max-w-xs">
+                <Label className="text-xs text-muted-foreground">Total de itens da nota</Label>
+                <Input
+                  type="number"
+                  min={1}
+                  step={1}
+                  placeholder="Ex.: 24"
+                  value={declaredItemsCountInput}
+                  onChange={(e) => setDeclaredItemsCountInput(e.target.value)}
+                />
+              </div>
+              {hasItemsCountMismatch ? (
+                <p className="mt-2 text-xs text-amber-200">
+                  A nota indica {declaredItemsCount} itens, mas foram extraidos {extractedItemsCount}. Revise as linhas antes de aplicar.
+                </p>
+              ) : declaredItemsCount != null ? (
+                <p className="mt-2 text-xs text-emerald-300">Contagem de itens confere com a nota.</p>
+              ) : (
+                <p className="mt-2 text-xs text-muted-foreground">Se a IA nao detectar, informe manualmente o total de itens da nota.</p>
+              )}
+            </div>
             {invoiceValidation.length > 0 ? (
               <div className="rounded-lg border border-red-500/70 bg-red-500/10 p-3 text-sm text-red-200">
                 <p className="font-semibold">Corrija os itens destacados em vermelho:</p>
@@ -654,6 +704,7 @@ export default function CadastroLotePage() {
               <table className="min-w-full text-sm">
                 <thead className="bg-muted/40">
                   <tr>
+                    <th className="w-14 px-3 py-2 text-left font-medium">#</th>
                     <th className="px-3 py-2 text-left font-medium">Product/Service</th>
                     <th className="px-3 py-2 text-left font-medium">Quantity</th>
                     <th className="px-3 py-2 text-left font-medium">Price</th>
@@ -671,6 +722,9 @@ export default function CadastroLotePage() {
                     return (
                     <Fragment key={`invoice-item-${idx}`}>
                       <tr className={`border-t align-top ${rowValidation ? "border-red-500/70 bg-red-500/5" : "border-border"}`}>
+                        <td className="px-3 py-2 text-sm font-semibold text-muted-foreground">
+                          {idx + 1}
+                        </td>
                         <td className="px-3 py-2">
                           <Input placeholder="Descricao do produto/servico" value={item.description} onChange={(e) => updateInvoiceItem(idx, { description: e.target.value })} />
                         </td>
@@ -688,7 +742,7 @@ export default function CadastroLotePage() {
                         </td>
                       </tr>
                       <tr className={`border-t border-dashed ${rowValidation ? "border-red-500/70 bg-red-500/5" : "border-border bg-muted/20"}`}>
-                        <td colSpan={5} className="px-3 py-3">
+                        <td colSpan={6} className="px-3 py-3">
                           <div className="grid gap-2 md:grid-cols-2">
                             <div className="space-y-1">
                               <Label className="text-xs text-muted-foreground">Produto no estoque</Label>

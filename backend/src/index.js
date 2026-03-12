@@ -656,6 +656,80 @@ async function applyOrderStockReversal(orderId, reason = "manual_status_reversal
   };
 }
 
+async function ensureInvoiceStockMovements(invoiceId) {
+  const sourceId = String(invoiceId);
+  const [{ data: batches, error: batchesError }, { data: movements, error: movementsError }] = await Promise.all([
+    supabase
+      .from("batches")
+      .select("id, produto_id, quantidade, quantidade_disponivel, unidade, invoice_import_id")
+      .eq("invoice_import_id", invoiceId),
+    supabase
+      .from("stock_movements")
+      .select("id, batch_id, produto_id")
+      .eq("source_type", "invoice")
+      .eq("source_id", sourceId)
+      .eq("tipo", "entry"),
+  ]);
+
+  if (batchesError || movementsError) {
+    throw createHttpError(
+      500,
+      "Erro ao reconciliar movimentos de estoque da nota.",
+      batchesError?.message || movementsError?.message,
+    );
+  }
+
+  const existingBatchIds = new Set(
+    (movements || [])
+      .map((movement) => Number(movement.batch_id))
+      .filter((id) => Number.isFinite(id) && id > 0),
+  );
+
+  const rowsToInsert = [];
+  const changedProductsSet = new Set();
+  for (const batch of batches || []) {
+    const batchId = Number(batch.id);
+    if (existingBatchIds.has(batchId)) continue;
+
+    const qtyRaw = parseNumber(batch.quantidade, parseNumber(batch.quantidade_disponivel, NaN));
+    if (!Number.isFinite(qtyRaw) || qtyRaw <= 0) continue;
+
+    const productId = Number(batch.produto_id);
+    rowsToInsert.push({
+      tipo: "entry",
+      produto_id: productId,
+      batch_id: batchId,
+      qty: roundQty(qtyRaw, 3),
+      unit: normalizeStockUnit(batch.unidade || "LB", "LB"),
+      source_type: "invoice",
+      source_id: sourceId,
+      metadata: {
+        invoice_import_id: invoiceId,
+        reconciled_from_batch: true,
+      },
+    });
+
+    if (Number.isFinite(productId) && productId > 0) changedProductsSet.add(productId);
+  }
+
+  if (rowsToInsert.length > 0) {
+    const { error: insertError } = await supabase
+      .from("stock_movements")
+      .insert(rowsToInsert);
+
+    if (insertError) {
+      throw createHttpError(500, "Erro ao inserir movimentos reconciliados da nota.", insertError.message);
+    }
+  }
+
+  return {
+    inserted_entries: rowsToInsert.length,
+    total_batches: (batches || []).length,
+    total_existing_entries: (movements || []).length,
+    changed_products: Array.from(changedProductsSet),
+  };
+}
+
 async function getStockBalanceRows() {
   const [{ data: products, error: productsError }, { data: balances, error: balancesError }] = await Promise.all([
     supabase
@@ -1616,12 +1690,18 @@ app.post("/api/stock/invoices/:id/apply", async (req, res) => {
     });
 
     if (applyError) {
-      return res.status(500).json({ error: "Erro ao aplicar nota fiscal no estoque.", detail: applyError.message });
+      const applyMessage = String(applyError.message || "").toLowerCase();
+      const alreadyApplied = applyMessage.includes("ja aplicado") || applyMessage.includes("ja possui entradas aplicadas");
+      if (!alreadyApplied) {
+        return res.status(500).json({ error: "Erro ao aplicar nota fiscal no estoque.", detail: applyError.message });
+      }
     }
 
-    const changedProducts = Array.from(
-      new Set(normalizedPayload.items.map((item) => Number(item.product_id)).filter(Boolean)),
-    );
+    const reconciliation = await ensureInvoiceStockMovements(invoiceId);
+    const changedProducts = Array.from(new Set([
+      ...normalizedPayload.items.map((item) => Number(item.product_id)).filter(Boolean),
+      ...reconciliation.changed_products,
+    ]));
 
     if (changedProducts.length > 0) {
       const { error: enableError } = await supabase
@@ -1639,7 +1719,12 @@ app.post("/api/stock/invoices/:id/apply", async (req, res) => {
 
     await syncLowStockAlerts(changedProducts);
 
-    return res.json({ ok: true, result: applied, changed_products: changedProducts });
+    return res.json({
+      ok: true,
+      result: applied || { ok: true, idempotent: true },
+      changed_products: changedProducts,
+      reconciliation,
+    });
   } catch (error) {
     return res.status(error?.status || 500).json({
       error: error?.message || "Erro interno ao aplicar nota fiscal.",

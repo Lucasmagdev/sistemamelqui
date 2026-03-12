@@ -41,6 +41,43 @@ type RowConflictState = {
   message: string;
 };
 
+type InvoiceRowStatus = "mapped" | "review" | "missing" | "ignored";
+
+type InvoiceRowInsight = {
+  status: InvoiceRowStatus;
+  actionable: boolean;
+  bestMatch: ProductDedupSuggestion | null;
+  suggestions: ProductDedupSuggestion[];
+};
+
+const AUTO_MATCH_THRESHOLD = 0.85;
+const REVIEW_MATCH_THRESHOLD = 0.65;
+const SUGGESTION_MIN_THRESHOLD = 0.55;
+const NON_PRODUCT_TERMS = [
+  "invoice",
+  "customer",
+  "address",
+  "contact",
+  "date/time",
+  "salesman",
+  "payment",
+  "products total",
+  "quantity total",
+  "open receipts",
+  "due date",
+  "amount",
+  "total",
+  "subtotal",
+  "nota fiscal",
+  "cliente",
+  "endereco",
+  "contato",
+  "vendedor",
+  "pagamento",
+  "recebimentos",
+  "valor",
+];
+
 const parseDecimalOrNull = (value: string): number | null => {
   const raw = String(value ?? "").trim();
   if (!raw) return null;
@@ -85,6 +122,12 @@ const normalizeSearchText = (value: string): string =>
     .toLowerCase()
     .replace(/\s+/g, " ")
     .trim();
+
+const looksLikeNonProductLine = (value: string): boolean => {
+  const normalized = normalizeSearchText(value);
+  if (!normalized) return false;
+  return NON_PRODUCT_TERMS.some((term) => normalized.includes(term));
+};
 
 const similarityScore = (query: string, target: string): number => {
   if (!query || !target) return 0;
@@ -215,6 +258,84 @@ export default function CadastroLotePage() {
   const hasItemsCountMismatch =
     declaredItemsCount != null && extractedItemsCount !== declaredItemsCount;
 
+  const buildProductSuggestions = (rawQuery: string, minScore = SUGGESTION_MIN_THRESHOLD): ProductDedupSuggestion[] => {
+    const query = normalizeSearchText(rawQuery);
+    if (!query) return [];
+
+    return searchableProducts
+      .map((product) => ({
+        product_id: product.product_id,
+        product_name: product.product_name,
+        score: Number(similarityScore(query, product.normalized_name).toFixed(3)),
+      }))
+      .filter((item) => item.score >= minScore)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 5);
+  };
+
+  const getBestProductMatch = (rawQuery: string) => {
+    const query = normalizeSearchText(rawQuery);
+    if (!query) return null;
+
+    let best: ProductDedupSuggestion | null = null;
+    for (const product of searchableProducts) {
+      const score = Number(similarityScore(query, product.normalized_name).toFixed(3));
+      if (!best || score > best.score) {
+        best = { product_id: product.product_id, product_name: product.product_name, score };
+      }
+    }
+
+    return best;
+  };
+
+  const isActionableInvoiceItem = (item: InvoiceItem) => {
+    const query = String(item.product_query || item.description || "").trim();
+    const quantity = parseDecimalOrNull(item.quantity);
+    const hasQuantity = quantity != null && quantity > 0;
+    const hasText = query.length >= 2;
+
+    if (!hasText && !hasQuantity) return false;
+    if (hasText && looksLikeNonProductLine(query) && !hasQuantity) return false;
+    return true;
+  };
+
+  const rowInsights = useMemo<InvoiceRowInsight[]>(
+    () =>
+      invoiceItems.map((item) => {
+        const query = String(item.product_query || item.description || "").trim();
+        const actionable = isActionableInvoiceItem(item);
+        if (!actionable) {
+          return { status: "ignored", actionable: false, bestMatch: null, suggestions: [] };
+        }
+
+        const suggestions = buildProductSuggestions(query);
+        const bestMatch = suggestions[0] || getBestProductMatch(query);
+        if (item.product_id) {
+          return { status: "mapped", actionable: true, bestMatch, suggestions };
+        }
+
+        if (bestMatch && bestMatch.score >= REVIEW_MATCH_THRESHOLD) {
+          return { status: "review", actionable: true, bestMatch, suggestions };
+        }
+
+        return { status: "missing", actionable: true, bestMatch, suggestions };
+      }),
+    [invoiceItems, searchableProducts],
+  );
+
+  const rowStatusSummary = useMemo(() => {
+    const summary = { mapped: 0, review: 0, missing: 0, ignored: 0 };
+    for (const row of rowInsights) {
+      summary[row.status] += 1;
+    }
+    return summary;
+  }, [rowInsights]);
+
+  const unresolvedActionableCount = useMemo(
+    () => rowInsights.filter((row) => row.actionable && row.status !== "mapped").length,
+    [rowInsights],
+  );
+
   const handleManualChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
     setManualForm((prev) => ({ ...prev, [name]: value }));
@@ -339,13 +460,18 @@ export default function CadastroLotePage() {
         const matchedProduct = normalizedProductId
           ? products.find((product) => product.product_id === normalizedProductId)
           : null;
-        const productStockUnit = matchedProduct ? normalizeUnit(matchedProduct.stock_unit) : undefined;
+        const bestFromDescription = !matchedProduct ? getBestProductMatch(rawObserved) : null;
+        const autoMatchedProduct = bestFromDescription && bestFromDescription.score >= AUTO_MATCH_THRESHOLD
+          ? products.find((product) => product.product_id === bestFromDescription.product_id)
+          : null;
+        const resolvedProduct = matchedProduct || autoMatchedProduct || null;
+        const productStockUnit = resolvedProduct ? normalizeUnit(resolvedProduct.stock_unit) : undefined;
         const aiUnit = normalizeUnit(item.unit || "LB");
 
         return {
           description,
-          product_id: matchedProduct ? String(matchedProduct.product_id) : "",
-          product_query: matchedProduct?.product_name || rawObserved,
+          product_id: resolvedProduct ? String(resolvedProduct.product_id) : "",
+          product_query: resolvedProduct?.product_name || rawObserved,
           quantity: item.quantity != null ? String(item.quantity) : "",
           unit: resolveInvoiceUnitForProduct(aiUnit, productStockUnit),
           unit_cost: item.price != null ? String(item.price) : (item.unit_cost != null ? String(item.unit_cost) : ""),
@@ -376,22 +502,6 @@ export default function CadastroLotePage() {
     setInvoiceItems((prev) => prev.map((item, idx) => (idx === index ? { ...item, ...patch } : item)));
   };
 
-  const findBestProductMatch = (rawQuery: string) => {
-    const query = normalizeSearchText(rawQuery);
-    if (!query) return null;
-
-    let best: { product_id: number; product_name: string; score: number } | null = null;
-    for (const product of searchableProducts) {
-      const score = similarityScore(query, product.normalized_name);
-      if (!best || score > best.score) {
-        best = { product_id: product.product_id, product_name: product.product_name, score };
-      }
-    }
-
-    if (!best || best.score < 0.45) return null;
-    return best;
-  };
-
   const handleInvoiceProductQueryChange = (index: number, rawQuery: string) => {
     setInvoiceValidation((prev) => prev.filter((item) => item.row !== index));
     setCreateConflicts((prev) => {
@@ -417,8 +527,8 @@ export default function CadastroLotePage() {
           return { ...item, product_query: query, product_id: String(exact.product_id), unit: resolvedUnit };
         }
 
-        const best = findBestProductMatch(query);
-        if (best) {
+        const best = getBestProductMatch(query);
+        if (best && best.score >= AUTO_MATCH_THRESHOLD) {
           const product = products.find((p) => p.product_id === best.product_id);
           const productUnit = product ? normalizeUnit(product.stock_unit) : undefined;
           const resolvedUnit = resolveInvoiceUnitForProduct(item.unit, productUnit);
@@ -428,6 +538,19 @@ export default function CadastroLotePage() {
         return { ...item, product_query: query, product_id: "" };
       }),
     );
+
+    const best = getBestProductMatch(query);
+    if (best && best.score >= REVIEW_MATCH_THRESHOLD && best.score < AUTO_MATCH_THRESHOLD) {
+      const suggestions = buildProductSuggestions(query, REVIEW_MATCH_THRESHOLD);
+      setCreateConflicts((prev) => ({
+        ...prev,
+        [index]: {
+          suggested_name: query,
+          matches: suggestions.length > 0 ? suggestions : [best],
+          message: `Possivel correspondencia (${Math.round(best.score * 100)}%). Revise antes de criar novo produto.`,
+        },
+      }));
+    }
   };
 
   const mapRowToExistingProduct = (index: number, product: ProductDedupSuggestion) => {
@@ -553,28 +676,50 @@ export default function CadastroLotePage() {
 
     const preValidation: InvoiceItemValidation[] = invoiceItems
       .map((item, index) => {
-        if (!item.product_id) return null;
+        const insight = rowInsights[index];
+        if (!insight?.actionable) return null;
+
+        const reasons: Array<"missing_product" | "invalid_quantity" | "invalid_unit"> = [];
+
+        if (!item.product_id) {
+          reasons.push("missing_product");
+        }
+
         const quantity = parseDecimalOrNull(item.quantity);
-        if (quantity == null || quantity <= 0) return null;
+        if (quantity == null || quantity <= 0) {
+          reasons.push("invalid_quantity");
+        }
 
-        const mappedProduct = products.find((product) => String(product.product_id) === item.product_id);
-        if (!mappedProduct) return null;
+        if (item.product_id) {
+          const mappedProduct = products.find((product) => String(product.product_id) === item.product_id);
+          if (mappedProduct) {
+            const fromUnit = normalizeUnit(item.unit);
+            const toUnit = normalizeUnit(mappedProduct.stock_unit);
+            if (!isUnitPairConvertible(fromUnit, toUnit)) {
+              reasons.push("invalid_unit");
+            }
+          }
+        }
 
-        const fromUnit = normalizeUnit(item.unit);
-        const toUnit = normalizeUnit(mappedProduct.stock_unit);
-        if (isUnitPairConvertible(fromUnit, toUnit)) return null;
+        if (!reasons.length) return null;
 
-        return {
-          row: index,
-          reasons: ["invalid_unit"] as Array<"invalid_unit">,
-          message: `Unidade invalida para o produto (${fromUnit} -> ${toUnit})`,
-        };
+        const message = reasons
+          .map((reason) =>
+            reason === "missing_product"
+              ? "Produto no estoque nao mapeado"
+              : reason === "invalid_quantity"
+                ? "Quantidade invalida"
+                : "Unidade invalida para o produto",
+          )
+          .join(" e ");
+
+        return { row: index, reasons, message };
       })
       .filter(Boolean) as InvoiceItemValidation[];
 
     if (preValidation.length > 0) {
       setInvoiceValidation(preValidation);
-      toast.error("Corrija as unidades destacadas em vermelho antes de aplicar a nota.");
+      toast.error("Corrija os itens destacados em vermelho antes de aplicar a nota.");
       return;
     }
 
@@ -754,6 +899,21 @@ export default function CadastroLotePage() {
                 <p className="mt-2 text-xs text-muted-foreground">Se a IA nao detectar, informe manualmente o total de itens da nota.</p>
               )}
             </div>
+            <div className="rounded-lg border border-border bg-muted/20 p-3">
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="rounded-full border border-emerald-500/70 bg-emerald-500/10 px-2 py-1 text-emerald-300">Mapeados: {rowStatusSummary.mapped}</span>
+                <span className="rounded-full border border-amber-500/70 bg-amber-500/10 px-2 py-1 text-amber-300">Revisar: {rowStatusSummary.review}</span>
+                <span className="rounded-full border border-red-500/70 bg-red-500/10 px-2 py-1 text-red-300">Sem produto: {rowStatusSummary.missing}</span>
+                <span className="rounded-full border border-zinc-500/70 bg-zinc-500/10 px-2 py-1 text-zinc-300">Ignorados: {rowStatusSummary.ignored}</span>
+              </div>
+              {unresolvedActionableCount > 0 ? (
+                <p className="mt-2 text-xs text-amber-200">
+                  Existem {unresolvedActionableCount} itens pendentes (revisar/sem produto). Mapeie ou crie o produto correto antes de aplicar.
+                </p>
+              ) : (
+                <p className="mt-2 text-xs text-emerald-300">Todos os itens validos estao mapeados para aplicar no estoque.</p>
+              )}
+            </div>
             {invoiceValidation.length > 0 ? (
               <div className="rounded-lg border border-red-500/70 bg-red-500/10 p-3 text-sm text-red-200">
                 <p className="font-semibold">Corrija os itens destacados em vermelho:</p>
@@ -771,6 +931,7 @@ export default function CadastroLotePage() {
                 <thead className="bg-muted/40">
                   <tr>
                     <th className="w-14 px-3 py-2 text-left font-medium">#</th>
+                    <th className="w-28 px-3 py-2 text-left font-medium">Status</th>
                     <th className="px-3 py-2 text-left font-medium">Product/Service</th>
                     <th className="px-3 py-2 text-left font-medium">Quantity</th>
                     <th className="px-3 py-2 text-left font-medium">Price</th>
@@ -785,6 +946,7 @@ export default function CadastroLotePage() {
                     const hasQuantityError = Boolean(rowValidation?.reasons.includes("invalid_quantity"));
                     const hasUnitError = Boolean(rowValidation?.reasons.includes("invalid_unit"));
                     const rowConflict = createConflicts[idx];
+                    const insight = rowInsights[idx] || { status: "ignored" as InvoiceRowStatus, actionable: false, bestMatch: null, suggestions: [] };
                     const mappedProduct = item.product_id
                       ? products.find((product) => String(product.product_id) === item.product_id)
                       : null;
@@ -792,14 +954,43 @@ export default function CadastroLotePage() {
                     const availableUnits = !mappedUnit
                       ? (["LB", "KG", "UN"] as const)
                       : mappedUnit === "UN"
-                        ? (["UN"] as const)
+                      ? (["UN"] as const)
                         : (["LB", "KG"] as const);
+                    const statusBadgeClass = insight.status === "mapped"
+                      ? "border-emerald-500/70 bg-emerald-500/10 text-emerald-300"
+                      : insight.status === "review"
+                        ? "border-amber-500/70 bg-amber-500/10 text-amber-300"
+                        : insight.status === "missing"
+                          ? "border-red-500/70 bg-red-500/10 text-red-300"
+                          : "border-zinc-500/70 bg-zinc-500/10 text-zinc-300";
+                    const statusLabel = insight.status === "mapped"
+                      ? "Mapeado"
+                      : insight.status === "review"
+                        ? "Revisar"
+                        : insight.status === "missing"
+                          ? "Sem produto"
+                          : "Ignorado";
+                    const showAutoSuggestions =
+                      !item.product_id
+                      && !rowConflict
+                      && insight.status === "review"
+                      && insight.suggestions.length > 0;
 
                     return (
                     <Fragment key={`invoice-item-${idx}`}>
                       <tr className={`border-t align-top ${rowValidation ? "border-red-500/70 bg-red-500/5" : "border-border"}`}>
                         <td className="px-3 py-2 text-sm font-semibold text-muted-foreground">
                           {idx + 1}
+                        </td>
+                        <td className="px-3 py-2">
+                          <span className={`inline-flex rounded-full border px-2 py-1 text-[11px] font-semibold ${statusBadgeClass}`}>
+                            {statusLabel}
+                          </span>
+                          {insight.bestMatch && !item.product_id ? (
+                            <p className="mt-1 text-[11px] text-muted-foreground">
+                              Similaridade: {Math.round(insight.bestMatch.score * 100)}%
+                            </p>
+                          ) : null}
                         </td>
                         <td className="px-3 py-2">
                           <Input placeholder="Descricao do produto/servico" value={item.description} onChange={(e) => updateInvoiceItem(idx, { description: e.target.value })} />
@@ -818,7 +1009,7 @@ export default function CadastroLotePage() {
                         </td>
                       </tr>
                       <tr className={`border-t border-dashed ${rowValidation ? "border-red-500/70 bg-red-500/5" : "border-border bg-muted/20"}`}>
-                        <td colSpan={6} className="px-3 py-3">
+                        <td colSpan={7} className="px-3 py-3">
                           <div className="grid gap-2 md:grid-cols-2">
                             <div className="space-y-1">
                               <Label className="text-xs text-muted-foreground">Produto no estoque</Label>
@@ -840,6 +1031,26 @@ export default function CadastroLotePage() {
                                   : "Sem mapeamento automatico. Continue digitando ou escolha na lista."}
                               </p>
                               {rowValidation ? <p className="text-[11px] text-red-300">{rowValidation.message}</p> : null}
+                              {showAutoSuggestions ? (
+                                <div className="mt-2 rounded-md border border-amber-500/70 bg-amber-500/10 p-2">
+                                  <p className="text-[11px] font-semibold text-amber-300">
+                                    Correspondencias sugeridas (revise antes de criar novo produto):
+                                  </p>
+                                  <div className="mt-2 flex flex-wrap gap-2">
+                                    {insight.suggestions.slice(0, 3).map((match) => (
+                                      <Button
+                                        key={`auto-row-${idx}-match-${match.product_id}`}
+                                        type="button"
+                                        variant="outline"
+                                        className="h-7 text-[11px]"
+                                        onClick={() => mapRowToExistingProduct(idx, match)}
+                                      >
+                                        Usar {match.product_name} ({Math.round(match.score * 100)}%)
+                                      </Button>
+                                    ))}
+                                  </div>
+                                </div>
+                              ) : null}
                               {!item.product_id ? (
                                 <div className="mt-2 flex flex-wrap items-center gap-2">
                                   <Button
@@ -914,7 +1125,9 @@ export default function CadastroLotePage() {
 
             <div className="flex gap-2">
               <Button type="button" variant="outline" onClick={() => setInvoiceItems((prev) => [...prev, emptyItem()])}>Adicionar item</Button>
-              <Button type="button" onClick={applyInvoice} disabled={applyingInvoice}>{applyingInvoice ? "Aplicando..." : "Aplicar no Estoque"}</Button>
+              <Button type="button" onClick={applyInvoice} disabled={applyingInvoice || unresolvedActionableCount > 0}>
+                {applyingInvoice ? "Aplicando..." : "Aplicar no Estoque"}
+              </Button>
             </div>
           </div>
         ) : null}

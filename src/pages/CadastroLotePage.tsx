@@ -21,7 +21,6 @@ type InvoiceItem = {
   unit: "LB" | "KG" | "UN";
   unit_cost: string;
   total: string;
-  expiry_date: string;
 };
 
 type InvoiceItemValidation = {
@@ -94,7 +93,6 @@ const emptyItem = (): InvoiceItem => ({
   unit: "LB",
   unit_cost: "",
   total: "",
-  expiry_date: "",
 });
 
 export default function CadastroLotePage() {
@@ -286,7 +284,6 @@ export default function CadastroLotePage() {
           unit: normalizeUnit(item.unit || "LB"),
           unit_cost: item.price != null ? String(item.price) : (item.unit_cost != null ? String(item.unit_cost) : ""),
           total: item.total != null ? String(item.total) : "",
-          expiry_date: item.expiry_date || "",
         };
       }));
 
@@ -383,7 +380,6 @@ export default function CadastroLotePage() {
               unit: normalizeUnit(item.unit),
               unit_cost: parseDecimalOrNull(item.unit_cost),
               total: parseDecimalOrNull(item.total),
-              expiry_date: item.expiry_date || null,
             })),
           },
         }),
@@ -561,7 +557,7 @@ export default function CadastroLotePage() {
                       </tr>
                       <tr className={`border-t border-dashed ${rowValidation ? "border-red-500/70 bg-red-500/5" : "border-border bg-muted/20"}`}>
                         <td colSpan={5} className="px-3 py-3">
-                          <div className="grid gap-2 md:grid-cols-3">
+                          <div className="grid gap-2 md:grid-cols-2">
                             <div className="space-y-1">
                               <Label className="text-xs text-muted-foreground">Produto no estoque</Label>
                               <Input
@@ -590,10 +586,6 @@ export default function CadastroLotePage() {
                                 <option value="KG">KG</option>
                                 <option value="UN">UN</option>
                               </select>
-                            </div>
-                            <div className="space-y-1">
-                              <Label className="text-xs text-muted-foreground">Validade do lote</Label>
-                              <Input type="date" value={item.expiry_date} onChange={(e) => updateInvoiceItem(idx, { expiry_date: e.target.value })} />
                             </div>
                           </div>
                         </td>

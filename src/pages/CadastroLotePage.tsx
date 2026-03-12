@@ -269,17 +269,25 @@ export default function CadastroLotePage() {
       });
 
       setInvoiceItems(items.map((item: any) => {
-        const description = item.product_service || item.productService || item.description || item.descricao || "";
+        const rawObserved = String(
+          item.product_service
+          || item.productService
+          || item.description
+          || item.descricao
+          || item.product_id
+          || "",
+        ).trim();
+        const description = rawObserved;
         const parsedId = Number.parseInt(String(item.product_id || "").replace(/[^\d]/g, ""), 10);
-        const normalizedProductId = Number.isFinite(parsedId) && parsedId > 0 ? String(parsedId) : "";
+        const normalizedProductId = Number.isFinite(parsedId) && parsedId > 0 ? parsedId : null;
         const matchedProduct = normalizedProductId
-          ? products.find((product) => String(product.product_id) === normalizedProductId)
+          ? products.find((product) => product.product_id === normalizedProductId)
           : null;
 
         return {
           description,
-          product_id: normalizedProductId,
-          product_query: matchedProduct?.product_name || description,
+          product_id: matchedProduct ? String(matchedProduct.product_id) : "",
+          product_query: matchedProduct?.product_name || rawObserved,
           quantity: item.quantity != null ? String(item.quantity) : "",
           unit: normalizeUnit(item.unit || "LB"),
           unit_cost: item.price != null ? String(item.price) : (item.unit_cost != null ? String(item.unit_cost) : ""),
@@ -344,7 +352,7 @@ export default function CadastroLotePage() {
           return { ...item, product_query: query, product_id: String(best.product_id) };
         }
 
-        return { ...item, product_query: query };
+        return { ...item, product_query: query, product_id: "" };
       }),
     );
   };

@@ -3,6 +3,8 @@ import { supabase } from "@/lib/supabaseClient";
 import { toast } from "sonner";
 
 const backendBaseUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
+const shouldSendStatusWhatsApp = (previousStatus: number, newStatus: number) =>
+  (previousStatus === 0 && newStatus === 1) || (previousStatus === 3 && newStatus === 4);
 
 const orderStatusSteps = [
   { label: "Pedido Recebido", icon: (
@@ -102,12 +104,15 @@ export const OrderCard: React.FC<OrderCardProps> = ({ order, onStatusChange }) =
 
       setStatus(newStatus);
 
-      if (result?.notification?.sent) {
+      const notification = result?.notification;
+      const expectsWhatsApp = shouldSendStatusWhatsApp(previousStatus, newStatus);
+
+      if (notification?.sent) {
         toast.success("Status atualizado e WhatsApp enviado automaticamente.");
-      } else if (previousStatus === 0 && newStatus === 1) {
-        toast.info(`Status atualizado. WhatsApp nao enviado (${result?.notification?.reason || "sem motivo"}).`);
-      } else if (previousStatus === 3 && newStatus === 4) {
-        toast.info(`Status atualizado. WhatsApp nao enviado (${result?.notification?.reason || "sem motivo"}).`);
+      } else if (expectsWhatsApp) {
+        toast.info(`Status atualizado. WhatsApp nao enviado (${notification?.reason || "sem motivo"}).`);
+      } else {
+        toast.success("Status atualizado. Esta etapa nao dispara WhatsApp automatico.");
       }
     } catch (error: any) {
       toast.error(error?.message || "Erro ao atualizar status do pedido.");

@@ -5,6 +5,24 @@ import { toast } from "sonner";
 const backendBaseUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
 const shouldSendStatusWhatsApp = (previousStatus: number, newStatus: number) =>
   (previousStatus === 0 && newStatus === 1) || (previousStatus === 3 && newStatus === 4);
+const describeNotificationReason = (reason?: string) => {
+  switch (reason) {
+    case "phone-not-on-whatsapp":
+      return "o numero do cliente nao existe no WhatsApp";
+    case "missing-phone":
+      return "o cliente nao possui telefone cadastrado";
+    case "missing-client":
+      return "o cliente do pedido nao foi encontrado";
+    case "missing-zapi-config":
+      return "a configuracao da Z-API esta incompleta";
+    case "zapi-send-error":
+      return "a Z-API rejeitou a mensagem";
+    case "zapi-missing-message-id":
+      return "a Z-API nao devolveu o identificador da mensagem";
+    default:
+      return reason || "sem motivo";
+  }
+};
 
 const orderStatusSteps = [
   { label: "Pedido Recebido", icon: (
@@ -109,8 +127,10 @@ export const OrderCard: React.FC<OrderCardProps> = ({ order, onStatusChange }) =
 
       if (notification?.sent) {
         toast.success("Status atualizado e WhatsApp enviado automaticamente.");
+      } else if (notification?.queued) {
+        toast.success("Status atualizado. Mensagem aceita pela Z-API e colocada na fila do WhatsApp.");
       } else if (expectsWhatsApp) {
-        toast.info(`Status atualizado. WhatsApp nao enviado (${notification?.reason || "sem motivo"}).`);
+        toast.info(`Status atualizado. WhatsApp nao encaminhado (${describeNotificationReason(notification?.reason)}).`);
       } else {
         toast.success("Status atualizado. Esta etapa nao dispara WhatsApp automatico.");
       }

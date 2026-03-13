@@ -305,6 +305,17 @@ async function fetchOrderItemsForStock(orderId) {
     .filter((item) => item.productId && item.quantity > 0);
 }
 
+async function readApiResponse(response) {
+  const text = await response.text();
+  if (!text) return { text: "", data: null };
+
+  try {
+    return { text, data: JSON.parse(text) };
+  } catch {
+    return { text, data: null };
+  }
+}
+
 async function sendWhatsAppViaZApi({ phone, message }) {
   const instanceId = process.env.ZAPI_INSTANCE_ID;
   const instanceToken = process.env.ZAPI_INSTANCE_TOKEN;
@@ -315,34 +326,111 @@ async function sendWhatsAppViaZApi({ phone, message }) {
     return { ok: false, reason: "missing-zapi-config" };
   }
 
-  const endpoint = `${baseUrl}/instances/${instanceId}/token/${instanceToken}/send-text`;
   const headers = { "Content-Type": "application/json" };
   if (clientToken) headers["Client-Token"] = clientToken;
 
+  const phoneExistsEndpoint = `${baseUrl}/instances/${instanceId}/token/${instanceToken}/phone-exists/${encodeURIComponent(phone)}`;
+  const phoneExistsResponse = await fetch(phoneExistsEndpoint, {
+    method: "GET",
+    headers,
+  });
+  const phoneExistsResult = await readApiResponse(phoneExistsResponse);
+
+  if (!phoneExistsResponse.ok) {
+    return {
+      ok: false,
+      reason: `zapi-phone-exists-http-${phoneExistsResponse.status}`,
+      detail: phoneExistsResult.text || null,
+    };
+  }
+
+  if (phoneExistsResult.data?.error) {
+    return {
+      ok: false,
+      reason: "zapi-phone-exists-error",
+      detail: phoneExistsResult.data?.message || phoneExistsResult.data?.error || phoneExistsResult.text || null,
+    };
+  }
+
+  if (phoneExistsResult.data?.exists === false) {
+    return { ok: false, reason: "phone-not-on-whatsapp" };
+  }
+
+  const resolvedPhone = String(phoneExistsResult.data?.phone || phone || "").replace(/\D/g, "");
+  if (!resolvedPhone) {
+    return { ok: false, reason: "phone-not-on-whatsapp" };
+  }
+
+  const endpoint = `${baseUrl}/instances/${instanceId}/token/${instanceToken}/send-text`;
   const response = await fetch(endpoint, {
     method: "POST",
     headers,
-    body: JSON.stringify({ phone, number: phone, message, text: message }),
+    body: JSON.stringify({ phone: resolvedPhone, number: resolvedPhone, message, text: message }),
   });
+  const sendResult = await readApiResponse(response);
 
-  if (!response.ok) return { ok: false, reason: `zapi-http-${response.status}` };
-  return { ok: true };
+  if (!response.ok) {
+    return {
+      ok: false,
+      reason: `zapi-http-${response.status}`,
+      detail: sendResult.text || null,
+    };
+  }
+
+  if (sendResult.data?.error) {
+    return {
+      ok: false,
+      reason: "zapi-send-error",
+      detail: sendResult.data?.message || sendResult.data?.error || sendResult.text || null,
+    };
+  }
+
+  const messageId = sendResult.data?.messageId || sendResult.data?.id || null;
+  if (!messageId) {
+    return {
+      ok: false,
+      reason: "zapi-missing-message-id",
+      detail: sendResult.text || null,
+    };
+  }
+
+  return {
+    ok: true,
+    queued: true,
+    phone: resolvedPhone,
+    messageId,
+    zaapId: sendResult.data?.zaapId || null,
+  };
 }
 
 async function sendStatusNotification({ previousStatus, newStatus, clientName, clientPhone, orderCode, orderItems, orderTotal, locale, deliveryAddress }) {
   let type = null;
   if (previousStatus === STATUS.RECEBIDO && newStatus === STATUS.CONFIRMADO) type = "confirmed";
   if (previousStatus === STATUS.PRONTO && newStatus === STATUS.ENTREGA) type = "out_for_delivery";
-  if (!type) return { sent: false, reason: "no-notification-transition" };
+  if (!type) return { sent: false, queued: false, reason: "no-notification-transition" };
 
   const phone = normalizePhone(clientPhone);
-  if (!phone) return { sent: false, reason: "missing-phone" };
+  if (!phone) return { sent: false, queued: false, reason: "missing-phone" };
 
   const message = buildMessage({ type, name: clientName || "cliente", code: orderCode, orderItems, orderTotal, locale, deliveryAddress });
 
   const sendResult = await sendWhatsAppViaZApi({ phone, message });
-  if (!sendResult.ok) return { sent: false, reason: sendResult.reason };
-  return { sent: true };
+  if (!sendResult.ok) {
+    return {
+      sent: false,
+      queued: false,
+      reason: sendResult.reason,
+      detail: sendResult.detail || null,
+    };
+  }
+
+  return {
+    sent: false,
+    queued: true,
+    deliveryStatus: "pending",
+    messageId: sendResult.messageId || null,
+    zaapId: sendResult.zaapId || null,
+  };
 }
 
 async function fetchProductsByIds(productIds) {
@@ -1780,41 +1868,67 @@ app.post("/api/orders/:id/status", async (req, res) => {
     const clientId = order.cliente_id || order.client_id || null;
     const orderEmail = order.email_cliente || order.email || null;
 
-    let client = null;
+    const clientCandidates = [];
+    const candidateIds = new Set();
     let clientError = null;
 
     if (clientId) {
       const clientByIdResult = await supabase.from("clients").select("*").eq("id", clientId).maybeSingle();
-      client = clientByIdResult.data;
+      if (clientByIdResult.data) {
+        clientCandidates.push(clientByIdResult.data);
+        candidateIds.add(String(clientByIdResult.data.id));
+      }
       clientError = clientByIdResult.error;
-    } else if (orderEmail) {
-      const clientByEmailResult = await supabase.from("clients").select("*").eq("email", orderEmail).maybeSingle();
-      client = clientByEmailResult.data;
-      clientError = clientByEmailResult.error;
     }
 
-    let notification = { sent: false, reason: "missing-client" };
+    if (orderEmail) {
+      const clientByEmailResult = await supabase
+        .from("clients")
+        .select("*")
+        .eq("email", orderEmail)
+        .order("id", { ascending: false });
 
-    if (client && !clientError) {
+      if (!clientError) clientError = clientByEmailResult.error;
+
+      for (const candidate of clientByEmailResult.data || []) {
+        const candidateKey = String(candidate.id);
+        if (candidateIds.has(candidateKey)) continue;
+        clientCandidates.push(candidate);
+        candidateIds.add(candidateKey);
+      }
+    }
+
+    let notification = { sent: false, queued: false, reason: "missing-client" };
+
+    if (clientCandidates.length > 0 && !clientError) {
       const orderCode = resolveOrderCode(order);
       const orderTotal = order.valor_total ?? order.total ?? null;
-      const locale = resolveMessageLocale(order, client);
-      const orderItems = await fetchOrderItems(orderId, locale);
-      const deliveryAddress = resolveDeliveryAddress(client);
 
-      notification = await sendStatusNotification({
-        previousStatus,
-        newStatus,
-        clientName: client.nome,
-        clientPhone: client.telefone,
-        orderCode,
-        orderItems,
-        orderTotal,
-        locale,
-        deliveryAddress,
-      });
+      for (const client of clientCandidates) {
+        const locale = resolveMessageLocale(order, client);
+        const orderItems = await fetchOrderItems(orderId, locale);
+        const deliveryAddress = resolveDeliveryAddress(client);
 
-      return res.json({ ok: true, previousStatus, newStatus, locale, stock, notification });
+        notification = await sendStatusNotification({
+          previousStatus,
+          newStatus,
+          clientName: client.nome,
+          clientPhone: client.telefone,
+          orderCode,
+          orderItems,
+          orderTotal,
+          locale,
+          deliveryAddress,
+        });
+
+        if (notification?.queued || notification?.sent) {
+          return res.json({ ok: true, previousStatus, newStatus, locale, stock, notification });
+        }
+
+        if (!["missing-phone", "phone-not-on-whatsapp"].includes(notification?.reason || "")) {
+          return res.json({ ok: true, previousStatus, newStatus, locale, stock, notification });
+        }
+      }
     }
 
     return res.json({

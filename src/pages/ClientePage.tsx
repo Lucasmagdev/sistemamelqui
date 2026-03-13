@@ -33,10 +33,10 @@ import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { useI18n } from '@/contexts/I18nContext';
 import {
+  extractPhoneDigits,
   formatPhoneForDisplay,
   isValidPhone,
   normalizePhoneInput,
-  toStoragePhone,
 } from '@/lib/phone';
 
 type CategoryKey = 'all' | 'offers' | 'bbq' | 'premium' | 'subscription' | 'contact';
@@ -55,8 +55,13 @@ const precoFormatado = (valor: number | null | undefined) => {
   return `$${valor.toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
 };
 
-const PHONE_DEFAULT_COUNTRY = '1';
-const toNormalizedPhone = (value: string) => toStoragePhone(value, PHONE_DEFAULT_COUNTRY);
+const PHONE_DEFAULT_COUNTRY = '55';
+const toNormalizedPhone = (value: string) => {
+  const digits = extractPhoneDigits(value);
+  if (!digits) return '';
+  if (digits.length === 10 || digits.length === 11) return `+${PHONE_DEFAULT_COUNTRY}${digits}`;
+  return `+${digits}`;
+};
 
 type ModoVisualizacao = 'grid' | 'compact' | 'list';
 type Ordenacao = 'menor-maior' | 'maior-menor';
@@ -621,6 +626,7 @@ export default function ClientePage() {
           .from('clients')
           .select('id')
           .eq('auth_user_id', authUserId)
+          .order('id', { ascending: false })
           .limit(1);
         if (byAuth.error) {
           toast.error(ui.saveClientError + byAuth.error.message);
@@ -636,6 +642,7 @@ export default function ClientePage() {
           .from('clients')
           .select('id')
           .eq('email', emailNormalizado)
+          .order('id', { ascending: false })
           .limit(1);
         if (byEmail.error) {
           toast.error(ui.saveClientError + byEmail.error.message);
@@ -651,6 +658,7 @@ export default function ClientePage() {
           .from('clients')
           .select('id')
           .eq('telefone', telefoneNormalizado)
+          .order('id', { ascending: false })
           .limit(1);
         if (byPhone.error) {
           toast.error(ui.saveClientError + byPhone.error.message);

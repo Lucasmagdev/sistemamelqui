@@ -25,12 +25,14 @@ type SaleDraftItem = {
   productId: string;
   quantity: string;
   unitPrice: string;
+  unit: string;
 };
 
 const createDraftItem = (): SaleDraftItem => ({
   productId: '',
   quantity: '1',
   unitPrice: '',
+  unit: 'UN',
 });
 
 const buildReceiptHtml = (sale: any) => {
@@ -143,8 +145,11 @@ export default function VendasPage() {
         const next = { ...item, ...patch };
         if (patch.productId !== undefined) {
           const product = productsMap.get(patch.productId);
-          if (product && !next.unitPrice) {
-            next.unitPrice = String(product.salePrice || '');
+          if (product) {
+            if (!next.unitPrice) {
+              next.unitPrice = String(product.salePrice || '');
+            }
+            next.unit = product.stockUnit || 'UN';
           }
         }
         return next;
@@ -189,7 +194,7 @@ export default function VendasPage() {
               productId: item.productId,
               quantity: item.quantity,
               unitPrice: item.unitPrice,
-              unit: product?.stockUnit || 'UN',
+              unit: item.unit || product?.stockUnit || 'UN',
             };
           }),
         }),
@@ -237,29 +242,32 @@ export default function VendasPage() {
         </Card>
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[520px,1fr]">
-        <Card className="border-border/70 bg-card p-5">
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-lg font-semibold text-foreground">Lancar venda presencial</h2>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Selecione produtos, quantidade, valor unitario e forma de pagamento.
-              </p>
-            </div>
-            <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/10 px-4 py-2 text-right">
-              <div className="text-xs uppercase tracking-wide text-muted-foreground">Total</div>
-              <div className="text-xl font-bold text-yellow-400">{money(saleTotal)}</div>
+      <div className="grid gap-6 xl:grid-cols-[560px,1fr]">
+        <Card className="overflow-hidden border-border/70 bg-card p-0">
+          <div className="border-b border-border/60 bg-[radial-gradient(circle_at_top_left,rgba(234,179,8,0.12),transparent_42%),linear-gradient(180deg,rgba(23,23,23,0.96),rgba(14,14,14,0.98))] px-5 py-5">
+            <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+              <div>
+                <div className="text-[11px] font-semibold uppercase tracking-[0.28em] text-yellow-400/80">Venda Presencial</div>
+                <h2 className="mt-2 text-2xl font-bold text-foreground">Lancamento com baixa de estoque</h2>
+                <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">
+                  Selecione os produtos vendidos, ajuste a unidade de medida, confirme o valor unitario e registre o pagamento.
+                </p>
+              </div>
+              <div className="rounded-2xl border border-yellow-500/20 bg-yellow-500/10 px-5 py-4 text-right shadow-[0_10px_30px_rgba(234,179,8,0.08)]">
+                <div className="text-[11px] uppercase tracking-[0.24em] text-yellow-200/70">Total da venda</div>
+                <div className="mt-2 text-3xl font-bold text-yellow-400">{money(saleTotal)}</div>
+              </div>
             </div>
           </div>
 
-          <form className="mt-4 space-y-4" onSubmit={submitSale}>
+          <div className="p-5">
             <div className="grid gap-3 md:grid-cols-2">
               <div>
-                <label className="mb-1 block text-sm text-muted-foreground">Data e hora</label>
+                <label className="mb-1.5 block text-sm font-medium text-zinc-300">Data e hora</label>
                 <Input type="datetime-local" value={saleDatetime} onChange={(e) => setSaleDatetime(e.target.value)} required />
               </div>
               <div>
-                <label className="mb-1 block text-sm text-muted-foreground">Forma de pagamento</label>
+                <label className="mb-1.5 block text-sm font-medium text-zinc-300">Forma de pagamento</label>
                 <select
                   value={paymentMethod}
                   onChange={(e) => setPaymentMethod(e.target.value)}
@@ -272,20 +280,38 @@ export default function VendasPage() {
                 </select>
               </div>
             </div>
+          </div>
 
+          <form className="space-y-4 px-5 pb-5" onSubmit={submitSale}>
             <div className="space-y-3">
               {draftItems.map((item, index) => {
                 const product = productsMap.get(item.productId);
                 const itemTotal = Number(item.quantity || 0) * Number(item.unitPrice || 0);
                 return (
-                  <div key={`item-${index}`} className="rounded-2xl border border-border/70 bg-background/60 p-4">
-                    <div className="grid gap-3 md:grid-cols-[1.8fr,0.9fr,1fr,auto]">
+                  <div key={`item-${index}`} className="rounded-2xl border border-border/70 bg-[linear-gradient(180deg,rgba(24,24,24,0.92),rgba(14,14,14,0.98))] p-4 shadow-sm">
+                    <div className="mb-3 flex items-center justify-between gap-3">
                       <div>
-                        <label className="mb-1 block text-sm text-muted-foreground">Produto</label>
+                        <div className="text-sm font-semibold text-foreground">Produto {index + 1}</div>
+                        <div className="text-xs text-muted-foreground">Defina item, quantidade, unidade e valor</div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-right">
+                          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Subtotal</div>
+                          <div className="text-sm font-semibold text-emerald-300">{money(itemTotal)}</div>
+                        </div>
+                        <Button type="button" variant="outline" size="icon" onClick={() => removeItem(index)}>
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+
+                    <div className="grid gap-3 md:grid-cols-[1.6fr,0.85fr,0.75fr,1fr]">
+                      <div>
+                        <label className="mb-1.5 block text-sm font-medium text-zinc-300">Produto</label>
                         <select
                           value={item.productId}
                           onChange={(e) => setItem(index, { productId: e.target.value })}
-                          className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                          className="flex h-11 w-full rounded-xl border border-input bg-background px-3 py-2 text-sm"
                           required
                         >
                           <option value="">Selecione</option>
@@ -296,27 +322,45 @@ export default function VendasPage() {
                           ))}
                         </select>
                         {product ? (
-                          <div className="mt-2 text-xs text-muted-foreground">
-                            Saldo: {product.saldoQty} {product.stockUnit} | Controle: {product.stockEnabled ? 'ativo' : 'inativo'}
+                          <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
+                            <span className="rounded-full border border-border/70 px-2 py-1">
+                              Saldo: {product.saldoQty} {product.stockUnit}
+                            </span>
+                            <span className="rounded-full border border-border/70 px-2 py-1">
+                              Controle: {product.stockEnabled ? 'ativo' : 'inativo'}
+                            </span>
                           </div>
                         ) : null}
                       </div>
                       <div>
-                        <label className="mb-1 block text-sm text-muted-foreground">Quantidade</label>
-                        <Input value={item.quantity} onChange={(e) => setItem(index, { quantity: e.target.value })} required />
+                        <label className="mb-1.5 block text-sm font-medium text-zinc-300">Quantidade</label>
+                        <Input
+                          value={item.quantity}
+                          onChange={(e) => setItem(index, { quantity: e.target.value })}
+                          className="h-11 rounded-xl"
+                          required
+                        />
                       </div>
                       <div>
-                        <label className="mb-1 block text-sm text-muted-foreground">Valor unitario</label>
-                        <Input value={item.unitPrice} onChange={(e) => setItem(index, { unitPrice: e.target.value })} required />
+                        <label className="mb-1.5 block text-sm font-medium text-zinc-300">Unidade</label>
+                        <select
+                          value={item.unit}
+                          onChange={(e) => setItem(index, { unit: e.target.value })}
+                          className="flex h-11 w-full rounded-xl border border-input bg-background px-3 py-2 text-sm"
+                        >
+                          <option value="UN">UN</option>
+                          <option value="LB">LB</option>
+                          <option value="KG">KG</option>
+                        </select>
                       </div>
-                      <div className="flex items-end gap-2">
-                        <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-right">
-                          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Item</div>
-                          <div className="text-sm font-semibold text-emerald-300">{money(itemTotal)}</div>
-                        </div>
-                        <Button type="button" variant="outline" size="icon" onClick={() => removeItem(index)}>
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
+                      <div>
+                        <label className="mb-1.5 block text-sm font-medium text-zinc-300">Valor unitario</label>
+                        <Input
+                          value={item.unitPrice}
+                          onChange={(e) => setItem(index, { unitPrice: e.target.value })}
+                          className="h-11 rounded-xl"
+                          required
+                        />
                       </div>
                     </div>
                   </div>
@@ -324,24 +368,27 @@ export default function VendasPage() {
               })}
             </div>
 
-            <div className="flex justify-between">
-              <Button type="button" variant="outline" onClick={addItem}>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <Button type="button" variant="outline" onClick={addItem} className="h-11 rounded-xl px-5">
                 <Plus className="mr-2 h-4 w-4" />
                 Adicionar produto
               </Button>
+              <div className="rounded-xl border border-border/70 bg-background/70 px-4 py-3 text-sm text-muted-foreground">
+                A unidade enviada para a venda fica explicita por item e aparece no comprovante.
+              </div>
             </div>
 
             <div>
-              <label className="mb-1 block text-sm text-muted-foreground">Observacoes</label>
+              <label className="mb-1.5 block text-sm font-medium text-zinc-300">Observacoes</label>
               <textarea
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
-                className="min-h-[100px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                className="min-h-[120px] w-full rounded-xl border border-input bg-background px-3 py-3 text-sm"
                 placeholder="Opcional"
               />
             </div>
 
-            <Button type="submit" className="w-full" disabled={saving}>
+            <Button type="submit" className="h-12 w-full rounded-xl text-base font-semibold" disabled={saving}>
               {saving ? 'Salvando...' : 'Registrar venda com baixa de estoque'}
             </Button>
           </form>
@@ -400,7 +447,7 @@ export default function VendasPage() {
                         {(sale.items || []).map((item: any) => (
                           <tr key={item.id} className="border-t border-border/60">
                             <td className="py-3">{item.product_name || item.product_id}</td>
-                            <td className="py-3">{item.quantity} {item.unit}</td>
+                            <td className="py-3">{item.quantity} {item.unit || 'UN'}</td>
                             <td className="py-3">{money(item.unit_price)}</td>
                             <td className="py-3 text-right font-semibold">{money(item.total_price)}</td>
                           </tr>

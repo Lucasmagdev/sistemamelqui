@@ -18,7 +18,11 @@ export type TranslationKey =
   | 'nav.orders'
   | 'nav.customers'
   | 'nav.products'
+  | 'nav.sales'
+  | 'nav.finance'
+  | 'nav.employees'
   | 'nav.reports'
+  | 'nav.assistant'
   | 'dock.home'
   | 'header.adminPanel'
   | 'header.openProfile'
@@ -52,7 +56,11 @@ export const messages: Record<Locale, Dictionary> = {
     'nav.orders': 'Pedidos',
     'nav.customers': 'Clientes',
     'nav.products': 'Produtos',
+    'nav.sales': 'Vendas',
+    'nav.finance': 'Financeiro',
+    'nav.employees': 'Funcionarios',
     'nav.reports': 'Relatorios',
+    'nav.assistant': 'Assistente',
     'dock.home': 'Inicio',
     'header.adminPanel': 'Painel Administrativo',
     'header.openProfile': 'Abrir perfil',
@@ -83,7 +91,11 @@ export const messages: Record<Locale, Dictionary> = {
     'nav.orders': 'Orders',
     'nav.customers': 'Customers',
     'nav.products': 'Products',
+    'nav.sales': 'Sales',
+    'nav.finance': 'Finance',
+    'nav.employees': 'Employees',
     'nav.reports': 'Reports',
+    'nav.assistant': 'Assistant',
     'dock.home': 'Home',
     'header.adminPanel': 'Admin Panel',
     'header.openProfile': 'Open profile',

@@ -98,6 +98,13 @@ function formatMoney(value) {
   return num.toLocaleString("en-US", { style: "currency", currency: "USD" });
 }
 
+function formatDateForDisplay(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString("pt-BR");
+}
+
 function normalizePhone(rawPhone) {
   const digits = String(rawPhone || "").replace(/\D/g, "");
   if (!digits) return "";
@@ -227,6 +234,18 @@ function buildMessage({ type, name, code, orderItems, orderTotal, locale, delive
       lines.push("Ja comecamos a preparacao dos itens.");
       lines.push("Produtos vendidos por peso (KG/LB) podem ter pequena variacao de valor apos pesagem e embalagem.");
     }
+  } else if (type === "review_request") {
+    if (isEn) {
+      lines.push(`Hi ${safeName}, your order ${code} was completed successfully.`);
+      lines.push("");
+      lines.push("Could you reply to this message with a quick review of your experience?");
+      lines.push("Your feedback helps us improve the service.");
+    } else {
+      lines.push(`Ola ${safeName}, seu pedido ${code} foi concluido com sucesso.`);
+      lines.push("");
+      lines.push("Voce pode responder esta mensagem com uma avaliacao rapida da sua experiencia?");
+      lines.push("Seu feedback ajuda a melhorar nosso atendimento.");
+    }
   } else if (isEn) {
     lines.push(`Delivery update: Hi ${safeName}, your order ${code} is out for delivery!`);
     lines.push("");
@@ -253,6 +272,166 @@ function buildMessage({ type, name, code, orderItems, orderTotal, locale, delive
   }
 
   return lines.join("\n");
+}
+
+function formatPaymentMethodLabel(paymentMethod, locale = "pt") {
+  const isEn = locale === "en";
+  switch (String(paymentMethod || "").toLowerCase()) {
+    case "pix":
+      return "Pix";
+    case "cartao":
+      return isEn ? "Card" : "Cartao";
+    case "dinheiro":
+      return isEn ? "Cash" : "Dinheiro";
+    default:
+      return paymentMethod ? String(paymentMethod) : (isEn ? "Not informed" : "Nao informado");
+  }
+}
+
+function formatDeliveryModeLabel(deliveryMode, locale = "pt") {
+  const isEn = locale === "en";
+  return String(deliveryMode || "").toLowerCase() === "retirada"
+    ? (isEn ? "Store pickup" : "Retirada na loja")
+    : (isEn ? "Delivery" : "Entrega");
+}
+
+function buildStoreOrderMessage({
+  orderCode,
+  clientName,
+  clientPhone,
+  orderItems,
+  orderTotal,
+  deliveryAddress,
+  paymentMethod,
+  deliveryMode,
+  deliveryDate,
+  deliveryTime,
+  notes,
+}) {
+  const lines = [
+    `Novo pedido ${orderCode}`,
+    "",
+    `Cliente: ${clientName || "Nao informado"}`,
+    `Telefone: ${clientPhone || "Nao informado"}`,
+    `Entrega: ${formatDeliveryModeLabel(deliveryMode, "pt")}`,
+  ];
+
+  if (deliveryAddress) lines.push(`Endereco: ${deliveryAddress}`);
+  if (deliveryDate || deliveryTime) {
+    lines.push(`Agendamento: ${[deliveryDate, deliveryTime].filter(Boolean).join(" ")}`);
+  }
+
+  lines.push(`Pagamento: ${formatPaymentMethodLabel(paymentMethod, "pt")}`);
+
+  if (orderItems?.length) {
+    lines.push("");
+    lines.push("Itens:");
+    for (const item of orderItems) {
+      const qty = formatQuantity(item.quantidade);
+      const cutType = item.tipo_corte ? ` | corte: ${item.tipo_corte}` : "";
+      const itemNote = item.observacoes ? ` | obs: ${item.observacoes}` : "";
+      lines.push(`- ${item.nome}: ${qty}${cutType}${itemNote}`);
+    }
+  }
+
+  if (Number.isFinite(parseNumber(orderTotal, NaN))) {
+    lines.push("");
+    lines.push(`Total estimado: ${formatMoney(orderTotal)}`);
+  }
+
+  if (notes) {
+    lines.push("");
+    lines.push(`Observacoes gerais: ${notes}`);
+  }
+
+  return lines.join("\n");
+}
+
+function normalizeMessageEventType(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_");
+}
+
+function normalizeLocalMessageStatus(value) {
+  const raw = normalizeMessageEventType(value);
+  if (!raw) return "unknown";
+  if (["queue", "queued", "pending", "sent", "enqueued"].includes(raw)) return "queued";
+  if (["delivered", "delivery", "success", "received", "receive"].includes(raw)) return "delivered";
+  if (["read", "seen"].includes(raw)) return "read";
+  if (["failed", "error", "undelivered", "failed_to_send"].includes(raw)) return "failed";
+  return "unknown";
+}
+
+function extractMessageIdentifier(payload, keys) {
+  for (const key of keys) {
+    const parts = key.split(".");
+    let cursor = payload;
+    let valid = true;
+    for (const part of parts) {
+      cursor = cursor?.[part];
+      if (cursor === undefined || cursor === null) {
+        valid = false;
+        break;
+      }
+    }
+    if (valid && String(cursor).trim()) return String(cursor).trim();
+  }
+  return null;
+}
+
+function extractWebhookMessageMeta(payload) {
+  const ids =
+    payload?.ids
+    ?? payload?.data?.ids
+    ?? payload?.value?.ids
+    ?? payload?.message?.ids
+    ?? [];
+
+  const messageIds = Array.isArray(ids)
+    ? ids.map((id) => String(id || "").trim()).filter(Boolean)
+    : [];
+
+  const status =
+    extractMessageIdentifier(payload, [
+      "status",
+      "messageStatus",
+      "event",
+      "eventType",
+      "type",
+      "data.status",
+      "data.event",
+      "value.status",
+      "value.event",
+      "message.status",
+    ]) || null;
+
+  return {
+    messageId: extractMessageIdentifier(payload, [
+      "messageId",
+      "message_id",
+      "id",
+      "data.messageId",
+      "data.message_id",
+      "data.id",
+      "value.messageId",
+      "value.message_id",
+      "value.id",
+      "message.messageId",
+      "message.id",
+    ]) || messageIds[0] || null,
+    messageIds,
+    zaapId: extractMessageIdentifier(payload, [
+      "zaapId",
+      "zaap_id",
+      "data.zaapId",
+      "value.zaapId",
+      "message.zaapId",
+    ]),
+    eventType: status,
+    status,
+  };
 }
 
 async function fetchOrderItems(orderId, locale = "pt") {
@@ -407,10 +586,18 @@ async function sendStatusNotification({ previousStatus, newStatus, clientName, c
   let type = null;
   if (previousStatus === STATUS.RECEBIDO && newStatus === STATUS.CONFIRMADO) type = "confirmed";
   if (previousStatus === STATUS.PRONTO && newStatus === STATUS.ENTREGA) type = "out_for_delivery";
+  if (previousStatus !== STATUS.CONCLUIDO && newStatus === STATUS.CONCLUIDO) type = "review_request";
   if (!type) return { sent: false, queued: false, reason: "no-notification-transition" };
 
+  const eventType =
+    type === "confirmed"
+      ? "order_confirmed_client"
+      : type === "review_request"
+        ? "order_review_client"
+        : "order_dispatched_client";
+
   const phone = normalizePhone(clientPhone);
-  if (!phone) return { sent: false, queued: false, reason: "missing-phone" };
+  if (!phone) return { sent: false, queued: false, reason: "missing-phone", eventType };
 
   const message = buildMessage({ type, name: clientName || "cliente", code: orderCode, orderItems, orderTotal, locale, deliveryAddress });
 
@@ -421,6 +608,8 @@ async function sendStatusNotification({ previousStatus, newStatus, clientName, c
       queued: false,
       reason: sendResult.reason,
       detail: sendResult.detail || null,
+      eventType,
+      messageText: message,
     };
   }
 
@@ -430,6 +619,94 @@ async function sendStatusNotification({ previousStatus, newStatus, clientName, c
     deliveryStatus: "pending",
     messageId: sendResult.messageId || null,
     zaapId: sendResult.zaapId || null,
+    eventType,
+    messageText: message,
+  };
+}
+
+async function sendStoreOrderNotification({
+  orderId,
+  orderCode,
+  clientName,
+  clientPhone,
+  deliveryAddress,
+  paymentMethod,
+  deliveryMode,
+  deliveryDate,
+  deliveryTime,
+  notes,
+  orderItems,
+  orderTotal,
+}) {
+  const storePhoneResult = await discoverStorePhoneFromZApi();
+  if (!storePhoneResult.ok || !storePhoneResult.phone) {
+    const failureResult = {
+      ok: false,
+      reason: storePhoneResult.reason || "store-phone-discovery-failed",
+      detail: "Nao foi possivel descobrir o numero da instancia conectada.",
+    };
+    await persistWhatsAppAttempt({
+      orderId,
+      target: "store",
+      eventType: "order_created_store",
+      destinationPhone: null,
+      messageText: null,
+      payload: {
+        orderCode,
+        paymentMethod,
+        deliveryMode,
+        deliveryDate,
+        deliveryTime,
+      },
+      sendResult: failureResult,
+    });
+    return {
+      ...failureResult,
+    };
+  }
+
+  const message = buildStoreOrderMessage({
+    orderCode,
+    clientName,
+    clientPhone,
+    orderItems,
+    orderTotal,
+    deliveryAddress,
+    paymentMethod,
+    deliveryMode,
+    deliveryDate,
+    deliveryTime,
+    notes,
+  });
+
+  const sendResult = await sendWhatsAppViaZApi({
+    phone: storePhoneResult.phone,
+    message,
+  });
+
+  const logEntry = await persistWhatsAppAttempt({
+    orderId,
+    target: "store",
+    eventType: "order_created_store",
+    destinationPhone: storePhoneResult.phone,
+    messageText: message,
+    payload: {
+      orderCode,
+      paymentMethod,
+      deliveryMode,
+      deliveryDate,
+      deliveryTime,
+      storePhoneSource: storePhoneResult.source || null,
+    },
+    sendResult,
+  });
+
+  return {
+    ...sendResult,
+    eventType: "order_created_store",
+    messageText: message,
+    logId: logEntry?.id || null,
+    storePhone: storePhoneResult.phone,
   };
 }
 
@@ -942,6 +1219,238 @@ function inferMimeTypeFromPath(filePath = "") {
   return "image/jpeg";
 }
 
+async function uploadBase64FileToStorage({
+  bucket,
+  fileName,
+  fileBase64,
+  folderPrefix,
+  defaultFileName,
+  contentType,
+}) {
+  const safeFileName = sanitizeFileName(fileName || defaultFileName || "arquivo.bin");
+  const parsed = parseBase64Input(fileBase64);
+  const mimeType = contentType || parsed.mimeType || inferMimeTypeFromPath(safeFileName);
+  const buffer = Buffer.from(parsed.base64, "base64");
+
+  if (!buffer.length) {
+    throw createHttpError(400, "Arquivo vazio.");
+  }
+
+  if (buffer.length > MAX_B64_BYTES) {
+    throw createHttpError(400, `Arquivo excede limite de ${MAX_B64_BYTES} bytes.`);
+  }
+
+  const now = new Date();
+  const yyyy = String(now.getUTCFullYear());
+  const mm = String(now.getUTCMonth() + 1).padStart(2, "0");
+  const uniqueName = `${Date.now()}-${safeFileName}`;
+  const filePath = `${folderPrefix}/${yyyy}/${mm}/${uniqueName}`;
+
+  const { error: uploadError } = await supabase.storage.from(bucket).upload(filePath, buffer, {
+    contentType: mimeType,
+    upsert: false,
+  });
+
+  if (uploadError) {
+    throw createHttpError(500, "Falha no upload para o Storage.", uploadError.message);
+  }
+
+  const { data: publicUrlData } = supabase.storage.from(bucket).getPublicUrl(filePath);
+  return {
+    bucket,
+    filePath,
+    fileUrl: publicUrlData?.publicUrl || null,
+    mimeType,
+    size: buffer.length,
+  };
+}
+
+async function insertWhatsAppMessageLog(entry) {
+  const payload = {
+    order_id: entry.orderId || null,
+    direction: entry.direction || "outbound",
+    target: entry.target,
+    event_type: entry.eventType,
+    destination_phone: entry.destinationPhone || null,
+    message_text: entry.messageText || null,
+    payload: entry.payload || {},
+    provider_response: entry.providerResponse || {},
+    local_status: entry.localStatus || "unknown",
+    error_detail: entry.errorDetail || null,
+    message_id: entry.messageId || null,
+    zaap_id: entry.zaapId || null,
+    updated_at: new Date().toISOString(),
+  };
+
+  const { data, error } = await supabase.from("whatsapp_messages").insert([payload]).select("*").maybeSingle();
+  if (error) {
+    console.error("Falha ao registrar whatsapp_messages", error.message);
+    return null;
+  }
+
+  return data;
+}
+
+async function persistWhatsAppAttempt({
+  orderId,
+  target,
+  eventType,
+  destinationPhone,
+  messageText,
+  payload,
+  sendResult,
+}) {
+  return insertWhatsAppMessageLog({
+    orderId,
+    target,
+    eventType,
+    destinationPhone,
+    messageText,
+    payload,
+    providerResponse: sendResult || {},
+    localStatus: sendResult?.ok ? "queued" : (sendResult?.reason === "not_sent" ? "not_sent" : "failed"),
+    errorDetail: sendResult?.detail || sendResult?.reason || null,
+    messageId: sendResult?.messageId || null,
+    zaapId: sendResult?.zaapId || null,
+  });
+}
+
+async function updateWhatsAppMessageStatus({ messageId, zaapId, localStatus, providerResponse, errorDetail }) {
+  let query = supabase
+    .from("whatsapp_messages")
+    .update({
+      local_status: localStatus || "unknown",
+      provider_response: providerResponse || {},
+      error_detail: errorDetail || null,
+      updated_at: new Date().toISOString(),
+    })
+    .select("*");
+
+  if (messageId) {
+    query = query.eq("message_id", messageId);
+  } else if (zaapId) {
+    query = query.eq("zaap_id", zaapId);
+  } else {
+    return null;
+  }
+
+  const { data, error } = await query;
+  if (error) {
+    console.error("Falha ao atualizar whatsapp_messages", error.message);
+    return null;
+  }
+  return data || [];
+}
+
+async function updateWhatsAppMessagesByIds({ messageIds, localStatus, providerResponse, errorDetail }) {
+  const ids = Array.from(new Set((messageIds || []).map((id) => String(id || "").trim()).filter(Boolean)));
+  if (!ids.length) return [];
+
+  const { data, error } = await supabase
+    .from("whatsapp_messages")
+    .update({
+      local_status: localStatus || "unknown",
+      provider_response: providerResponse || {},
+      error_detail: errorDetail || null,
+      updated_at: new Date().toISOString(),
+    })
+    .in("message_id", ids)
+    .select("*");
+
+  if (error) {
+    console.error("Falha ao atualizar whatsapp_messages por ids", error.message);
+    return [];
+  }
+
+  return data || [];
+}
+
+async function discoverStorePhoneFromZApi() {
+  const instanceId = process.env.ZAPI_INSTANCE_ID;
+  const instanceToken = process.env.ZAPI_INSTANCE_TOKEN;
+  const clientToken = process.env.ZAPI_CLIENT_TOKEN;
+  const baseUrl = process.env.ZAPI_BASE_URL || "https://api.z-api.io";
+
+  if (!instanceId || !instanceToken) {
+    return { ok: false, reason: "missing-zapi-config" };
+  }
+
+  const headers = {};
+  if (clientToken) headers["Client-Token"] = clientToken;
+
+  const candidateEndpoints = [
+    `${baseUrl}/instances/${instanceId}/token/${instanceToken}/device`,
+    `${baseUrl}/instances/${instanceId}/token/${instanceToken}/status`,
+    `${baseUrl}/instances/${instanceId}/token/${instanceToken}/me`,
+    `${baseUrl}/instances/${instanceId}/token/${instanceToken}/details`,
+  ];
+
+  for (const endpoint of candidateEndpoints) {
+    try {
+      const response = await fetch(endpoint, { method: "GET", headers });
+      const result = await readApiResponse(response);
+      if (!response.ok || result.data?.error) continue;
+
+      const phoneCandidate = extractMessageIdentifier(result.data, [
+        "phone",
+        "number",
+        "connectedPhone",
+        "connectedNumber",
+        "device.phone",
+        "device.number",
+        "me.phone",
+        "me.number",
+        "instance.phone",
+        "instance.number",
+        "data.phone",
+        "data.number",
+        "connected.phone",
+      ]);
+
+      const normalized = normalizePhone(phoneCandidate);
+      if (normalized) {
+        return { ok: true, phone: normalized, source: endpoint };
+      }
+    } catch {
+      // tenta proximo endpoint
+    }
+  }
+
+  return { ok: false, reason: "store-phone-discovery-failed" };
+}
+
+function normalizeDateInput(value, fallback = null) {
+  if (!value) return fallback;
+  const raw = String(value).trim();
+  if (!raw) return fallback;
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return fallback;
+  return date.toISOString();
+}
+
+function resolveRangeFromQuery(query) {
+  const startRaw = String(query?.start || query?.date_from || "").trim();
+  const endRaw = String(query?.end || query?.date_to || "").trim();
+  const start = startRaw ? new Date(`${startRaw}T00:00:00.000Z`) : new Date(Date.now() - 29 * 24 * 60 * 60 * 1000);
+  const end = endRaw ? new Date(`${endRaw}T23:59:59.999Z`) : new Date();
+  return {
+    start: start.toISOString(),
+    end: end.toISOString(),
+    startDate: startRaw || start.toISOString().slice(0, 10),
+    endDate: endRaw || end.toISOString().slice(0, 10),
+  };
+}
+
+function toDayKey(value) {
+  return new Date(value).toISOString().slice(0, 10);
+}
+
+function buildCsvRow(values) {
+  return values
+    .map((value) => `"${String(value ?? "").replace(/"/g, '""')}"`)
+    .join(",");
+}
+
 async function callPaperlessOcr({ invoiceRecord, ocrHint }) {
   if (ocrHint && String(ocrHint).trim()) return String(ocrHint).trim();
 
@@ -1256,6 +1765,277 @@ async function resolveProductIdsForInvoiceItems(items) {
 
     return { ...item, product_id: bestScore >= 0.45 ? bestMatch : null };
   });
+}
+
+async function callGeminiText({ prompt, temperature = 0.2, maxOutputTokens = 1200 }) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  const model = process.env.GEMINI_MODEL || "gemini-1.5-pro";
+  if (!apiKey) return null;
+
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature,
+          maxOutputTokens,
+        },
+      }),
+    },
+  );
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw createHttpError(502, "Falha ao consultar o Gemini.", text || `HTTP ${response.status}`);
+  }
+
+  const payload = await response.json().catch(() => ({}));
+  const parts = payload?.candidates?.[0]?.content?.parts || [];
+  const rawText = parts.map((part) => part?.text || "").join("\n").trim();
+  return rawText || null;
+}
+
+async function upsertClientFromOrderPayload(payload) {
+  const clientName = String(payload?.clientName || payload?.nome || "").trim();
+  const normalizedPhone = normalizePhone(payload?.clientPhone || payload?.telefone || "");
+  const normalizedEmail = String(payload?.clientEmail || payload?.email || "").trim().toLowerCase() || null;
+  const authUserId = String(payload?.authUserId || "").trim() || null;
+  const locale = normalizeLocale(payload?.locale || "pt");
+
+  if (!clientName) {
+    throw createHttpError(400, "Nome do cliente obrigatorio.");
+  }
+
+  if (!normalizedPhone) {
+    throw createHttpError(400, "Telefone do cliente obrigatorio.");
+  }
+
+  let client = null;
+
+  if (authUserId) {
+    const result = await supabase
+      .from("clients")
+      .select("*")
+      .eq("auth_user_id", authUserId)
+      .order("id", { ascending: false })
+      .limit(1);
+    if (result.error) throw createHttpError(500, "Erro ao buscar cliente por auth_user_id.", result.error.message);
+    client = result.data?.[0] || null;
+  }
+
+  if (!client && normalizedEmail) {
+    const result = await supabase
+      .from("clients")
+      .select("*")
+      .eq("email", normalizedEmail)
+      .order("id", { ascending: false })
+      .limit(1);
+    if (result.error) throw createHttpError(500, "Erro ao buscar cliente por email.", result.error.message);
+    client = result.data?.[0] || null;
+  }
+
+  if (!client) {
+    const result = await supabase
+      .from("clients")
+      .select("*")
+      .eq("telefone", normalizedPhone)
+      .order("id", { ascending: false })
+      .limit(1);
+    if (result.error) throw createHttpError(500, "Erro ao buscar cliente por telefone.", result.error.message);
+    client = result.data?.[0] || null;
+  }
+
+  const clientPayload = {
+    nome: clientName,
+    telefone: normalizedPhone,
+    email: normalizedEmail,
+    endereco_numero: payload?.enderecoNumero || null,
+    endereco_rua: payload?.enderecoRua || null,
+    endereco_complemento: payload?.enderecoApt || null,
+    cidade: payload?.enderecoCidade || null,
+    estado: payload?.enderecoEstado || null,
+    cep: payload?.enderecoZip || null,
+    pais: payload?.pais || "USA",
+    tenant_id: Number(payload?.tenantId || 1),
+    preferred_locale: locale,
+    last_user_agent: payload?.lastUserAgent || null,
+    ...(authUserId ? { auth_user_id: authUserId } : {}),
+  };
+
+  if (client?.id) {
+    const { data, error } = await supabase.from("clients").update(clientPayload).eq("id", client.id).select("*").single();
+    if (error) throw createHttpError(500, "Erro ao atualizar cliente.", error.message);
+    return data;
+  }
+
+  const { data, error } = await supabase.from("clients").insert([clientPayload]).select("*").single();
+  if (error) throw createHttpError(500, "Erro ao criar cliente.", error.message);
+  return data;
+}
+
+async function buildOperationalReport(rangeQuery = {}) {
+  const range = resolveRangeFromQuery(rangeQuery);
+
+  const [
+    { data: orders, error: ordersError },
+    { data: storeSales, error: storeSalesError },
+    { data: expenses, error: expensesError },
+    { data: employees, error: employeesError },
+    { data: employeePayments, error: employeePaymentsError },
+  ] = await Promise.all([
+    supabase
+      .from("orders")
+      .select("id, data_pedido, status, valor_total, payment_method, source")
+      .gte("data_pedido", range.start)
+      .lte("data_pedido", range.end)
+      .order("data_pedido", { ascending: true }),
+    supabase
+      .from("store_sales")
+      .select("*")
+      .gte("sale_datetime", range.start)
+      .lte("sale_datetime", range.end)
+      .order("sale_datetime", { ascending: true }),
+    supabase
+      .from("expenses")
+      .select("*")
+      .gte("competency_date", range.startDate)
+      .lte("competency_date", range.endDate)
+      .order("competency_date", { ascending: true }),
+    supabase.from("employees").select("*").order("name", { ascending: true }),
+    supabase
+      .from("employee_payments")
+      .select("*")
+      .gte("paid_at", range.start)
+      .lte("paid_at", range.end)
+      .order("paid_at", { ascending: true }),
+  ]);
+
+  if (ordersError || storeSalesError || expensesError || employeesError || employeePaymentsError) {
+    throw createHttpError(
+      500,
+      "Erro ao montar relatorios operacionais.",
+      ordersError?.message || storeSalesError?.message || expensesError?.message || employeesError?.message || employeePaymentsError?.message,
+    );
+  }
+
+  const stockAlerts = await getLowStockAlerts();
+  const employeeMap = new Map((employees || []).map((employee) => [Number(employee.id), employee]));
+  const dateMap = new Map();
+  const paymentMap = new Map();
+  const orderStatusMap = new Map();
+  const expenseCategoryMap = new Map();
+  const payrollMap = new Map();
+
+  let deliveryTotal = 0;
+  let storeTotal = 0;
+
+  for (const order of orders || []) {
+    const amount = parseNumber(order.valor_total, 0);
+    const dateKey = toDayKey(order.data_pedido || new Date().toISOString());
+    const bucket = dateMap.get(dateKey) || { date: dateKey, delivery: 0, store: 0, total: 0 };
+    bucket.delivery += amount;
+    bucket.total += amount;
+    dateMap.set(dateKey, bucket);
+    deliveryTotal += amount;
+
+    const paymentKey = String(order.payment_method || "nao_informado");
+    paymentMap.set(paymentKey, roundQty((paymentMap.get(paymentKey) || 0) + amount, 2));
+
+    const statusKey = Number(order.status ?? 0);
+    orderStatusMap.set(statusKey, (orderStatusMap.get(statusKey) || 0) + 1);
+  }
+
+  for (const sale of storeSales || []) {
+    const amount = parseNumber(sale.total_amount, 0);
+    const dateKey = toDayKey(sale.sale_datetime || new Date().toISOString());
+    const bucket = dateMap.get(dateKey) || { date: dateKey, delivery: 0, store: 0, total: 0 };
+    bucket.store += amount;
+    bucket.total += amount;
+    dateMap.set(dateKey, bucket);
+    storeTotal += amount;
+
+    const paymentKey = String(sale.payment_method || "nao_informado");
+    paymentMap.set(paymentKey, roundQty((paymentMap.get(paymentKey) || 0) + amount, 2));
+  }
+
+  for (const expense of expenses || []) {
+    const key = String(expense.category || "outras");
+    expenseCategoryMap.set(key, roundQty((expenseCategoryMap.get(key) || 0) + parseNumber(expense.amount, 0), 2));
+  }
+
+  for (const payment of employeePayments || []) {
+    const employee = employeeMap.get(Number(payment.employee_id));
+    const key = employee?.name || `Funcionario ${payment.employee_id}`;
+    payrollMap.set(key, roundQty((payrollMap.get(key) || 0) + parseNumber(payment.amount, 0), 2));
+  }
+
+  const expenseTotal = roundQty((expenses || []).reduce((acc, item) => acc + parseNumber(item.amount, 0), 0), 2);
+  const payrollTotal = roundQty((employeePayments || []).reduce((acc, item) => acc + parseNumber(item.amount, 0), 0), 2);
+
+  return {
+    range,
+    summary: {
+      delivery_sales_total: roundQty(deliveryTotal, 2),
+      store_sales_total: roundQty(storeTotal, 2),
+      total_sales: roundQty(deliveryTotal + storeTotal, 2),
+      expenses_total: expenseTotal,
+      payroll_total: payrollTotal,
+      orders_count: (orders || []).length,
+      store_sales_count: (storeSales || []).length,
+      low_stock_products: stockAlerts.current.length,
+      active_employees: (employees || []).filter((employee) => employee.active !== false).length,
+    },
+    timeline: Array.from(dateMap.values()).sort((a, b) => a.date.localeCompare(b.date)),
+    sales_by_payment: Array.from(paymentMap.entries()).map(([payment_method, total]) => ({ payment_method, total })),
+    orders_by_status: Array.from(orderStatusMap.entries()).map(([status, count]) => ({ status, count })),
+    expenses_by_category: Array.from(expenseCategoryMap.entries()).map(([category, total]) => ({ category, total })),
+    payroll_by_employee: Array.from(payrollMap.entries()).map(([employee_name, total]) => ({ employee_name, total })),
+    stock_alerts: stockAlerts.current,
+    recent_expenses: (expenses || []).slice(-10).reverse(),
+    recent_store_sales: (storeSales || []).slice(-10).reverse(),
+    recent_employee_payments: (employeePayments || []).slice(-10).reverse().map((payment) => ({
+      ...payment,
+      employee_name: employeeMap.get(Number(payment.employee_id))?.name || null,
+    })),
+  };
+}
+
+function resolveAssistantDomain(question) {
+  const text = normalizeSearchText(question);
+  if (/(estoque|lote|produto|baixa|saldo)/.test(text)) return "estoque";
+  if (/(financeiro|despesa|gasto|aluguel|limpeza|carne)/.test(text)) return "financeiro";
+  if (/(funcionario|pagamento|folha|semanal)/.test(text)) return "funcionarios";
+  if (/(venda|faturamento|delivery|presencial|loja)/.test(text)) return "vendas";
+  return "pedidos";
+}
+
+function buildAssistantFallbackAnswer({ question, domain, report }) {
+  const summary = report.summary;
+  const lines = [
+    `Especialista acionado: ${domain}.`,
+    `Pergunta: ${question}`,
+    "",
+    `Vendas delivery: ${formatMoney(summary.delivery_sales_total)}`,
+    `Vendas presenciais: ${formatMoney(summary.store_sales_total)}`,
+    `Vendas totais: ${formatMoney(summary.total_sales)}`,
+    `Despesas no periodo: ${formatMoney(summary.expenses_total)}`,
+    `Pagamentos de funcionarios: ${formatMoney(summary.payroll_total)}`,
+    `Pedidos no periodo: ${summary.orders_count}`,
+    `Produtos com alerta de estoque: ${summary.low_stock_products}`,
+  ];
+
+  if (domain === "estoque" && report.stock_alerts.length) {
+    lines.push(
+      "",
+      "Itens em alerta:",
+      ...report.stock_alerts.slice(0, 5).map((item) => `- ${item.product_name}: ${formatQuantity(item.saldo_qty)} ${item.stock_unit}`),
+    );
+  }
+
+  return lines.join("\n");
 }
 
 app.get("/health", (_req, res) => {
@@ -1821,6 +2601,651 @@ app.post("/api/stock/invoices/:id/apply", async (req, res) => {
   }
 });
 
+app.post("/api/orders", async (req, res) => {
+  try {
+    const itemsInput = Array.isArray(req.body?.items) ? req.body.items : [];
+    if (!itemsInput.length) {
+      return res.status(400).json({ error: "Informe ao menos um item no pedido." });
+    }
+
+    const normalizedItems = itemsInput.map((item, index) => {
+      const productId = Number(item?.produtoId || item?.productId || item?.produto_id || item?.product_id);
+      const quantity = parseNumber(item?.kg ?? item?.quantidade ?? item?.quantity, NaN);
+      const unitPrice = parseNumber(item?.precoKg ?? item?.preco_unitario ?? item?.price ?? item?.preco, NaN);
+
+      if (!productId || !Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(unitPrice) || unitPrice < 0) {
+        throw createHttpError(400, `Item ${index + 1} invalido no pedido.`);
+      }
+
+      return {
+        produto_id: productId,
+        quantidade: roundQty(quantity, 3),
+        preco_unitario: roundQty(unitPrice, 2),
+        unidade: normalizeStockUnit(item?.unidade || item?.unit || "LB", "LB"),
+        tipo_corte: item?.tipoCorte || item?.tipo_corte || null,
+        observacoes: item?.observacoes || null,
+        nome: item?.nome || `Produto ${productId}`,
+      };
+    });
+
+    const client = await upsertClientFromOrderPayload(req.body);
+    const total = roundQty(
+      normalizedItems.reduce((acc, item) => acc + parseNumber(item.quantidade, 0) * parseNumber(item.preco_unitario, 0), 0),
+      2,
+    );
+
+    const orderPayload = {
+      cliente_id: client.id,
+      email_cliente: client.email || null,
+      data_pedido: new Date().toISOString(),
+      status: STATUS.RECEBIDO,
+      valor_total: total,
+      tenant_id: Number(req.body?.tenantId || 1),
+      locale: normalizeLocale(req.body?.locale || client.preferred_locale || "pt"),
+      source: "delivery",
+      payment_method: req.body?.paymentMethod || req.body?.pagamento || null,
+      change_for: parseLooseNumber(req.body?.changeFor || req.body?.trocoPara, null),
+      delivery_mode: String(req.body?.deliveryMode || req.body?.modoEntrega || "entrega").toLowerCase() === "retirada" ? "retirada" : "entrega",
+      delivery_date: req.body?.deliveryDate || req.body?.dataEntrega || null,
+      delivery_time: req.body?.deliveryTime || req.body?.horarioEntrega || null,
+      notes: req.body?.notes || req.body?.observacoesGerais || null,
+    };
+
+    const { data: order, error: orderError } = await supabase.from("orders").insert([orderPayload]).select("*").single();
+    if (orderError || !order) {
+      return res.status(500).json({ error: "Erro ao criar pedido.", detail: orderError?.message || null });
+    }
+
+    const itemPayload = normalizedItems.map((item) => ({
+      pedido_id: order.id,
+      produto_id: item.produto_id,
+      quantidade: item.quantidade,
+      preco_unitario: item.preco_unitario,
+      unidade: item.unidade,
+      tipo_corte: item.tipo_corte,
+      observacoes: item.observacoes,
+    }));
+
+    const { error: itemsError } = await supabase.from("order_items").insert(itemPayload);
+    if (itemsError) {
+      await supabase.from("orders").delete().eq("id", order.id);
+      return res.status(500).json({ error: "Erro ao salvar itens do pedido.", detail: itemsError.message });
+    }
+
+    const orderCode = resolveOrderCode(order);
+    const deliveryAddress = resolveDeliveryAddress(client);
+    const notification = await sendStoreOrderNotification({
+      orderId: order.id,
+      orderCode,
+      clientName: client.nome,
+      clientPhone: client.telefone,
+      deliveryAddress,
+      paymentMethod: order.payment_method,
+      deliveryMode: order.delivery_mode,
+      deliveryDate: order.delivery_date,
+      deliveryTime: order.delivery_time,
+      notes: order.notes,
+      orderItems: normalizedItems,
+      orderTotal: total,
+    });
+
+    return res.status(201).json({
+      ok: true,
+      order: {
+        id: order.id,
+        code: orderCode,
+        total,
+        status: order.status,
+      },
+      notification,
+    });
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro interno ao criar pedido.",
+      detail: error?.detail || null,
+    });
+  }
+});
+
+app.get("/api/orders/:id/messages", async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("whatsapp_messages")
+      .select("*")
+      .eq("order_id", req.params.id)
+      .order("created_at", { ascending: true });
+
+    if (error) {
+      return res.status(500).json({ error: "Erro ao carregar mensagens do pedido.", detail: error.message });
+    }
+
+    return res.json({ ok: true, messages: data || [] });
+  } catch (error) {
+    return res.status(500).json({ error: error?.message || "Erro interno ao carregar mensagens do pedido." });
+  }
+});
+
+app.post("/api/zapi/webhook", async (req, res) => {
+  const payload = req.body || {};
+  const meta = extractWebhookMessageMeta(payload);
+  const allMessageIds = Array.from(new Set([meta.messageId, ...(meta.messageIds || [])].filter(Boolean)));
+
+  let matchedOrderId = null;
+  if (allMessageIds.length || meta.zaapId) {
+    const matcher = allMessageIds.length
+      ? supabase.from("whatsapp_messages").select("order_id").in("message_id", allMessageIds).limit(1)
+      : supabase.from("whatsapp_messages").select("order_id").eq("zaap_id", meta.zaapId).limit(1);
+    const { data } = await matcher;
+    matchedOrderId = data?.[0]?.order_id || null;
+  }
+
+  const webhookInsert = await supabase
+    .from("whatsapp_webhook_events")
+    .insert([{
+      order_id: matchedOrderId,
+      event_type: meta.eventType || null,
+      message_id: allMessageIds[0] || null,
+      zaap_id: meta.zaapId,
+      payload,
+      processed_at: new Date().toISOString(),
+    }])
+    .select("*")
+    .maybeSingle();
+
+  const localStatus = normalizeLocalMessageStatus(meta.eventType);
+  if (allMessageIds.length) {
+    await updateWhatsAppMessagesByIds({
+      messageIds: allMessageIds,
+      localStatus,
+      providerResponse: payload,
+      errorDetail: localStatus === "failed" ? JSON.stringify(payload) : null,
+    });
+  } else if (meta.zaapId) {
+    await updateWhatsAppMessageStatus({
+      messageId: null,
+      zaapId: meta.zaapId,
+      localStatus,
+      providerResponse: payload,
+      errorDetail: localStatus === "failed" ? JSON.stringify(payload) : null,
+    });
+  }
+
+  return res.json({
+    ok: true,
+    matched_order_id: matchedOrderId,
+    event_id: webhookInsert.data?.id || null,
+    local_status: localStatus,
+    message_ids: allMessageIds,
+  });
+});
+
+app.get("/api/store-sales", async (req, res) => {
+  try {
+    const range = resolveRangeFromQuery(req.query);
+    const { data, error } = await supabase
+      .from("store_sales")
+      .select("*")
+      .gte("sale_datetime", range.start)
+      .lte("sale_datetime", range.end)
+      .order("sale_datetime", { ascending: false });
+
+    if (error) {
+      return res.status(500).json({ error: "Erro ao carregar vendas presenciais.", detail: error.message });
+    }
+
+    const total = roundQty((data || []).reduce((acc, row) => acc + parseNumber(row.total_amount, 0), 0), 2);
+    return res.json({ ok: true, sales: data || [], summary: { count: (data || []).length, total } });
+  } catch (error) {
+    return res.status(500).json({ error: error?.message || "Erro interno ao carregar vendas presenciais." });
+  }
+});
+
+app.get("/api/store-sales/summary", async (req, res) => {
+  try {
+    const range = resolveRangeFromQuery(req.query);
+    const { data, error } = await supabase
+      .from("store_sales")
+      .select("payment_method, total_amount, sale_datetime")
+      .gte("sale_datetime", range.start)
+      .lte("sale_datetime", range.end)
+      .order("sale_datetime", { ascending: true });
+
+    if (error) {
+      return res.status(500).json({ error: "Erro ao consolidar vendas presenciais.", detail: error.message });
+    }
+
+    const byPayment = {};
+    for (const row of data || []) {
+      const key = row.payment_method || "nao_informado";
+      byPayment[key] = roundQty((byPayment[key] || 0) + parseNumber(row.total_amount, 0), 2);
+    }
+
+    return res.json({
+      ok: true,
+      range,
+      total: roundQty((data || []).reduce((acc, row) => acc + parseNumber(row.total_amount, 0), 0), 2),
+      by_payment: Object.entries(byPayment).map(([payment_method, total]) => ({ payment_method, total })),
+    });
+  } catch (error) {
+    return res.status(500).json({ error: error?.message || "Erro interno ao consolidar vendas presenciais." });
+  }
+});
+
+app.post("/api/store-sales", async (req, res) => {
+  try {
+    const totalAmount = parseLooseNumber(req.body?.totalAmount, NaN);
+    if (!Number.isFinite(totalAmount) || totalAmount < 0) {
+      return res.status(400).json({ error: "totalAmount invalido." });
+    }
+
+    const payload = {
+      origin: "store",
+      sale_datetime: normalizeDateInput(req.body?.saleDatetime || new Date().toISOString(), new Date().toISOString()),
+      total_amount: roundQty(totalAmount, 2),
+      payment_method: String(req.body?.paymentMethod || "").trim() || "nao_informado",
+      notes: req.body?.notes || null,
+      created_by: req.body?.createdBy || null,
+    };
+
+    const { data, error } = await supabase.from("store_sales").insert([payload]).select("*").single();
+    if (error) {
+      return res.status(500).json({ error: "Erro ao registrar venda presencial.", detail: error.message });
+    }
+
+    return res.status(201).json({ ok: true, sale: data });
+  } catch (error) {
+    return res.status(500).json({ error: error?.message || "Erro interno ao registrar venda presencial." });
+  }
+});
+
+app.get("/api/expenses", async (req, res) => {
+  try {
+    const range = resolveRangeFromQuery(req.query);
+    let query = supabase
+      .from("expenses")
+      .select("*")
+      .gte("competency_date", range.startDate)
+      .lte("competency_date", range.endDate)
+      .order("competency_date", { ascending: false });
+
+    const category = String(req.query?.category || "").trim();
+    if (category) query = query.eq("category", category);
+
+    const search = String(req.query?.search || "").trim();
+    if (search) query = query.ilike("description", `%${search}%`);
+
+    const { data, error } = await query;
+    if (error) {
+      return res.status(500).json({ error: "Erro ao carregar despesas.", detail: error.message });
+    }
+
+    const total = roundQty((data || []).reduce((acc, item) => acc + parseNumber(item.amount, 0), 0), 2);
+    return res.json({ ok: true, expenses: data || [], summary: { count: (data || []).length, total } });
+  } catch (error) {
+    return res.status(500).json({ error: error?.message || "Erro interno ao carregar despesas." });
+  }
+});
+
+app.get("/api/expenses/summary", async (req, res) => {
+  try {
+    const range = resolveRangeFromQuery(req.query);
+    const { data, error } = await supabase
+      .from("expenses")
+      .select("category, amount")
+      .gte("competency_date", range.startDate)
+      .lte("competency_date", range.endDate);
+
+    if (error) {
+      return res.status(500).json({ error: "Erro ao consolidar despesas.", detail: error.message });
+    }
+
+    const byCategory = {};
+    for (const item of data || []) {
+      const key = item.category || "outras";
+      byCategory[key] = roundQty((byCategory[key] || 0) + parseNumber(item.amount, 0), 2);
+    }
+
+    return res.json({
+      ok: true,
+      range,
+      total: roundQty((data || []).reduce((acc, item) => acc + parseNumber(item.amount, 0), 0), 2),
+      by_category: Object.entries(byCategory).map(([category, total]) => ({ category, total })),
+    });
+  } catch (error) {
+    return res.status(500).json({ error: error?.message || "Erro interno ao consolidar despesas." });
+  }
+});
+
+app.post("/api/expenses", async (req, res) => {
+  try {
+    const amount = parseLooseNumber(req.body?.amount, NaN);
+    if (!Number.isFinite(amount) || amount < 0) {
+      return res.status(400).json({ error: "amount invalido." });
+    }
+
+    let attachment = { bucket: null, filePath: null, fileUrl: null };
+    if (req.body?.attachmentBase64) {
+      attachment = await uploadBase64FileToStorage({
+        bucket: process.env.SUPABASE_FINANCE_BUCKET || process.env.SUPABASE_INVOICE_BUCKET || "invoice-imports",
+        fileName: req.body?.attachmentName || "despesa.jpg",
+        fileBase64: req.body.attachmentBase64,
+        folderPrefix: "finance",
+        defaultFileName: "despesa.jpg",
+        contentType: req.body?.attachmentMimeType || null,
+      });
+    }
+
+    const payload = {
+      description: String(req.body?.description || "").trim(),
+      category: String(req.body?.category || "outras").trim() || "outras",
+      amount: roundQty(amount, 2),
+      competency_date: String(req.body?.competencyDate || "").slice(0, 10),
+      posted_at: normalizeDateInput(req.body?.postedAt || new Date().toISOString(), new Date().toISOString()),
+      notes: req.body?.notes || null,
+      attachment_bucket: attachment.bucket,
+      attachment_path: attachment.filePath,
+      attachment_url: attachment.fileUrl,
+      created_by: req.body?.createdBy || null,
+    };
+
+    if (!payload.description || !payload.competency_date) {
+      return res.status(400).json({ error: "description e competencyDate sao obrigatorios." });
+    }
+
+    const { data, error } = await supabase.from("expenses").insert([payload]).select("*").single();
+    if (error) {
+      return res.status(500).json({ error: "Erro ao registrar despesa.", detail: error.message });
+    }
+
+    return res.status(201).json({ ok: true, expense: data });
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro interno ao registrar despesa.",
+      detail: error?.detail || null,
+    });
+  }
+});
+
+app.get("/api/employees", async (req, res) => {
+  try {
+    let query = supabase.from("employees").select("*").order("name", { ascending: true });
+    if (String(req.query?.active || "").trim() === "true") query = query.eq("active", true);
+    if (String(req.query?.active || "").trim() === "false") query = query.eq("active", false);
+    const search = String(req.query?.search || "").trim();
+    if (search) query = query.ilike("name", `%${search}%`);
+
+    const { data, error } = await query;
+    if (error) {
+      return res.status(500).json({ error: "Erro ao carregar funcionarios.", detail: error.message });
+    }
+
+    return res.json({ ok: true, employees: data || [] });
+  } catch (error) {
+    return res.status(500).json({ error: error?.message || "Erro interno ao carregar funcionarios." });
+  }
+});
+
+app.post("/api/employees", async (req, res) => {
+  try {
+    const payload = {
+      name: String(req.body?.name || "").trim(),
+      phone: req.body?.phone || null,
+      email: req.body?.email || null,
+      role_title: req.body?.roleTitle || null,
+      active: req.body?.active !== false,
+      notes: req.body?.notes || null,
+      updated_at: new Date().toISOString(),
+    };
+
+    if (!payload.name) {
+      return res.status(400).json({ error: "name obrigatorio." });
+    }
+
+    const { data, error } = await supabase.from("employees").insert([payload]).select("*").single();
+    if (error) {
+      return res.status(500).json({ error: "Erro ao cadastrar funcionario.", detail: error.message });
+    }
+
+    return res.status(201).json({ ok: true, employee: data });
+  } catch (error) {
+    return res.status(500).json({ error: error?.message || "Erro interno ao cadastrar funcionario." });
+  }
+});
+
+app.patch("/api/employees/:id", async (req, res) => {
+  try {
+    const payload = {};
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, "name")) payload.name = String(req.body.name || "").trim();
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, "phone")) payload.phone = req.body.phone || null;
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, "email")) payload.email = req.body.email || null;
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, "roleTitle")) payload.role_title = req.body.roleTitle || null;
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, "active")) payload.active = Boolean(req.body.active);
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, "notes")) payload.notes = req.body.notes || null;
+    payload.updated_at = new Date().toISOString();
+
+    const { data, error } = await supabase.from("employees").update(payload).eq("id", req.params.id).select("*").single();
+    if (error) {
+      return res.status(500).json({ error: "Erro ao atualizar funcionario.", detail: error.message });
+    }
+
+    return res.json({ ok: true, employee: data });
+  } catch (error) {
+    return res.status(500).json({ error: error?.message || "Erro interno ao atualizar funcionario." });
+  }
+});
+
+app.get("/api/employee-payments", async (req, res) => {
+  try {
+    const range = resolveRangeFromQuery(req.query);
+    let query = supabase
+      .from("employee_payments")
+      .select("*")
+      .gte("paid_at", range.start)
+      .lte("paid_at", range.end)
+      .order("paid_at", { ascending: false });
+
+    if (req.query?.employeeId) query = query.eq("employee_id", req.query.employeeId);
+    const { data, error } = await query;
+    if (error) {
+      return res.status(500).json({ error: "Erro ao carregar pagamentos.", detail: error.message });
+    }
+
+    const employeeIds = Array.from(new Set((data || []).map((item) => Number(item.employee_id)).filter(Boolean)));
+    const { data: employees } = employeeIds.length
+      ? await supabase.from("employees").select("id, name").in("id", employeeIds)
+      : { data: [] };
+    const employeeMap = new Map((employees || []).map((employee) => [Number(employee.id), employee.name]));
+
+    return res.json({
+      ok: true,
+      payments: (data || []).map((payment) => ({
+        ...payment,
+        employee_name: employeeMap.get(Number(payment.employee_id)) || null,
+      })),
+      summary: {
+        count: (data || []).length,
+        total: roundQty((data || []).reduce((acc, payment) => acc + parseNumber(payment.amount, 0), 0), 2),
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({ error: error?.message || "Erro interno ao carregar pagamentos." });
+  }
+});
+
+app.get("/api/employee-payments/summary", async (req, res) => {
+  try {
+    const range = resolveRangeFromQuery(req.query);
+    const { data, error } = await supabase
+      .from("employee_payments")
+      .select("employee_id, amount")
+      .gte("paid_at", range.start)
+      .lte("paid_at", range.end);
+
+    if (error) {
+      return res.status(500).json({ error: "Erro ao consolidar pagamentos.", detail: error.message });
+    }
+
+    const employeeIds = Array.from(new Set((data || []).map((item) => Number(item.employee_id)).filter(Boolean)));
+    const { data: employees } = employeeIds.length
+      ? await supabase.from("employees").select("id, name").in("id", employeeIds)
+      : { data: [] };
+    const employeeMap = new Map((employees || []).map((employee) => [Number(employee.id), employee.name]));
+    const totals = {};
+    for (const payment of data || []) {
+      const key = employeeMap.get(Number(payment.employee_id)) || `Funcionario ${payment.employee_id}`;
+      totals[key] = roundQty((totals[key] || 0) + parseNumber(payment.amount, 0), 2);
+    }
+
+    return res.json({
+      ok: true,
+      range,
+      total: roundQty((data || []).reduce((acc, payment) => acc + parseNumber(payment.amount, 0), 0), 2),
+      by_employee: Object.entries(totals).map(([employee_name, total]) => ({ employee_name, total })),
+    });
+  } catch (error) {
+    return res.status(500).json({ error: error?.message || "Erro interno ao consolidar pagamentos." });
+  }
+});
+
+app.post("/api/employee-payments", async (req, res) => {
+  try {
+    const amount = parseLooseNumber(req.body?.amount, NaN);
+    if (!Number.isFinite(amount) || amount < 0) {
+      return res.status(400).json({ error: "amount invalido." });
+    }
+
+    if (!req.body?.employeeId || !req.body?.weekReference) {
+      return res.status(400).json({ error: "employeeId e weekReference sao obrigatorios." });
+    }
+
+    let attachment = { bucket: null, filePath: null, fileUrl: null };
+    if (req.body?.attachmentBase64) {
+      attachment = await uploadBase64FileToStorage({
+        bucket: process.env.SUPABASE_PAYROLL_BUCKET || process.env.SUPABASE_INVOICE_BUCKET || "invoice-imports",
+        fileName: req.body?.attachmentName || "pagamento.jpg",
+        fileBase64: req.body.attachmentBase64,
+        folderPrefix: "payroll",
+        defaultFileName: "pagamento.jpg",
+        contentType: req.body?.attachmentMimeType || null,
+      });
+    }
+
+    const payload = {
+      employee_id: Number(req.body.employeeId),
+      week_reference: String(req.body.weekReference).slice(0, 10),
+      amount: roundQty(amount, 2),
+      paid_at: normalizeDateInput(req.body?.paidAt || new Date().toISOString(), new Date().toISOString()),
+      notes: req.body?.notes || null,
+      attachment_bucket: attachment.bucket,
+      attachment_path: attachment.filePath,
+      attachment_url: attachment.fileUrl,
+      created_by: req.body?.createdBy || null,
+    };
+
+    const { data, error } = await supabase.from("employee_payments").insert([payload]).select("*").single();
+    if (error) {
+      return res.status(500).json({ error: "Erro ao registrar pagamento.", detail: error.message });
+    }
+
+    return res.status(201).json({ ok: true, payment: data });
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro interno ao registrar pagamento.",
+      detail: error?.detail || null,
+    });
+  }
+});
+
+app.get("/api/reports/operational", async (req, res) => {
+  try {
+    const report = await buildOperationalReport(req.query);
+    return res.json({ ok: true, report });
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro interno ao montar relatorios.",
+      detail: error?.detail || null,
+    });
+  }
+});
+
+app.get("/api/reports/operational.csv", async (req, res) => {
+  try {
+    const report = await buildOperationalReport(req.query);
+    const rows = [
+      buildCsvRow(["tipo", "chave", "valor"]),
+      buildCsvRow(["summary", "delivery_sales_total", report.summary.delivery_sales_total]),
+      buildCsvRow(["summary", "store_sales_total", report.summary.store_sales_total]),
+      buildCsvRow(["summary", "total_sales", report.summary.total_sales]),
+      buildCsvRow(["summary", "expenses_total", report.summary.expenses_total]),
+      buildCsvRow(["summary", "payroll_total", report.summary.payroll_total]),
+      ...report.sales_by_payment.map((row) => buildCsvRow(["payment", row.payment_method, row.total])),
+      ...report.orders_by_status.map((row) => buildCsvRow(["order_status", row.status, row.count])),
+      ...report.expenses_by_category.map((row) => buildCsvRow(["expense_category", row.category, row.total])),
+      ...report.payroll_by_employee.map((row) => buildCsvRow(["payroll", row.employee_name, row.total])),
+    ];
+
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="relatorio-operacional-${report.range.startDate}-${report.range.endDate}.csv"`);
+    return res.send(rows.join("\n"));
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro interno ao exportar relatorio.",
+      detail: error?.detail || null,
+    });
+  }
+});
+
+app.post("/api/assistant/query", async (req, res) => {
+  try {
+    const question = String(req.body?.question || "").trim();
+    if (!question) {
+      return res.status(400).json({ error: "question obrigatoria." });
+    }
+
+    const domain = resolveAssistantDomain(question);
+    const report = await buildOperationalReport(req.body?.range || {});
+    const context = JSON.stringify(
+      {
+        domain,
+        summary: report.summary,
+        sales_by_payment: report.sales_by_payment,
+        orders_by_status: report.orders_by_status,
+        expenses_by_category: report.expenses_by_category,
+        payroll_by_employee: report.payroll_by_employee,
+        stock_alerts: report.stock_alerts.slice(0, 10),
+      },
+      null,
+      2,
+    );
+
+    let answer = buildAssistantFallbackAnswer({ question, domain, report });
+    try {
+      const geminiAnswer = await callGeminiText({
+        prompt: [
+          "Voce e um assistente administrativo read-only do Imperial Flow Gold.",
+          "Responda em portugues do Brasil, sem inventar dados e sem sugerir escrita no banco.",
+          `Especialista acionado: ${domain}.`,
+          "Dados operacionais disponiveis:",
+          context,
+          "Pergunta do usuario:",
+          question,
+          "Responda de forma objetiva, com 3 a 6 linhas.",
+        ].join("\n\n"),
+      });
+      if (geminiAnswer) answer = geminiAnswer;
+    } catch {
+      // fallback local
+    }
+
+    return res.json({ ok: true, domain, answer, report_summary: report.summary });
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro interno no assistente.",
+      detail: error?.detail || null,
+    });
+  }
+});
+
 app.post("/api/orders/:id/status", async (req, res) => {
   try {
     const orderId = req.params.id;
@@ -1867,6 +3292,16 @@ app.post("/api/orders/:id/status", async (req, res) => {
 
     const clientId = order.cliente_id || order.client_id || null;
     const orderEmail = order.email_cliente || order.email || null;
+    const orderCode = resolveOrderCode(order);
+    const orderTotal = order.valor_total ?? order.total ?? null;
+    const expectedEventType =
+      previousStatus === STATUS.RECEBIDO && newStatus === STATUS.CONFIRMADO
+        ? "order_confirmed_client"
+        : previousStatus === STATUS.PRONTO && newStatus === STATUS.ENTREGA
+          ? "order_dispatched_client"
+          : previousStatus !== STATUS.CONCLUIDO && newStatus === STATUS.CONCLUIDO
+            ? "order_review_client"
+            : null;
 
     const clientCandidates = [];
     const candidateIds = new Set();
@@ -1901,9 +3336,6 @@ app.post("/api/orders/:id/status", async (req, res) => {
     let notification = { sent: false, queued: false, reason: "missing-client" };
 
     if (clientCandidates.length > 0 && !clientError) {
-      const orderCode = resolveOrderCode(order);
-      const orderTotal = order.valor_total ?? order.total ?? null;
-
       for (const client of clientCandidates) {
         const locale = resolveMessageLocale(order, client);
         const orderItems = await fetchOrderItems(orderId, locale);
@@ -1921,6 +3353,37 @@ app.post("/api/orders/:id/status", async (req, res) => {
           deliveryAddress,
         });
 
+        if (expectedEventType && notification?.reason !== "no-notification-transition") {
+          await persistWhatsAppAttempt({
+            orderId,
+            target: "client",
+            eventType: notification?.eventType || expectedEventType,
+            destinationPhone: normalizePhone(client.telefone),
+            messageText: notification?.messageText || null,
+            payload: {
+              previousStatus,
+              newStatus,
+              locale,
+              clientId: client.id,
+              orderCode,
+            },
+            sendResult: notification?.queued
+              ? {
+                  ok: true,
+                  messageId: notification.messageId,
+                  zaapId: notification.zaapId,
+                  detail: notification.deliveryStatus || "pending",
+                }
+              : {
+                  ok: false,
+                  reason: notification?.reason || "send-failed",
+                  detail: notification?.detail || null,
+                  messageId: notification?.messageId || null,
+                  zaapId: notification?.zaapId || null,
+                },
+          });
+        }
+
         if (notification?.queued || notification?.sent) {
           return res.json({ ok: true, previousStatus, newStatus, locale, stock, notification });
         }
@@ -1929,6 +3392,22 @@ app.post("/api/orders/:id/status", async (req, res) => {
           return res.json({ ok: true, previousStatus, newStatus, locale, stock, notification });
         }
       }
+    }
+
+    if (expectedEventType && clientCandidates.length === 0) {
+      await persistWhatsAppAttempt({
+        orderId,
+        target: "client",
+        eventType: expectedEventType,
+        destinationPhone: null,
+        messageText: null,
+        payload: {
+          previousStatus,
+          newStatus,
+          orderCode,
+        },
+        sendResult: { ok: false, reason: "missing-client", detail: clientError?.message || null },
+      });
     }
 
     return res.json({

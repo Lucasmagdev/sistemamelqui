@@ -32,6 +32,7 @@ import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { useI18n } from '@/contexts/I18nContext';
+import { backendRequest } from '@/lib/backendClient';
 import {
   extractPhoneDigits,
   formatPhoneForDisplay,
@@ -614,173 +615,62 @@ export default function ClientePage() {
       return;
     }
 
-    let clienteId = null;
     try {
       const { data: authData } = await supabase.auth.getUser();
-      const authUserId = authData?.user?.id || null;
-
-      let clienteEncontrado: { id: string | number } | null = null;
-
-      if (authUserId) {
-        const byAuth = await supabase
-          .from('clients')
-          .select('id')
-          .eq('auth_user_id', authUserId)
-          .order('id', { ascending: false })
-          .limit(1);
-        if (byAuth.error) {
-          toast.error(ui.saveClientError + byAuth.error.message);
-          return;
-        }
-        if (byAuth.data && byAuth.data.length > 0) {
-          clienteEncontrado = byAuth.data[0];
-        }
-      }
-
-      if (!clienteEncontrado && emailNormalizado) {
-        const byEmail = await supabase
-          .from('clients')
-          .select('id')
-          .eq('email', emailNormalizado)
-          .order('id', { ascending: false })
-          .limit(1);
-        if (byEmail.error) {
-          toast.error(ui.saveClientError + byEmail.error.message);
-          return;
-        }
-        if (byEmail.data && byEmail.data.length > 0) {
-          clienteEncontrado = byEmail.data[0];
-        }
-      }
-
-      if (!clienteEncontrado) {
-        const byPhone = await supabase
-          .from('clients')
-          .select('id')
-          .eq('telefone', telefoneNormalizado)
-          .order('id', { ascending: false })
-          .limit(1);
-        if (byPhone.error) {
-          toast.error(ui.saveClientError + byPhone.error.message);
-          return;
-        }
-        if (byPhone.data && byPhone.data.length > 0) {
-          clienteEncontrado = byPhone.data[0];
-        }
-      }
-
-      if (clienteEncontrado) {
-        clienteId = clienteEncontrado.id;
-        const updatePayload: Record<string, any> = {
-          nome: clienteNome,
-          telefone: telefoneNormalizado,
-          email: emailNormalizado || null,
-          endereco_numero: enderecoNumero,
-          endereco_rua: enderecoRua,
-          endereco_complemento: enderecoApt,
-          cidade: enderecoCidade,
-          estado: enderecoEstado,
-          cep: enderecoZip,
-          last_user_agent: navigator.userAgent,
-          preferred_locale: locale,
-        };
-        if (authUserId) {
-          updatePayload.auth_user_id = authUserId;
-        }
-
-        const { error } = await supabase
-          .from('clients')
-          .update(updatePayload)
-          .eq('id', clienteId);
-        if (error) {
-          toast.error(ui.saveClientError + error.message);
-          return;
-        }
-      } else {
-        // Insere cliente se nao existe
-        const insertPayload: Record<string, any> = {
-          nome: clienteNome,
-          telefone: telefoneNormalizado,
-          email: emailNormalizado || null,
-          endereco_numero: enderecoNumero,
-          endereco_rua: enderecoRua,
-          endereco_complemento: enderecoApt,
-          cidade: enderecoCidade,
-          estado: enderecoEstado,
-          cep: enderecoZip,
+      const payload = await backendRequest<{
+        ok: boolean;
+        order: { id: number; code: string; total: number; status: number };
+        notification?: { queued?: boolean; reason?: string };
+      }>('/api/orders', {
+        method: 'POST',
+        body: JSON.stringify({
+          authUserId: authData?.user?.id || null,
+          clientName: clienteNome,
+          clientPhone: telefoneNormalizado,
+          clientEmail: emailNormalizado || null,
+          enderecoNumero,
+          enderecoRua,
+          enderecoApt,
+          enderecoCidade,
+          enderecoEstado,
+          enderecoZip,
           pais: 'USA',
-          tenant_id: 1,
-          last_user_agent: navigator.userAgent,
-          preferred_locale: locale,
-        };
-        if (authUserId) {
-          insertPayload.auth_user_id = authUserId;
-        }
-
-        const { data: novoCliente, error } = await supabase
-          .from('clients')
-          .insert([insertPayload])
-          .select('id');
-        if (error) {
-          toast.error(ui.saveClientError + error.message);
-          return;
-        }
-        clienteId = novoCliente[0].id;
-      }
-    } catch (err) {
-      toast.error(ui.unexpectedClientError);
-      return;
-    }
-
-    // Insere pedido
-    let pedidoId = null;
-    try {
-      const { data: novoPedido, error } = await supabase.from('orders').insert([
-        {
-          cliente_id: clienteId,
-          email_cliente: usuarioLogado ? (emailNormalizado || null) : null,
-          data_pedido: new Date().toISOString(),
-          status: 0,
-          valor_total: resumoCarrinho.totalValor,
-          tenant_id: 1,
           locale,
-        },
-      ]).select('id');
-      if (error) {
-        toast.error(ui.saveOrderError + error.message);
-        return;
+          tenantId: 1,
+          lastUserAgent: navigator.userAgent,
+          deliveryMode: modoEntrega,
+          deliveryDate: dataEntrega || null,
+          deliveryTime: horarioEntrega || null,
+          paymentMethod: pagamento,
+          changeFor: pagamento === 'dinheiro' ? trocoPara : null,
+          items: itensCarrinho.map((item) => ({
+            produtoId: item.produtoId,
+            nome: item.nome,
+            kg: item.kg,
+            precoKg: item.precoKg,
+            tipoCorte: item.tipoCorte,
+            observacoes: item.observacoes || '',
+            unidade: 'LB',
+          })),
+        }),
+      });
+
+      setPedidoFinalizado({ numero: String(payload.order.id), total: payload.order.total });
+      setItensCarrinho([]);
+      setCheckoutAberto(false);
+      setCarrinhoAberto(false);
+      setEtapaCheckout(1);
+      toast.success(`Pedido ${payload.order.id} ${ui.orderSuccess}`);
+
+      if (payload.notification?.queued) {
+        toast.success('Loja notificada automaticamente no WhatsApp.');
+      } else if (payload.notification?.reason) {
+        toast.info(`Pedido criado, mas o WhatsApp da loja nao foi confirmado (${payload.notification.reason}).`);
       }
-      pedidoId = novoPedido[0].id;
-    } catch (err) {
-      toast.error(ui.unexpectedOrderError);
+    } catch (err: any) {
+      toast.error(err?.message || ui.unexpectedOrderError);
       return;
     }
-
-    // Insere itens do pedido
-    try {
-      const itensPayload = itensCarrinho.map((item) => ({
-        pedido_id: pedidoId,
-        produto_id: item.produtoId,
-        quantidade: item.kg,
-        preco_unitario: item.precoKg,
-      }));
-      const { error } = await supabase.from('order_items').insert(itensPayload);
-      if (error) {
-        toast.error(ui.saveOrderItemsError + error.message);
-        return;
-      }
-    } catch (err) {
-      toast.error(ui.unexpectedOrderItemsError);
-      return;
-    }
-
-
-    setPedidoFinalizado({ numero: pedidoId, total: resumoCarrinho.totalValor });
-    setItensCarrinho([]);
-    setCheckoutAberto(false);
-    setCarrinhoAberto(false);
-    setEtapaCheckout(1);
-    toast.success(`Pedido ${pedidoId} ${ui.orderSuccess}`);
   };
 
   return (

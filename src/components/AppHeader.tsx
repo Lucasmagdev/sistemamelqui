@@ -14,7 +14,11 @@ const pageTitleByPath: Record<string, TranslationKey> = {
   '/admin/pedidos': 'nav.orders',
   '/admin/pedidos/novo': 'common.newOrder',
   '/admin/alertas': 'page.alerts',
+  '/admin/vendas': 'nav.sales',
+  '/admin/financeiro': 'nav.finance',
+  '/admin/funcionarios': 'nav.employees',
   '/admin/relatorios': 'nav.reports',
+  '/admin/assistente': 'nav.assistant',
   '/admin/configuracoes': 'page.settings',
 };
 

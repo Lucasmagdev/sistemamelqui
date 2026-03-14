@@ -9,6 +9,10 @@ import {
   ShoppingCart,
   BarChart3,
   Users,
+  Wallet,
+  Store,
+  Bot,
+  UserRoundCog,
 } from 'lucide-react';
 
 type NavItem = {
@@ -23,7 +27,11 @@ const navItems: NavItem[] = [
   { titleKey: 'nav.orders', url: '/admin/pedidos', icon: ShoppingCart },
   { titleKey: 'nav.customers', url: '/admin/clientes', icon: Users },
   { titleKey: 'nav.products', url: '/admin/produtos', icon: Package },
+  { titleKey: 'nav.sales', url: '/admin/vendas', icon: Store },
+  { titleKey: 'nav.finance', url: '/admin/financeiro', icon: Wallet },
+  { titleKey: 'nav.employees', url: '/admin/funcionarios', icon: UserRoundCog },
   { titleKey: 'nav.reports', url: '/admin/relatorios', icon: BarChart3 },
+  { titleKey: 'nav.assistant', url: '/admin/assistente', icon: Bot },
 ];
 
 export default function AppSidebar() {

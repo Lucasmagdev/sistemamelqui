@@ -1,5 +1,5 @@
 import { useLocation, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, Layers, ShoppingCart, Users, Package } from 'lucide-react';
+import { LayoutDashboard, ShoppingCart, Store, Wallet, BarChart3 } from 'lucide-react';
 import { useI18n } from '@/contexts/I18nContext';
 import type { TranslationKey } from '@/i18n/messages';
 
@@ -12,9 +12,9 @@ type DockItem = {
 const dockItems: DockItem[] = [
   { labelKey: 'dock.home', path: '/admin', icon: LayoutDashboard },
   { labelKey: 'nav.orders', path: '/admin/pedidos', icon: ShoppingCart },
-  { labelKey: 'nav.customers', path: '/admin/clientes', icon: Users },
-  { labelKey: 'nav.products', path: '/admin/produtos', icon: Package },
-  { labelKey: 'nav.batches', path: '/admin/estoque', icon: Layers },
+  { labelKey: 'nav.sales', path: '/admin/vendas', icon: Store },
+  { labelKey: 'nav.finance', path: '/admin/financeiro', icon: Wallet },
+  { labelKey: 'nav.reports', path: '/admin/relatorios', icon: BarChart3 },
 ];
 
 export default function AdminBottomDock() {

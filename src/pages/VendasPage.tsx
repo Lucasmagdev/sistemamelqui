@@ -4,7 +4,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
 import { toast } from 'sonner';
-import { Plus, Printer, Trash2 } from 'lucide-react';
+import { AlertTriangle, Download, Plus, Printer, Trash2 } from 'lucide-react';
+import { jsPDF } from 'jspdf';
 
 const today = new Date().toISOString().slice(0, 10);
 const monthAgo = new Date(Date.now() - 29 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
@@ -35,6 +36,9 @@ const paymentMethodLabel = (value: string | undefined | null) => {
       return 'Nao informado';
   }
 };
+
+const quantityLabel = (value: number | string | null | undefined, unit: string | undefined | null) =>
+  `${Number(value || 0).toLocaleString('pt-BR', { maximumFractionDigits: 3 })} ${normalizeUnit(unit)}`;
 
 type ProductOption = {
   id: number;
@@ -119,6 +123,7 @@ export default function VendasPage() {
     () => new Map(products.map((product) => [String(product.id), product])),
     [products],
   );
+  const unavailableProducts = useMemo(() => products.filter((product) => !product.stockEnabled), [products]);
 
   const saleTotal = useMemo(
     () =>
@@ -142,14 +147,19 @@ export default function VendasPage() {
       setSales(salesPayload.sales || []);
       setReportSummary(reportPayload.report?.summary || null);
       setProducts(
-        (stockPayload.rows || []).map((row) => ({
-          id: Number(row.product_id),
-          name: row.product_name,
-          stockUnit: normalizeUnit(row.stock_unit || 'UN'),
-          salePrice: Number(row.sale_price || 0),
-          saldoQty: Number(row.saldo_qty || 0),
-          stockEnabled: Boolean(row.stock_enabled),
-        })),
+        (stockPayload.rows || [])
+          .map((row) => ({
+            id: Number(row.product_id),
+            name: row.product_name,
+            stockUnit: normalizeUnit(row.stock_unit || 'UN'),
+            salePrice: Number(row.sale_price || 0),
+            saldoQty: Number(row.saldo_qty || 0),
+            stockEnabled: Boolean(row.stock_enabled),
+          }))
+          .sort((a, b) => {
+            if (a.stockEnabled !== b.stockEnabled) return a.stockEnabled ? -1 : 1;
+            return a.name.localeCompare(b.name, 'pt-BR');
+          }),
       );
     } catch (error: any) {
       toast.error(error.message || 'Erro ao carregar conciliacao de vendas');
@@ -203,10 +213,86 @@ export default function VendasPage() {
     receiptWindow.print();
   };
 
+  const downloadReceiptPdf = (sale: any) => {
+    const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const left = 40;
+    const right = pageWidth - 40;
+    let y = 48;
+
+    const ensureSpace = (required = 20) => {
+      if (y + required <= pageHeight - 48) return;
+      doc.addPage();
+      y = 48;
+    };
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(18);
+    doc.text('Comprovante interno de venda presencial', left, y);
+    y += 24;
+
+    doc.setFontSize(11);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`Venda #${sale.id}`, left, y);
+    y += 18;
+    doc.text(`Data: ${new Date(sale.sale_datetime).toLocaleString('pt-BR')}`, left, y);
+    y += 16;
+    doc.text(`Pagamento: ${paymentMethodLabel(sale.payment_method)}`, left, y);
+    y += 16;
+    doc.text(`Responsavel: ${sale.created_by || '-'}`, left, y);
+    y += 16;
+
+    const noteLines = doc.splitTextToSize(`Observacoes: ${sale.notes || '-'}`, right - left);
+    doc.text(noteLines, left, y);
+    y += noteLines.length * 14 + 12;
+
+    doc.setDrawColor(210, 210, 210);
+    doc.line(left, y, right, y);
+    y += 18;
+
+    doc.setFont('helvetica', 'bold');
+    doc.text('Produto', left, y);
+    doc.text('Qtd', 300, y);
+    doc.text('Unitario', 390, y);
+    doc.text('Total', right, y, { align: 'right' });
+    y += 12;
+    doc.line(left, y, right, y);
+    y += 16;
+
+    doc.setFont('helvetica', 'normal');
+    for (const item of sale.items || []) {
+      ensureSpace(48);
+      const productLines = doc.splitTextToSize(item.product_name || String(item.product_id), 220);
+      doc.text(productLines, left, y);
+      doc.text(quantityLabel(item.quantity, item.unit), 300, y);
+      doc.text(money(item.unit_price), 390, y);
+      doc.text(money(item.total_price), right, y, { align: 'right' });
+      y += Math.max(productLines.length * 14, 18) + 10;
+    }
+
+    y += 8;
+    doc.line(left, y, right, y);
+    y += 22;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(15);
+    doc.text(`Total: ${money(sale.total_amount)}`, right, y, { align: 'right' });
+
+    doc.save(`comprovante-venda-${sale.id}.pdf`);
+  };
+
   const submitSale = async (event: any) => {
     event.preventDefault();
     setSaving(true);
     try {
+      const invalidProduct = draftItems
+        .map((item) => productsMap.get(item.productId))
+        .find((product) => product && !product.stockEnabled);
+
+      if (invalidProduct) {
+        throw new Error(`O produto ${invalidProduct.name} esta sem controle de estoque ativo. Ative no estoque antes de registrar a venda.`);
+      }
+
       const payload = await backendRequest<{ sale: any }>('/api/store-sales', {
         method: 'POST',
         body: JSON.stringify({
@@ -289,6 +375,21 @@ export default function VendasPage() {
           </div>
 
           <div className="p-5">
+            {unavailableProducts.length > 0 ? (
+              <div className="mb-4 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 text-amber-300" />
+                  <div>
+                    <div className="text-sm font-semibold text-amber-100">
+                      {unavailableProducts.length} produto(s) indisponivel(is) para venda presencial com baixa
+                    </div>
+                    <div className="mt-1 text-xs leading-5 text-amber-200/80">
+                      Esses produtos aparecem bloqueados na selecao porque ainda estao sem controle de estoque ativo.
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : null}
             <div className="grid gap-3 md:grid-cols-2">
               <div>
                 <label className="mb-1.5 block text-sm font-medium text-zinc-300">Data e hora</label>
@@ -346,8 +447,8 @@ export default function VendasPage() {
                         >
                           <option value="">Selecione</option>
                           {products.map((productOption) => (
-                            <option key={productOption.id} value={productOption.id}>
-                              {productOption.name}
+                            <option key={productOption.id} value={productOption.id} disabled={!productOption.stockEnabled}>
+                              {productOption.name}{!productOption.stockEnabled ? ' - sem controle de estoque' : ''}
                             </option>
                           ))}
                         </select>
@@ -362,6 +463,11 @@ export default function VendasPage() {
                             <span className="rounded-full border border-border/70 px-2 py-1">
                               Venda: {allowedUnits.join(' ou ')}
                             </span>
+                          </div>
+                        ) : null}
+                        {product && !product.stockEnabled ? (
+                          <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-100">
+                            Produto bloqueado para venda presencial com baixa. Ative o controle de estoque na aba de estoque antes de usar aqui.
                           </div>
                         ) : null}
                       </div>
@@ -470,9 +576,13 @@ export default function VendasPage() {
                         <div className="text-xs uppercase tracking-wide text-muted-foreground">Total</div>
                         <div className="text-lg font-bold text-yellow-400">{money(sale.total_amount)}</div>
                       </div>
+                      <Button type="button" variant="outline" onClick={() => downloadReceiptPdf(sale)}>
+                        <Download className="mr-2 h-4 w-4" />
+                        PDF
+                      </Button>
                       <Button type="button" variant="outline" onClick={() => printReceipt(sale)}>
                         <Printer className="mr-2 h-4 w-4" />
-                        Comprovante
+                        Imprimir
                       </Button>
                     </div>
                   </div>

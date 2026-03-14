@@ -1876,6 +1876,44 @@ async function upsertClientFromOrderPayload(payload) {
   return data;
 }
 
+function isMissingColumnInSchemaCache(error, columnName) {
+  const message = String(error?.message || "");
+  return message.includes(`Could not find the '${columnName}' column`);
+}
+
+async function insertOrderWithSchemaFallback(orderPayload) {
+  let payload = { ...orderPayload };
+
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const { data, error } = await supabase.from("orders").insert([payload]).select("*").single();
+    if (!error && data) return data;
+
+    if (!error) {
+      throw createHttpError(500, "Erro ao criar pedido.");
+    }
+
+    const optionalColumns = [
+      "source",
+      "payment_method",
+      "change_for",
+      "delivery_mode",
+      "delivery_date",
+      "delivery_time",
+      "notes",
+      "email_cliente",
+    ];
+
+    const missingColumn = optionalColumns.find((column) => isMissingColumnInSchemaCache(error, column));
+    if (!missingColumn) {
+      throw createHttpError(500, "Erro ao criar pedido.", error.message);
+    }
+
+    delete payload[missingColumn];
+  }
+
+  throw createHttpError(500, "Erro ao criar pedido.", "Nao foi possivel compatibilizar colunas opcionais de orders.");
+}
+
 async function buildOperationalReport(rangeQuery = {}) {
   const range = resolveRangeFromQuery(rangeQuery);
 
@@ -2651,10 +2689,7 @@ app.post("/api/orders", async (req, res) => {
       notes: req.body?.notes || req.body?.observacoesGerais || null,
     };
 
-    const { data: order, error: orderError } = await supabase.from("orders").insert([orderPayload]).select("*").single();
-    if (orderError || !order) {
-      return res.status(500).json({ error: "Erro ao criar pedido.", detail: orderError?.message || null });
-    }
+    const order = await insertOrderWithSchemaFallback(orderPayload);
 
     const itemPayload = normalizedItems.map((item) => ({
       pedido_id: order.id,

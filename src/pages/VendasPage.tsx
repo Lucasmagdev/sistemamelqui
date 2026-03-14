@@ -3,6 +3,7 @@ import { backendRequest } from '@/lib/backendClient';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
+import { useTenant } from '@/contexts/TenantContext';
 import { toast } from 'sonner';
 import { AlertTriangle, Download, Plus, Printer, Trash2 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
@@ -39,6 +40,31 @@ const paymentMethodLabel = (value: string | undefined | null) => {
 
 const quantityLabel = (value: number | string | null | undefined, unit: string | undefined | null) =>
   `${Number(value || 0).toLocaleString('pt-BR', { maximumFractionDigits: 3 })} ${normalizeUnit(unit)}`;
+
+const blobToDataUrl = (blob: Blob) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('Falha ao converter logo para data URL.'));
+    reader.readAsDataURL(blob);
+  });
+
+const hexToRgb = (hex: string) => {
+  const normalized = String(hex || '')
+    .replace('#', '')
+    .trim();
+
+  if (normalized.length !== 6) return { r: 212, g: 175, b: 55 };
+
+  const value = Number.parseInt(normalized, 16);
+  if (!Number.isFinite(value)) return { r: 212, g: 175, b: 55 };
+
+  return {
+    r: (value >> 16) & 255,
+    g: (value >> 8) & 255,
+    b: value & 255,
+  };
+};
 
 type ProductOption = {
   id: number;
@@ -107,6 +133,7 @@ const buildReceiptHtml = (sale: any) => {
 };
 
 export default function VendasPage() {
+  const { config } = useTenant();
   const [start, setStart] = useState(monthAgo);
   const [end, setEnd] = useState(today);
   const [loading, setLoading] = useState(true);
@@ -213,70 +240,145 @@ export default function VendasPage() {
     receiptWindow.print();
   };
 
-  const downloadReceiptPdf = (sale: any) => {
+  const downloadReceiptPdf = async (sale: any) => {
     const doc = new jsPDF({ unit: 'pt', format: 'a4' });
     const pageWidth = doc.internal.pageSize.getWidth();
     const pageHeight = doc.internal.pageSize.getHeight();
-    const left = 40;
-    const right = pageWidth - 40;
-    let y = 48;
+    const left = 42;
+    const right = pageWidth - 42;
+    const { r, g, b } = hexToRgb(config.corPrimaria);
+    let y = 42;
+
+    const loadLogoDataUrl = async () => {
+      if (!config.logoUrl) return null;
+
+      try {
+        const logoUrl = config.logoUrl.startsWith('http')
+          ? config.logoUrl
+          : `${window.location.origin}${config.logoUrl}`;
+        const response = await fetch(logoUrl);
+        if (!response.ok) return null;
+        const blob = await response.blob();
+        return await blobToDataUrl(blob);
+      } catch {
+        return null;
+      }
+    };
 
     const ensureSpace = (required = 20) => {
       if (y + required <= pageHeight - 48) return;
       doc.addPage();
-      y = 48;
+      y = 42;
     };
 
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(18);
-    doc.text('Comprovante interno de venda presencial', left, y);
-    y += 24;
+    doc.setFillColor(16, 16, 16);
+    doc.roundedRect(left, y, right - left, 118, 16, 16, 'F');
 
+    const logoDataUrl = await loadLogoDataUrl();
+    if (logoDataUrl) {
+      try {
+        doc.addImage(logoDataUrl, 'PNG', left + 18, y + 18, 88, 54, undefined, 'FAST');
+      } catch {
+        // segue sem logo se o formato falhar
+      }
+    }
+
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(21);
+    doc.text(config.nomeEmpresa || 'Sabor Imperial', logoDataUrl ? left + 122 : left + 20, y + 34);
+    doc.setFontSize(10);
+    doc.setTextColor(214, 214, 214);
+    doc.text('Comprovante interno de venda presencial', logoDataUrl ? left + 122 : left + 20, y + 54);
+
+    doc.setFillColor(r, g, b);
+    doc.roundedRect(right - 138, y + 18, 120, 44, 12, 12, 'F');
+    doc.setTextColor(20, 20, 20);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.text('TOTAL DA VENDA', right - 78, y + 35, { align: 'center' });
+    doc.setFontSize(16);
+    doc.text(money(sale.total_amount), right - 78, y + 53, { align: 'center' });
+
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(238, 238, 238);
+    doc.setFontSize(10);
+    doc.text(`Venda #${sale.id}`, left + 20, y + 84);
+    doc.text(`Data: ${new Date(sale.sale_datetime).toLocaleString('pt-BR')}`, left + 20, y + 100);
+    doc.text(`Pagamento: ${paymentMethodLabel(sale.payment_method)}`, left + 220, y + 84);
+    doc.text(`Responsavel: ${sale.created_by || '-'}`, left + 220, y + 100);
+
+    y += 140;
+
+    doc.setFillColor(250, 248, 240);
+    doc.roundedRect(left, y, right - left, 84, 14, 14, 'F');
+    doc.setTextColor(28, 28, 28);
+    doc.setFont('helvetica', 'bold');
     doc.setFontSize(11);
+    doc.text('Resumo da venda', left + 18, y + 24);
     doc.setFont('helvetica', 'normal');
-    doc.text(`Venda #${sale.id}`, left, y);
-    y += 18;
-    doc.text(`Data: ${new Date(sale.sale_datetime).toLocaleString('pt-BR')}`, left, y);
-    y += 16;
-    doc.text(`Pagamento: ${paymentMethodLabel(sale.payment_method)}`, left, y);
-    y += 16;
-    doc.text(`Responsavel: ${sale.created_by || '-'}`, left, y);
-    y += 16;
+    doc.setFontSize(10);
+    doc.text(`Itens: ${(sale.items || []).length}`, left + 18, y + 44);
+    doc.text(`Pagamento: ${paymentMethodLabel(sale.payment_method)}`, left + 18, y + 60);
+    doc.text(`Origem: Balcao / loja fisica`, left + 240, y + 44);
+    doc.text(`Documento: interno`, left + 240, y + 60);
+    y += 102;
 
-    const noteLines = doc.splitTextToSize(`Observacoes: ${sale.notes || '-'}`, right - left);
-    doc.text(noteLines, left, y);
-    y += noteLines.length * 14 + 12;
+    if (sale.notes) {
+      const noteLines = doc.splitTextToSize(`Observacoes: ${sale.notes}`, right - left - 24);
+      doc.setFillColor(255, 251, 235);
+      doc.roundedRect(left, y, right - left, Math.max(48, noteLines.length * 14 + 22), 12, 12, 'F');
+      doc.setTextColor(75, 55, 16);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Observacoes', left + 14, y + 18);
+      doc.setFont('helvetica', 'normal');
+      doc.text(noteLines, left + 14, y + 36);
+      y += Math.max(48, noteLines.length * 14 + 22) + 16;
+    }
 
-    doc.setDrawColor(210, 210, 210);
-    doc.line(left, y, right, y);
-    y += 18;
-
+    doc.setFillColor(r, g, b);
+    doc.roundedRect(left, y, right - left, 28, 8, 8, 'F');
+    doc.setTextColor(20, 20, 20);
     doc.setFont('helvetica', 'bold');
-    doc.text('Produto', left, y);
-    doc.text('Qtd', 300, y);
-    doc.text('Unitario', 390, y);
-    doc.text('Total', right, y, { align: 'right' });
-    y += 12;
-    doc.line(left, y, right, y);
-    y += 16;
+    doc.setFontSize(10);
+    doc.text('PRODUTO', left + 12, y + 18);
+    doc.text('QTD', 300, y + 18);
+    doc.text('UNITARIO', 390, y + 18);
+    doc.text('TOTAL', right - 12, y + 18, { align: 'right' });
+    y += 42;
 
     doc.setFont('helvetica', 'normal');
+    doc.setTextColor(30, 30, 30);
+    doc.setFontSize(10);
     for (const item of sale.items || []) {
-      ensureSpace(48);
+      ensureSpace(64);
       const productLines = doc.splitTextToSize(item.product_name || String(item.product_id), 220);
-      doc.text(productLines, left, y);
+      const rowHeight = Math.max(productLines.length * 14, 18) + 14;
+      doc.setFillColor(248, 248, 248);
+      doc.roundedRect(left, y - 12, right - left, rowHeight, 8, 8, 'F');
+      doc.text(productLines, left + 12, y);
       doc.text(quantityLabel(item.quantity, item.unit), 300, y);
       doc.text(money(item.unit_price), 390, y);
-      doc.text(money(item.total_price), right, y, { align: 'right' });
-      y += Math.max(productLines.length * 14, 18) + 10;
+      doc.text(money(item.total_price), right - 12, y, { align: 'right' });
+      y += rowHeight + 6;
     }
 
     y += 8;
-    doc.line(left, y, right, y);
-    y += 22;
+    ensureSpace(64);
+    doc.setFillColor(16, 16, 16);
+    doc.roundedRect(left, y, right - left, 54, 14, 14, 'F');
+    doc.setTextColor(255, 255, 255);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(15);
-    doc.text(`Total: ${money(sale.total_amount)}`, right, y, { align: 'right' });
+    doc.text('Total final', left + 16, y + 23);
+    doc.setTextColor(r, g, b);
+    doc.setFontSize(18);
+    doc.text(money(sale.total_amount), right - 16, y + 24, { align: 'right' });
+
+    doc.setTextColor(120, 120, 120);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.text('Documento interno gerado pelo painel administrativo.', left, pageHeight - 26);
 
     doc.save(`comprovante-venda-${sale.id}.pdf`);
   };

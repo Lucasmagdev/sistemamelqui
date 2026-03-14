@@ -1021,6 +1021,166 @@ async function applyOrderStockReversal(orderId, reason = "manual_status_reversal
   };
 }
 
+async function applyStoreSaleStockExit(storeSaleId, saleItems, reason = "store_sale_created") {
+  const sourceId = `store_sale:${storeSaleId}`;
+
+  const { data: existing } = await supabase
+    .from("stock_movements")
+    .select("id")
+    .eq("source_type", "manual")
+    .eq("source_id", sourceId)
+    .eq("tipo", "exit")
+    .limit(1);
+
+  if ((existing || []).length > 0) {
+    return { applied: false, reason: "already_applied", changedProducts: [] };
+  }
+
+  const aggregated = new Map();
+  for (const item of saleItems || []) {
+    const productId = Number(item.product_id || item.productId);
+    const quantity = parseNumber(item.quantity, 0);
+    const unit = normalizeStockUnit(item.unit, "UN");
+    if (!productId || quantity <= 0) continue;
+
+    const current = aggregated.get(productId) || { quantity: 0, unit };
+    current.quantity += quantity;
+    current.unit = unit;
+    aggregated.set(productId, current);
+  }
+
+  const productIds = Array.from(aggregated.keys());
+  const productMap = await fetchProductsByIds(productIds);
+  const requiredByProduct = [];
+
+  for (const productId of productIds) {
+    const product = productMap.get(productId);
+    if (!product) {
+      throw createHttpError(404, `Produto ${productId} nao encontrado para a venda presencial.`);
+    }
+
+    if (!product.stock_enabled) {
+      throw createHttpError(409, `Produto ${product.nome || productId} sem controle de estoque ativo.`);
+    }
+
+    const entry = aggregated.get(productId);
+    const qtyInStockUnit = roundQty(convertQuantity(entry.quantity, entry.unit, product.stock_unit), 3);
+
+    requiredByProduct.push({
+      productId,
+      productName: product.nome || `Produto ${productId}`,
+      unit: product.stock_unit,
+      required: qtyInStockUnit,
+    });
+  }
+
+  const shortages = [];
+  const consumptionPlan = [];
+
+  for (const required of requiredByProduct) {
+    const { data: batchesData, error: batchesError } = await supabase
+      .from("batches")
+      .select("id, produto_id, quantidade_disponivel, unidade, data_validade")
+      .eq("produto_id", required.productId)
+      .gt("quantidade_disponivel", 0)
+      .order("data_validade", { ascending: true, nullsFirst: false })
+      .order("id", { ascending: true });
+
+    if (batchesError) throw createHttpError(500, "Erro ao buscar lotes para baixa da venda presencial.", batchesError.message);
+
+    let remaining = required.required;
+    const productPlan = [];
+
+    for (const batch of batchesData || []) {
+      if (remaining <= 0) break;
+
+      const batchUnit = normalizeStockUnit(batch.unidade || required.unit, required.unit);
+      const availableInBatchUnit = parseNumber(batch.quantidade_disponivel, 0);
+      const availableInStockUnit = convertQuantity(availableInBatchUnit, batchUnit, required.unit);
+      const consumeInStockUnit = Math.min(availableInStockUnit, remaining);
+      const consumeInBatchUnit = roundQty(convertQuantity(consumeInStockUnit, required.unit, batchUnit), 3);
+
+      if (consumeInBatchUnit <= 0) continue;
+
+      productPlan.push({
+        batchId: Number(batch.id),
+        productId: required.productId,
+        productUnit: required.unit,
+        consumeInBatchUnit,
+        consumeInStockUnit: roundQty(consumeInStockUnit, 3),
+        availableBefore: availableInBatchUnit,
+      });
+
+      remaining = roundQty(remaining - consumeInStockUnit, 6);
+    }
+
+    if (remaining > 0) {
+      shortages.push({
+        product_id: required.productId,
+        product_name: required.productName,
+        required_qty: required.required,
+        available_qty: roundQty(required.required - remaining, 3),
+        unit: required.unit,
+      });
+      continue;
+    }
+
+    consumptionPlan.push(...productPlan);
+  }
+
+  if (shortages.length > 0) {
+    throw createHttpError(409, "Estoque insuficiente para registrar a venda presencial.", { shortages });
+  }
+
+  const changedProducts = new Set();
+
+  for (const step of consumptionPlan) {
+    const nextQty = roundQty(step.availableBefore - step.consumeInBatchUnit, 3);
+
+    const { error: updateBatchError } = await supabase
+      .from("batches")
+      .update({ quantidade_disponivel: nextQty })
+      .eq("id", step.batchId);
+
+    if (updateBatchError) throw createHttpError(500, "Erro ao atualizar saldo do lote da venda presencial.", updateBatchError.message);
+
+    const { error: movementError } = await supabase
+      .from("stock_movements")
+      .insert([
+        {
+          tipo: "exit",
+          produto_id: step.productId,
+          batch_id: step.batchId,
+          qty: step.consumeInStockUnit,
+          unit: step.productUnit,
+          source_type: "manual",
+          source_id: sourceId,
+          metadata: { reason, origin: "store_sale" },
+        },
+      ]);
+
+    if (movementError) {
+      throw createHttpError(500, "Erro ao registrar movimentacao de estoque da venda presencial.", movementError.message);
+    }
+
+    changedProducts.add(step.productId);
+  }
+
+  await syncLowStockAlerts(Array.from(changedProducts));
+
+  return {
+    applied: true,
+    reason: "exit_created",
+    changedProducts: Array.from(changedProducts),
+  };
+}
+
+function isMissingRelationError(error, relationName) {
+  const message = String(error?.message || "");
+  return message.includes(`Could not find the table 'public.${relationName}'`) ||
+    message.includes(`relation \"${relationName}\" does not exist`);
+}
+
 async function ensureInvoiceStockMovements(invoiceId) {
   const sourceId = String(invoiceId);
   const [{ data: batches, error: batchesError }, { data: movements, error: movementsError }] = await Promise.all([
@@ -2825,11 +2985,45 @@ app.get("/api/store-sales", async (req, res) => {
       .order("sale_datetime", { ascending: false });
 
     if (error) {
+      if (isMissingRelationError(error, "store_sales")) {
+        return res.status(500).json({
+          error: "Tabela store_sales ausente.",
+          detail: "Execute o SQL banco de dados/fase8_vendas_presenciais_itemizadas.sql",
+        });
+      }
       return res.status(500).json({ error: "Erro ao carregar vendas presenciais.", detail: error.message });
     }
 
+    const saleIds = (data || []).map((row) => Number(row.id)).filter(Boolean);
+    const { data: itemsData, error: itemsError } = saleIds.length
+      ? await supabase
+          .from("store_sale_items")
+          .select("id, store_sale_id, product_id, quantity, unit, unit_price, total_price")
+          .in("store_sale_id", saleIds)
+      : { data: [], error: null };
+
+    if (itemsError && !isMissingRelationError(itemsError, "store_sale_items")) {
+      return res.status(500).json({ error: "Erro ao carregar itens das vendas presenciais.", detail: itemsError.message });
+    }
+
+    const productIds = Array.from(new Set((itemsData || []).map((item) => Number(item.product_id)).filter(Boolean)));
+    const { data: productsData } = productIds.length
+      ? await supabase.from("products").select("id, nome").in("id", productIds)
+      : { data: [] };
+    const productsMap = new Map((productsData || []).map((product) => [Number(product.id), product.nome]));
+
+    const sales = (data || []).map((sale) => ({
+      ...sale,
+      items: (itemsData || [])
+        .filter((item) => Number(item.store_sale_id) === Number(sale.id))
+        .map((item) => ({
+          ...item,
+          product_name: productsMap.get(Number(item.product_id)) || `Produto ${item.product_id}`,
+        })),
+    }));
+
     const total = roundQty((data || []).reduce((acc, row) => acc + parseNumber(row.total_amount, 0), 0), 2);
-    return res.json({ ok: true, sales: data || [], summary: { count: (data || []).length, total } });
+    return res.json({ ok: true, sales, summary: { count: (data || []).length, total } });
   } catch (error) {
     return res.status(500).json({ error: error?.message || "Erro interno ao carregar vendas presenciais." });
   }
@@ -2846,6 +3040,12 @@ app.get("/api/store-sales/summary", async (req, res) => {
       .order("sale_datetime", { ascending: true });
 
     if (error) {
+      if (isMissingRelationError(error, "store_sales")) {
+        return res.status(500).json({
+          error: "Tabela store_sales ausente.",
+          detail: "Execute o SQL banco de dados/fase8_vendas_presenciais_itemizadas.sql",
+        });
+      }
       return res.status(500).json({ error: "Erro ao consolidar vendas presenciais.", detail: error.message });
     }
 
@@ -2868,15 +3068,36 @@ app.get("/api/store-sales/summary", async (req, res) => {
 
 app.post("/api/store-sales", async (req, res) => {
   try {
-    const totalAmount = parseLooseNumber(req.body?.totalAmount, NaN);
-    if (!Number.isFinite(totalAmount) || totalAmount < 0) {
-      return res.status(400).json({ error: "totalAmount invalido." });
+    const rawItems = Array.isArray(req.body?.items) ? req.body.items : [];
+    if (!rawItems.length) {
+      return res.status(400).json({ error: "Informe ao menos um produto na venda presencial." });
     }
+
+    const items = rawItems.map((item, index) => {
+      const productId = Number(item?.productId || item?.product_id);
+      const quantity = parseLooseNumber(item?.quantity, NaN);
+      const unitPrice = parseLooseNumber(item?.unitPrice || item?.unit_price || item?.price, NaN);
+      const unit = normalizeStockUnit(item?.unit || "UN", "UN");
+
+      if (!productId || !Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(unitPrice) || unitPrice < 0) {
+        throw createHttpError(400, `Item ${index + 1} invalido na venda presencial.`);
+      }
+
+      return {
+        product_id: productId,
+        quantity: roundQty(quantity, 3),
+        unit,
+        unit_price: roundQty(unitPrice, 2),
+        total_price: roundQty(quantity * unitPrice, 2),
+      };
+    });
+
+    const totalAmount = roundQty(items.reduce((acc, item) => acc + parseNumber(item.total_price, 0), 0), 2);
 
     const payload = {
       origin: "store",
       sale_datetime: normalizeDateInput(req.body?.saleDatetime || new Date().toISOString(), new Date().toISOString()),
-      total_amount: roundQty(totalAmount, 2),
+      total_amount: totalAmount,
       payment_method: String(req.body?.paymentMethod || "").trim() || "nao_informado",
       notes: req.body?.notes || null,
       created_by: req.body?.createdBy || null,
@@ -2884,12 +3105,54 @@ app.post("/api/store-sales", async (req, res) => {
 
     const { data, error } = await supabase.from("store_sales").insert([payload]).select("*").single();
     if (error) {
+      if (isMissingRelationError(error, "store_sales")) {
+        return res.status(500).json({
+          error: "Tabela store_sales ausente.",
+          detail: "Execute o SQL banco de dados/fase8_vendas_presenciais_itemizadas.sql",
+        });
+      }
       return res.status(500).json({ error: "Erro ao registrar venda presencial.", detail: error.message });
     }
 
-    return res.status(201).json({ ok: true, sale: data });
+    const itemRows = items.map((item) => ({
+      store_sale_id: data.id,
+      product_id: item.product_id,
+      quantity: item.quantity,
+      unit: item.unit,
+      unit_price: item.unit_price,
+      total_price: item.total_price,
+    }));
+
+    const { data: insertedItems, error: itemsError } = await supabase
+      .from("store_sale_items")
+      .insert(itemRows)
+      .select("*");
+
+    if (itemsError) {
+      await supabase.from("store_sales").delete().eq("id", data.id);
+      if (isMissingRelationError(itemsError, "store_sale_items")) {
+        return res.status(500).json({
+          error: "Tabela store_sale_items ausente.",
+          detail: "Execute o SQL banco de dados/fase8_vendas_presenciais_itemizadas.sql",
+        });
+      }
+      return res.status(500).json({ error: "Erro ao registrar itens da venda presencial.", detail: itemsError.message });
+    }
+
+    try {
+      await applyStoreSaleStockExit(data.id, insertedItems || []);
+    } catch (stockError) {
+      await supabase.from("store_sale_items").delete().eq("store_sale_id", data.id);
+      await supabase.from("store_sales").delete().eq("id", data.id);
+      throw stockError;
+    }
+
+    return res.status(201).json({ ok: true, sale: { ...data, items: insertedItems || [] } });
   } catch (error) {
-    return res.status(500).json({ error: error?.message || "Erro interno ao registrar venda presencial." });
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro interno ao registrar venda presencial.",
+      detail: error?.detail || null,
+    });
   }
 });
 

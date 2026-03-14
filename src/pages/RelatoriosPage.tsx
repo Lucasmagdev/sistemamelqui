@@ -76,7 +76,7 @@ export default function RelatoriosPage() {
       <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-foreground">Relatorios operacionais</h1>
-          <p className="text-sm text-muted-foreground">Vendas, pedidos, estoque, despesas e pagamentos com dados reais</p>
+          <p className="text-sm text-muted-foreground">Consolidado de delivery concluido, presencial registrado, estoque, despesas e pagamentos</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <Input type="date" value={start} onChange={(e) => setStart(e.target.value)} className="w-[170px]" />
@@ -87,8 +87,11 @@ export default function RelatoriosPage() {
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <Card className="p-5">
-          <div className="text-sm text-muted-foreground">Vendas totais</div>
+          <div className="text-sm text-muted-foreground">Total conciliado</div>
           <div className="mt-2 text-3xl font-bold text-primary">{money(report?.summary?.total_sales)}</div>
+          <div className="mt-2 text-xs text-muted-foreground">
+            Delivery concluido + presencial registrado
+          </div>
         </Card>
         <Card className="p-5">
           <div className="text-sm text-muted-foreground">Despesas</div>
@@ -110,15 +113,15 @@ export default function RelatoriosPage() {
         <>
           <div className="grid gap-6 lg:grid-cols-2">
             <Card className="p-5">
-              <h3 className="mb-4 text-sm font-semibold text-foreground">Vendas por dia</h3>
+              <h3 className="mb-4 text-sm font-semibold text-foreground">Vendas conciliadas por dia</h3>
               <ResponsiveContainer width="100%" height={280}>
                 <BarChart data={report.timeline || []}>
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
                   <XAxis dataKey="date" tick={{ fontSize: 11 }} />
                   <YAxis tick={{ fontSize: 11 }} />
                   <Tooltip formatter={(value: number) => money(value)} />
-                  <Bar dataKey="delivery" name="Delivery" fill="#eab308" radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="store" name="Loja" fill="#22c55e" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="delivery" name="Delivery concluido" fill="#eab308" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="store" name="Presencial registrado" fill="#22c55e" radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </Card>

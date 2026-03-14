@@ -8,14 +8,38 @@ import { Plus, Printer, Trash2 } from 'lucide-react';
 
 const today = new Date().toISOString().slice(0, 10);
 const monthAgo = new Date(Date.now() - 29 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+type Unit = 'UN' | 'LB' | 'KG';
 
 const money = (value: number | null | undefined) =>
   Number(value || 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 
+const normalizeUnit = (value: string | undefined | null): Unit => {
+  const raw = String(value || '').toUpperCase();
+  if (raw === 'KG') return 'KG';
+  if (raw === 'UN') return 'UN';
+  return 'LB';
+};
+
+const getAllowedSaleUnits = (stockUnit: string | undefined | null): Unit[] =>
+  normalizeUnit(stockUnit) === 'UN' ? ['UN'] : ['LB', 'KG'];
+
+const paymentMethodLabel = (value: string | undefined | null) => {
+  switch (value) {
+    case 'pix':
+      return 'Pix';
+    case 'cartao':
+      return 'Cartao';
+    case 'dinheiro':
+      return 'Dinheiro';
+    default:
+      return 'Nao informado';
+  }
+};
+
 type ProductOption = {
   id: number;
   name: string;
-  stockUnit: string;
+  stockUnit: Unit;
   salePrice: number;
   saldoQty: number;
   stockEnabled: boolean;
@@ -25,7 +49,7 @@ type SaleDraftItem = {
   productId: string;
   quantity: string;
   unitPrice: string;
-  unit: string;
+  unit: Unit;
 };
 
 const createDraftItem = (): SaleDraftItem => ({
@@ -58,7 +82,7 @@ const buildReceiptHtml = (sale: any) => {
         <h1 style="margin-bottom:4px;">Comprovante interno de venda presencial</h1>
         <p style="margin-top:0;color:#555;">Venda #${sale.id}</p>
         <p><strong>Data:</strong> ${new Date(sale.sale_datetime).toLocaleString('pt-BR')}</p>
-        <p><strong>Pagamento:</strong> ${sale.payment_method}</p>
+        <p><strong>Pagamento:</strong> ${paymentMethodLabel(sale.payment_method)}</p>
         <p><strong>Responsavel:</strong> ${sale.created_by || '-'}</p>
         <p><strong>Observacoes:</strong> ${sale.notes || '-'}</p>
         <table style="width:100%;border-collapse:collapse;margin-top:16px;">
@@ -121,7 +145,7 @@ export default function VendasPage() {
         (stockPayload.rows || []).map((row) => ({
           id: Number(row.product_id),
           name: row.product_name,
-          stockUnit: row.stock_unit || 'UN',
+          stockUnit: normalizeUnit(row.stock_unit || 'UN'),
           salePrice: Number(row.sale_price || 0),
           saldoQty: Number(row.saldo_qty || 0),
           stockEnabled: Boolean(row.stock_enabled),
@@ -149,7 +173,9 @@ export default function VendasPage() {
             if (!next.unitPrice) {
               next.unitPrice = String(product.salePrice || '');
             }
-            next.unit = product.stockUnit || 'UN';
+            const allowedUnits = getAllowedSaleUnits(product.stockUnit);
+            const currentUnit = normalizeUnit(next.unit);
+            next.unit = allowedUnits.includes(currentUnit) ? currentUnit : allowedUnits[0];
           }
         }
         return next;
@@ -219,7 +245,7 @@ export default function VendasPage() {
       <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-foreground">Conciliacao de vendas</h1>
-          <p className="text-sm text-muted-foreground">Delivery do site versus vendas presenciais com baixa de estoque</p>
+          <p className="text-sm text-muted-foreground">Delivery concluido versus vendas presenciais registradas com baixa de estoque</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <Input type="date" value={start} onChange={(e) => setStart(e.target.value)} className="w-[170px]" />
@@ -229,12 +255,14 @@ export default function VendasPage() {
 
       <div className="grid gap-4 md:grid-cols-3">
         <Card className="border-primary/20 bg-card p-5">
-          <div className="text-sm text-muted-foreground">Delivery</div>
+          <div className="text-sm text-muted-foreground">Delivery concluido</div>
           <div className="mt-2 text-3xl font-bold text-primary">{money(reportSummary?.delivery_sales_total)}</div>
+          <div className="mt-2 text-xs text-muted-foreground">{reportSummary?.delivery_sales_count || 0} pedidos concluidos</div>
         </Card>
         <Card className="border-emerald-500/20 bg-card p-5">
-          <div className="text-sm text-muted-foreground">Presencial</div>
+          <div className="text-sm text-muted-foreground">Presencial registrado</div>
           <div className="mt-2 text-3xl font-bold text-emerald-400">{money(reportSummary?.store_sales_total)}</div>
+          <div className="mt-2 text-xs text-muted-foreground">{reportSummary?.store_sales_count || 0} vendas lancadas</div>
         </Card>
         <Card className="border-yellow-500/20 bg-card p-5">
           <div className="text-sm text-muted-foreground">Total consolidado</div>
@@ -286,6 +314,8 @@ export default function VendasPage() {
             <div className="space-y-3">
               {draftItems.map((item, index) => {
                 const product = productsMap.get(item.productId);
+                const allowedUnits = getAllowedSaleUnits(product?.stockUnit);
+                const fixedUnit = allowedUnits.length === 1;
                 const itemTotal = Number(item.quantity || 0) * Number(item.unitPrice || 0);
                 return (
                   <div key={`item-${index}`} className="rounded-2xl border border-border/70 bg-[linear-gradient(180deg,rgba(24,24,24,0.92),rgba(14,14,14,0.98))] p-4 shadow-sm">
@@ -329,6 +359,9 @@ export default function VendasPage() {
                             <span className="rounded-full border border-border/70 px-2 py-1">
                               Controle: {product.stockEnabled ? 'ativo' : 'inativo'}
                             </span>
+                            <span className="rounded-full border border-border/70 px-2 py-1">
+                              Venda: {allowedUnits.join(' ou ')}
+                            </span>
                           </div>
                         ) : null}
                       </div>
@@ -345,13 +378,19 @@ export default function VendasPage() {
                         <label className="mb-1.5 block text-sm font-medium text-zinc-300">Unidade</label>
                         <select
                           value={item.unit}
-                          onChange={(e) => setItem(index, { unit: e.target.value })}
-                          className="flex h-11 w-full rounded-xl border border-input bg-background px-3 py-2 text-sm"
+                          onChange={(e) => setItem(index, { unit: normalizeUnit(e.target.value) })}
+                          className="flex h-11 w-full rounded-xl border border-input bg-background px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-80"
+                          disabled={fixedUnit}
                         >
-                          <option value="UN">UN</option>
-                          <option value="LB">LB</option>
-                          <option value="KG">KG</option>
+                          {allowedUnits.map((allowedUnit) => (
+                            <option key={allowedUnit} value={allowedUnit}>
+                              {allowedUnit}
+                            </option>
+                          ))}
                         </select>
+                        <div className="mt-1.5 text-[11px] text-muted-foreground">
+                          {fixedUnit ? 'Unidade fixa para item unitario.' : `Base de estoque: ${product?.stockUnit || 'LB'}`}
+                        </div>
                       </div>
                       <div>
                         <label className="mb-1.5 block text-sm font-medium text-zinc-300">Valor unitario</label>
@@ -374,7 +413,7 @@ export default function VendasPage() {
                 Adicionar produto
               </Button>
               <div className="rounded-xl border border-border/70 bg-background/70 px-4 py-3 text-sm text-muted-foreground">
-                A unidade enviada para a venda fica explicita por item e aparece no comprovante.
+                Produtos unitarios vendem apenas em UN. Produtos por peso aceitam LB ou KG.
               </div>
             </div>
 
@@ -398,7 +437,7 @@ export default function VendasPage() {
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-lg font-semibold text-foreground">Vendas presenciais</h2>
-              <p className="text-sm text-muted-foreground">Cada venda mostra os itens vendidos e permite gerar comprovante interno.</p>
+              <p className="text-sm text-muted-foreground">Cada venda fica registrada aqui com itens, unidade, pagamento e comprovante interno.</p>
             </div>
             <span className="text-xs text-muted-foreground">{sales.length} registros</span>
           </div>
@@ -412,13 +451,18 @@ export default function VendasPage() {
           ) : (
             <div className="mt-4 space-y-4">
               {sales.map((sale) => (
-                <div key={sale.id} className="rounded-2xl border border-border/70 p-4">
+                <div key={sale.id} className="rounded-2xl border border-border/70 bg-[linear-gradient(180deg,rgba(24,24,24,0.88),rgba(15,15,15,0.98))] p-4">
                   <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                     <div>
-                      <div className="text-sm font-semibold text-foreground">Venda #{sale.id}</div>
+                      <div className="flex items-center gap-2">
+                        <div className="text-sm font-semibold text-foreground">Venda #{sale.id}</div>
+                        <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.2em] text-emerald-300">
+                          Registrada
+                        </span>
+                      </div>
                       <div className="text-sm text-muted-foreground">{new Date(sale.sale_datetime).toLocaleString('pt-BR')}</div>
                       <div className="mt-1 text-xs text-muted-foreground">
-                        Pagamento: {sale.payment_method || '-'} | Responsavel: {sale.created_by || '-'}
+                        Pagamento: {paymentMethodLabel(sale.payment_method)} | Responsavel: {sale.created_by || '-'}
                       </div>
                     </div>
                     <div className="flex items-center gap-2">

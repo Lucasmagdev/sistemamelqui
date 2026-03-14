@@ -127,6 +127,15 @@ function normalizeStockUnit(value, fallback = "LB") {
   return fallback;
 }
 
+function getAllowedSaleUnitsForStockUnit(stockUnit) {
+  const normalized = normalizeStockUnit(stockUnit, "LB");
+  return normalized === "UN" ? ["UN"] : ["LB", "KG"];
+}
+
+function isSaleUnitAllowedForStockUnit(saleUnit, stockUnit) {
+  return getAllowedSaleUnitsForStockUnit(stockUnit).includes(normalizeStockUnit(saleUnit, "UN"));
+}
+
 function normalizeSearchText(value) {
   return String(value || "")
     .normalize("NFD")
@@ -1021,39 +1030,23 @@ async function applyOrderStockReversal(orderId, reason = "manual_status_reversal
   };
 }
 
-async function applyStoreSaleStockExit(storeSaleId, saleItems, reason = "store_sale_created") {
-  const sourceId = `store_sale:${storeSaleId}`;
+async function buildStoreSaleStockPlan(itemsInput) {
+  const productIds = Array.from(
+    new Set(
+      (itemsInput || [])
+        .map((item) => Number(item.product_id || item.productId))
+        .filter(Boolean),
+    ),
+  );
+  const productMap = await fetchProductsByIds(productIds);
+  const requiredByProduct = new Map();
 
-  const { data: existing } = await supabase
-    .from("stock_movements")
-    .select("id")
-    .eq("source_type", "manual")
-    .eq("source_id", sourceId)
-    .eq("tipo", "exit")
-    .limit(1);
-
-  if ((existing || []).length > 0) {
-    return { applied: false, reason: "already_applied", changedProducts: [] };
-  }
-
-  const aggregated = new Map();
-  for (const item of saleItems || []) {
+  for (const item of itemsInput || []) {
     const productId = Number(item.product_id || item.productId);
     const quantity = parseNumber(item.quantity, 0);
     const unit = normalizeStockUnit(item.unit, "UN");
     if (!productId || quantity <= 0) continue;
 
-    const current = aggregated.get(productId) || { quantity: 0, unit };
-    current.quantity += quantity;
-    current.unit = unit;
-    aggregated.set(productId, current);
-  }
-
-  const productIds = Array.from(aggregated.keys());
-  const productMap = await fetchProductsByIds(productIds);
-  const requiredByProduct = [];
-
-  for (const productId of productIds) {
     const product = productMap.get(productId);
     if (!product) {
       throw createHttpError(404, `Produto ${productId} nao encontrado para a venda presencial.`);
@@ -1063,21 +1056,28 @@ async function applyStoreSaleStockExit(storeSaleId, saleItems, reason = "store_s
       throw createHttpError(409, `Produto ${product.nome || productId} sem controle de estoque ativo.`);
     }
 
-    const entry = aggregated.get(productId);
-    const qtyInStockUnit = roundQty(convertQuantity(entry.quantity, entry.unit, product.stock_unit), 3);
+    if (!isSaleUnitAllowedForStockUnit(unit, product.stock_unit)) {
+      throw createHttpError(
+        400,
+        `Unidade ${unit} invalida para ${product.nome || `Produto ${productId}`}. Use ${getAllowedSaleUnitsForStockUnit(product.stock_unit).join(" ou ")}.`,
+      );
+    }
 
-    requiredByProduct.push({
+    const qtyInStockUnit = roundQty(convertQuantity(quantity, unit, product.stock_unit), 3);
+    const current = requiredByProduct.get(productId) || {
       productId,
       productName: product.nome || `Produto ${productId}`,
       unit: product.stock_unit,
-      required: qtyInStockUnit,
-    });
+      required: 0,
+    };
+    current.required = roundQty(current.required + qtyInStockUnit, 3);
+    requiredByProduct.set(productId, current);
   }
 
   const shortages = [];
   const consumptionPlan = [];
 
-  for (const required of requiredByProduct) {
+  for (const required of requiredByProduct.values()) {
     const { data: batchesData, error: batchesError } = await supabase
       .from("batches")
       .select("id, produto_id, quantidade_disponivel, unidade, data_validade")
@@ -1132,38 +1132,124 @@ async function applyStoreSaleStockExit(storeSaleId, saleItems, reason = "store_s
     throw createHttpError(409, "Estoque insuficiente para registrar a venda presencial.", { shortages });
   }
 
-  const changedProducts = new Set();
+  return consumptionPlan;
+}
 
-  for (const step of consumptionPlan) {
-    const nextQty = roundQty(step.availableBefore - step.consumeInBatchUnit, 3);
+async function applyStoreSaleStockExit(storeSaleId, saleItems, reason = "store_sale_created") {
+  const sourceId = `store_sale:${storeSaleId}`;
 
-    const { error: updateBatchError } = await supabase
-      .from("batches")
-      .update({ quantidade_disponivel: nextQty })
-      .eq("id", step.batchId);
+  const { data: existing } = await supabase
+    .from("stock_movements")
+    .select("id")
+    .eq("source_type", "manual")
+    .eq("source_id", sourceId)
+    .eq("tipo", "exit")
+    .limit(1);
 
-    if (updateBatchError) throw createHttpError(500, "Erro ao atualizar saldo do lote da venda presencial.", updateBatchError.message);
+  if ((existing || []).length > 0) {
+    return { applied: false, reason: "already_applied", changedProducts: [] };
+  }
 
-    const { error: movementError } = await supabase
-      .from("stock_movements")
-      .insert([
-        {
-          tipo: "exit",
-          produto_id: step.productId,
-          batch_id: step.batchId,
-          qty: step.consumeInStockUnit,
-          unit: step.productUnit,
-          source_type: "manual",
-          source_id: sourceId,
-          metadata: { reason, origin: "store_sale" },
-        },
-      ]);
+  const rollbackStoreSaleStockExit = async (appliedSteps, rollbackReason = "store_sale_rollback") => {
+    if (!appliedSteps.length) return;
 
-    if (movementError) {
-      throw createHttpError(500, "Erro ao registrar movimentacao de estoque da venda presencial.", movementError.message);
+    const restoredProducts = new Set();
+
+    for (let index = appliedSteps.length - 1; index >= 0; index -= 1) {
+      const step = appliedSteps[index];
+      const { data: batch, error: batchError } = await supabase
+        .from("batches")
+        .select("id, quantidade_disponivel")
+        .eq("id", step.batchId)
+        .single();
+
+      if (batchError || !batch) {
+        throw createHttpError(500, "Erro ao restaurar lote da venda presencial.", batchError?.message || null);
+      }
+
+      const restoredQty = roundQty(parseNumber(batch.quantidade_disponivel, 0) + step.consumeInBatchUnit, 3);
+      const { error: updateError } = await supabase
+        .from("batches")
+        .update({ quantidade_disponivel: restoredQty })
+        .eq("id", step.batchId);
+
+      if (updateError) {
+        throw createHttpError(500, "Erro ao restaurar saldo do lote da venda presencial.", updateError.message);
+      }
+
+      restoredProducts.add(step.productId);
     }
 
-    changedProducts.add(step.productId);
+    const { error: deleteError } = await supabase
+      .from("stock_movements")
+      .delete()
+      .eq("source_type", "manual")
+      .eq("source_id", sourceId)
+      .eq("tipo", "exit");
+
+    if (deleteError) {
+      throw createHttpError(500, "Erro ao remover movimentacoes parciais da venda presencial.", deleteError.message);
+    }
+
+    if (restoredProducts.size > 0) {
+      await syncLowStockAlerts(Array.from(restoredProducts));
+    }
+
+    return { applied: true, reason: rollbackReason, changedProducts: Array.from(restoredProducts) };
+  };
+
+  const consumptionPlan = await buildStoreSaleStockPlan(saleItems);
+  const changedProducts = new Set();
+  const appliedSteps = [];
+
+  try {
+    for (const step of consumptionPlan) {
+      const nextQty = roundQty(step.availableBefore - step.consumeInBatchUnit, 3);
+
+      const { error: updateBatchError } = await supabase
+        .from("batches")
+        .update({ quantidade_disponivel: nextQty })
+        .eq("id", step.batchId);
+
+      if (updateBatchError) throw createHttpError(500, "Erro ao atualizar saldo do lote da venda presencial.", updateBatchError.message);
+
+      appliedSteps.push(step);
+
+      const { error: movementError } = await supabase
+        .from("stock_movements")
+        .insert([
+          {
+            tipo: "exit",
+            produto_id: step.productId,
+            batch_id: step.batchId,
+            qty: step.consumeInStockUnit,
+            unit: step.productUnit,
+            source_type: "manual",
+            source_id: sourceId,
+            metadata: { reason, origin: "store_sale" },
+          },
+        ]);
+
+      if (movementError) {
+        throw createHttpError(500, "Erro ao registrar movimentacao de estoque da venda presencial.", movementError.message);
+      }
+
+      changedProducts.add(step.productId);
+    }
+  } catch (error) {
+    try {
+      await rollbackStoreSaleStockExit(appliedSteps);
+    } catch (rollbackError) {
+      throw createHttpError(
+        500,
+        "Falha ao registrar venda presencial e ao restaurar o estoque.",
+        {
+          original: error?.message || null,
+          rollback: rollbackError?.message || null,
+        },
+      );
+    }
+    throw error;
   }
 
   await syncLowStockAlerts(Array.from(changedProducts));
@@ -1172,6 +1258,7 @@ async function applyStoreSaleStockExit(storeSaleId, saleItems, reason = "store_s
     applied: true,
     reason: "exit_created",
     changedProducts: Array.from(changedProducts),
+    appliedSteps,
   };
 }
 
@@ -2128,21 +2215,30 @@ async function buildOperationalReport(rangeQuery = {}) {
   const payrollMap = new Map();
 
   let deliveryTotal = 0;
+  let deliveryCount = 0;
   let storeTotal = 0;
 
   for (const order of orders || []) {
     const amount = parseNumber(order.valor_total, 0);
     const dateKey = toDayKey(order.data_pedido || new Date().toISOString());
     const bucket = dateMap.get(dateKey) || { date: dateKey, delivery: 0, store: 0, total: 0 };
-    bucket.delivery += amount;
-    bucket.total += amount;
-    dateMap.set(dateKey, bucket);
-    deliveryTotal += amount;
+    const statusKey = Number(order.status ?? 0);
+
+    if (statusKey === STATUS.CONCLUIDO) {
+      bucket.delivery += amount;
+      bucket.total += amount;
+      dateMap.set(dateKey, bucket);
+      deliveryTotal += amount;
+      deliveryCount += 1;
+    } else if (!dateMap.has(dateKey)) {
+      dateMap.set(dateKey, bucket);
+    }
 
     const paymentKey = String(order.payment_method || "nao_informado");
-    paymentMap.set(paymentKey, roundQty((paymentMap.get(paymentKey) || 0) + amount, 2));
+    if (statusKey === STATUS.CONCLUIDO) {
+      paymentMap.set(paymentKey, roundQty((paymentMap.get(paymentKey) || 0) + amount, 2));
+    }
 
-    const statusKey = Number(order.status ?? 0);
     orderStatusMap.set(statusKey, (orderStatusMap.get(statusKey) || 0) + 1);
   }
 
@@ -2177,6 +2273,7 @@ async function buildOperationalReport(rangeQuery = {}) {
     range,
     summary: {
       delivery_sales_total: roundQty(deliveryTotal, 2),
+      delivery_sales_count: deliveryCount,
       store_sales_total: roundQty(storeTotal, 2),
       total_sales: roundQty(deliveryTotal + storeTotal, 2),
       expenses_total: expenseTotal,
@@ -2216,12 +2313,13 @@ function buildAssistantFallbackAnswer({ question, domain, report }) {
     `Especialista acionado: ${domain}.`,
     `Pergunta: ${question}`,
     "",
-    `Vendas delivery: ${formatMoney(summary.delivery_sales_total)}`,
-    `Vendas presenciais: ${formatMoney(summary.store_sales_total)}`,
+    `Vendas delivery concluidas: ${formatMoney(summary.delivery_sales_total)}`,
+    `Vendas presenciais registradas: ${formatMoney(summary.store_sales_total)}`,
     `Vendas totais: ${formatMoney(summary.total_sales)}`,
     `Despesas no periodo: ${formatMoney(summary.expenses_total)}`,
     `Pagamentos de funcionarios: ${formatMoney(summary.payroll_total)}`,
     `Pedidos no periodo: ${summary.orders_count}`,
+    `Pedidos concluidos no delivery: ${summary.delivery_sales_count || 0}`,
     `Produtos com alerta de estoque: ${summary.low_stock_products}`,
   ];
 
@@ -3092,6 +3190,8 @@ app.post("/api/store-sales", async (req, res) => {
       };
     });
 
+    await buildStoreSaleStockPlan(items);
+
     const totalAmount = roundQty(items.reduce((acc, item) => acc + parseNumber(item.total_price, 0), 0), 2);
 
     const payload = {
@@ -3472,7 +3572,9 @@ app.get("/api/reports/operational.csv", async (req, res) => {
     const rows = [
       buildCsvRow(["tipo", "chave", "valor"]),
       buildCsvRow(["summary", "delivery_sales_total", report.summary.delivery_sales_total]),
+      buildCsvRow(["summary", "delivery_sales_count", report.summary.delivery_sales_count || 0]),
       buildCsvRow(["summary", "store_sales_total", report.summary.store_sales_total]),
+      buildCsvRow(["summary", "store_sales_count", report.summary.store_sales_count]),
       buildCsvRow(["summary", "total_sales", report.summary.total_sales]),
       buildCsvRow(["summary", "expenses_total", report.summary.expenses_total]),
       buildCsvRow(["summary", "payroll_total", report.summary.payroll_total]),

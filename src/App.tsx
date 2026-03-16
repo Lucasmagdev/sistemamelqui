@@ -24,7 +24,15 @@ import FinanceiroPage from "@/pages/FinanceiroPage";
 import FuncionariosPage from "@/pages/FuncionariosPage";
 import AssistentePage from "@/pages/AssistentePage";
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 60_000,
+      gcTime: 5 * 60_000,
+      refetchOnWindowFocus: false,
+    },
+  },
+});
 
 const AdminRoute = () => {
   const { role } = useAuth();

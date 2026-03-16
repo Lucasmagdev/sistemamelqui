@@ -1758,6 +1758,406 @@ function buildCsvRow(values) {
     .join(",");
 }
 
+function getOrderClientId(order) {
+  return order?.cliente_id || order?.client_id || null;
+}
+
+function buildClientAddress(client) {
+  if (!client) return "-";
+  return [
+    [client.endereco_rua, client.endereco_numero].filter(Boolean).join(", "),
+    client.endereco_complemento || null,
+    [client.cidade, client.estado].filter(Boolean).join(" - "),
+    client.cep || null,
+  ]
+    .filter(Boolean)
+    .join(", ")
+    .replace(/\s+/g, " ")
+    .trim() || "-";
+}
+
+function renderClientCampaignMessage(template, client) {
+  return String(template || "")
+    .replace(/\{nome\}/gi, String(client?.nome || "cliente").trim() || "cliente")
+    .trim();
+}
+
+async function createClientCampaignAudit(payload) {
+  const { data, error } = await supabase
+    .from("client_campaigns")
+    .insert([{
+      segment: payload.segment,
+      search_term: payload.searchTerm || null,
+      with_orders: Boolean(payload.withOrders),
+      message_template: payload.messageTemplate,
+      target_count: payload.targetCount || 0,
+      valid_count: payload.validCount || 0,
+      skipped_count: payload.skippedCount || 0,
+      sent_count: payload.sentCount || 0,
+      failed_count: payload.failedCount || 0,
+      status: payload.status || "draft",
+      created_by: payload.createdBy || null,
+      metadata: payload.metadata || {},
+      updated_at: new Date().toISOString(),
+    }])
+    .select("*")
+    .maybeSingle();
+
+  if (error) {
+    if (isMissingRelationError(error, "client_campaigns")) return null;
+    throw createHttpError(500, "Erro ao registrar campanha de clientes.", error.message);
+  }
+
+  return data || null;
+}
+
+async function updateClientCampaignAudit(campaignId, patch) {
+  if (!campaignId) return null;
+  const { data, error } = await supabase
+    .from("client_campaigns")
+    .update({
+      sent_count: patch.sentCount,
+      failed_count: patch.failedCount,
+      skipped_count: patch.skippedCount,
+      valid_count: patch.validCount,
+      status: patch.status,
+      metadata: patch.metadata || {},
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", campaignId)
+    .select("*")
+    .maybeSingle();
+
+  if (error) {
+    if (isMissingRelationError(error, "client_campaigns")) return null;
+    throw createHttpError(500, "Erro ao atualizar campanha de clientes.", error.message);
+  }
+
+  return data || null;
+}
+
+async function insertClientCampaignRecipientAudit(entry) {
+  const { error } = await supabase
+    .from("client_campaign_recipients")
+    .insert([{
+      campaign_id: entry.campaignId || null,
+      client_id: entry.clientId || null,
+      client_name: entry.clientName || null,
+      destination_phone: entry.destinationPhone || null,
+      rendered_message: entry.renderedMessage || null,
+      local_status: entry.localStatus || "unknown",
+      error_detail: entry.errorDetail || null,
+      provider_response: entry.providerResponse || {},
+      message_id: entry.messageId || null,
+      zaap_id: entry.zaapId || null,
+      updated_at: new Date().toISOString(),
+    }]);
+
+  if (error && !isMissingRelationError(error, "client_campaign_recipients")) {
+    throw createHttpError(500, "Erro ao registrar destinatario da campanha.", error.message);
+  }
+}
+
+function normalizeClientSegment(value) {
+  const raw = String(value || "all").trim().toLowerCase();
+  if (["vip", "vips"].includes(raw)) return "vip";
+  if (["non_vip", "nao_vip", "regular", "nonvip"].includes(raw)) return "non_vip";
+  return "all";
+}
+
+function normalizeSortDirection(value) {
+  return String(value || "").trim().toLowerCase() === "desc" ? "desc" : "asc";
+}
+
+async function buildClientsAdminPayload({
+  search = "",
+  segment = "all",
+  withOrders = false,
+  page = 1,
+  pageSize = 10,
+  sortField = "nome",
+  sortDir = "asc",
+} = {}) {
+  const [{ data: clients, error: clientsError }, { data: orders, error: ordersError }] = await Promise.all([
+    supabase.from("clients").select("*").order("nome", { ascending: true }),
+    supabase.from("orders").select("*"),
+  ]);
+
+  if (clientsError) {
+    throw createHttpError(500, "Erro ao carregar clientes.", clientsError.message);
+  }
+
+  if (ordersError) {
+    throw createHttpError(500, "Erro ao carregar pedidos dos clientes.", ordersError.message);
+  }
+
+  const orderCountMap = {};
+  for (const order of orders || []) {
+    const clientId = String(getOrderClientId(order) || "").trim();
+    if (!clientId) continue;
+    orderCountMap[clientId] = (orderCountMap[clientId] || 0) + 1;
+  }
+
+  let rows = (clients || []).map((client) => ({
+    ...client,
+    order_count: orderCountMap[client.id] || 0,
+    address: buildClientAddress(client),
+  }));
+
+  const normalizedSearch = normalizeSearchText(search);
+  if (normalizedSearch) {
+    rows = rows.filter((client) =>
+      normalizeSearchText([
+        client.nome,
+        client.email,
+        client.documento,
+        client.telefone,
+      ].filter(Boolean).join(" ")).includes(normalizedSearch));
+  }
+
+  if (segment === "vip") {
+    rows = rows.filter((client) => Boolean(client.vip));
+  } else if (segment === "non_vip") {
+    rows = rows.filter((client) => !client.vip);
+  }
+
+  if (withOrders) {
+    rows = rows.filter((client) => Number(client.order_count || 0) > 0);
+  }
+
+  rows.sort((left, right) => {
+    const direction = sortDir === "desc" ? -1 : 1;
+    if (sortField === "email") return direction * String(left.email || "").localeCompare(String(right.email || ""), "pt-BR");
+    if (sortField === "vip") return direction * (Number(Boolean(left.vip)) - Number(Boolean(right.vip)));
+    if (sortField === "pedidos") return direction * (Number(left.order_count || 0) - Number(right.order_count || 0));
+    return direction * String(left.nome || "").localeCompare(String(right.nome || ""), "pt-BR");
+  });
+
+  const totalItems = rows.length;
+  const safePageSize = Math.max(1, Math.min(100, Number(pageSize || 10)));
+  const safePage = Math.max(1, Number(page || 1));
+  const startIndex = (safePage - 1) * safePageSize;
+  const paginatedRows = rows.slice(startIndex, startIndex + safePageSize);
+
+  return {
+    rows: paginatedRows,
+    allRows: rows,
+    summary: {
+      totalClients: (clients || []).length,
+      totalVips: (clients || []).filter((client) => Boolean(client.vip)).length,
+      totalOrders: Object.values(orderCountMap).reduce((acc, value) => acc + Number(value || 0), 0),
+      matchingClients: totalItems,
+    },
+    pageInfo: {
+      page: safePage,
+      pageSize: safePageSize,
+      totalItems,
+      totalPages: Math.max(1, Math.ceil(totalItems / safePageSize)),
+      hasNextPage: startIndex + safePageSize < totalItems,
+    },
+  };
+}
+
+async function buildOrdersAdminPayload({
+  start,
+  end,
+  status = "",
+  city = "",
+  search = "",
+  onlyOpen = false,
+  page = 1,
+  pageSize = 10,
+} = {}) {
+  let ordersQuery = supabase
+    .from("orders")
+    .select("*")
+    .order("data_pedido", { ascending: false })
+    .order("id", { ascending: false });
+
+  if (start) ordersQuery = ordersQuery.gte("data_pedido", start);
+  if (end) ordersQuery = ordersQuery.lte("data_pedido", end);
+
+  const { data: orders, error: ordersError } = await ordersQuery;
+  if (ordersError) {
+    throw createHttpError(500, "Erro ao carregar pedidos.", ordersError.message);
+  }
+
+  const clientIds = Array.from(new Set((orders || []).map((order) => getOrderClientId(order)).filter(Boolean)));
+  const orderIds = Array.from(new Set((orders || []).map((order) => Number(order.id)).filter(Boolean)));
+
+  const [{ data: clients, error: clientsError }, { data: items, error: itemsError }] = await Promise.all([
+    clientIds.length
+      ? supabase
+          .from("clients")
+          .select("id, nome, telefone, cidade, endereco_rua, endereco_numero, endereco_complemento, cep, estado")
+          .in("id", clientIds)
+      : Promise.resolve({ data: [], error: null }),
+    orderIds.length
+      ? supabase
+          .from("order_items")
+          .select("pedido_id, produto_id, quantidade")
+          .in("pedido_id", orderIds)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+
+  if (clientsError) {
+    throw createHttpError(500, "Erro ao carregar clientes dos pedidos.", clientsError.message);
+  }
+
+  if (itemsError) {
+    throw createHttpError(500, "Erro ao carregar itens dos pedidos.", itemsError.message);
+  }
+
+  const productIds = Array.from(new Set((items || []).map((item) => Number(item.produto_id)).filter(Boolean)));
+  const { data: products, error: productsError } = productIds.length
+    ? await supabase.from("products").select("id, nome").in("id", productIds)
+    : { data: [], error: null };
+
+  if (productsError) {
+    throw createHttpError(500, "Erro ao carregar produtos dos pedidos.", productsError.message);
+  }
+
+  const clientsMap = new Map((clients || []).map((client) => [String(client.id), client]));
+  const productsMap = new Map((products || []).map((product) => [Number(product.id), product.nome]));
+  const itemsByOrderId = new Map();
+
+  for (const item of items || []) {
+    const key = Number(item.pedido_id);
+    const current = itemsByOrderId.get(key) || [];
+    current.push(item);
+    itemsByOrderId.set(key, current);
+  }
+
+  let rows = (orders || []).map((order) => {
+    const client = clientsMap.get(String(getOrderClientId(order) || ""));
+    const orderItems = itemsByOrderId.get(Number(order.id)) || [];
+    const productsSummary = orderItems.map((item) => ({
+      productId: item.produto_id,
+      name: productsMap.get(Number(item.produto_id)) || `Produto ${item.produto_id}`,
+      quantity: Number(item.quantidade || 0),
+      label: `${productsMap.get(Number(item.produto_id)) || `Produto ${item.produto_id}`} (${formatQuantity(item.quantidade)}x)`,
+    }));
+
+    return {
+      id: order.id,
+      code: resolveOrderCode(order),
+      clientName: client?.nome || "Cliente",
+      phone: client?.telefone || "-",
+      city: client?.cidade || "-",
+      fullAddress: buildClientAddress(client),
+      value: Number(order.valor_total || order.total || 0),
+      status: Number(order.status ?? 0),
+      data_pedido: order.data_pedido || order.created_at || null,
+      products: productsSummary,
+      productsPreview: productsSummary.map((item) => item.label).join(", "),
+    };
+  });
+
+  const normalizedSearch = normalizeSearchText(search);
+  if (normalizedSearch) {
+    rows = rows.filter((row) =>
+      normalizeSearchText([row.clientName, row.phone, row.code].filter(Boolean).join(" ")).includes(normalizedSearch));
+  }
+
+  if (status !== "" && status !== null && status !== undefined) {
+    rows = rows.filter((row) => Number(row.status) === Number(status));
+  }
+
+  if (onlyOpen) {
+    rows = rows.filter((row) => Number(row.status) < STATUS.CONCLUIDO);
+  }
+
+  const cities = Array.from(new Set(rows.map((row) => row.city).filter((value) => value && value !== "-"))).sort((a, b) => a.localeCompare(b, "pt-BR"));
+
+  if (city) {
+    rows = rows.filter((row) => row.city === city);
+  }
+
+  const totalItems = rows.length;
+  const safePageSize = Math.max(1, Math.min(100, Number(pageSize || 10)));
+  const safePage = Math.max(1, Number(page || 1));
+  const startIndex = (safePage - 1) * safePageSize;
+  const paginatedRows = rows.slice(startIndex, startIndex + safePageSize);
+
+  return {
+    rows: paginatedRows,
+    summary: {
+      totalCount: totalItems,
+      openCount: rows.filter((row) => Number(row.status) < STATUS.CONCLUIDO).length,
+      concludedCount: rows.filter((row) => Number(row.status) === STATUS.CONCLUIDO).length,
+      totalValue: roundQty(rows.reduce((acc, row) => acc + parseNumber(row.value, 0), 0), 2),
+    },
+    cities,
+    pageInfo: {
+      page: safePage,
+      pageSize: safePageSize,
+      totalItems,
+      totalPages: Math.max(1, Math.ceil(totalItems / safePageSize)),
+      hasNextPage: startIndex + safePageSize < totalItems,
+    },
+  };
+}
+
+async function buildFinanceOverviewPayload(query) {
+  const range = resolveRangeFromQuery(query);
+  const [{ data: expenses, error: expensesError }, { data: payments, error: paymentsError }] = await Promise.all([
+    supabase
+      .from("expenses")
+      .select("category, amount")
+      .gte("competency_date", range.startDate)
+      .lte("competency_date", range.endDate),
+    supabase
+      .from("employee_payments")
+      .select("employee_id, amount")
+      .gte("paid_at", range.start)
+      .lte("paid_at", range.end),
+  ]);
+
+  if (expensesError) {
+    throw createHttpError(500, "Erro ao carregar despesas para o consolidado.", expensesError.message);
+  }
+
+  if (paymentsError) {
+    throw createHttpError(500, "Erro ao carregar pagamentos da equipe.", paymentsError.message);
+  }
+
+  const employeeIds = Array.from(new Set((payments || []).map((payment) => Number(payment.employee_id)).filter(Boolean)));
+  const { data: employees, error: employeesError } = employeeIds.length
+    ? await supabase.from("employees").select("id, name").in("id", employeeIds)
+    : { data: [], error: null };
+
+  if (employeesError) {
+    throw createHttpError(500, "Erro ao carregar equipe para o consolidado.", employeesError.message);
+  }
+
+  const employeeMap = new Map((employees || []).map((employee) => [Number(employee.id), employee.name]));
+  const expensesByCategory = {};
+  const payrollByEmployee = {};
+
+  for (const expense of expenses || []) {
+    const key = expense.category || "outras";
+    expensesByCategory[key] = roundQty((expensesByCategory[key] || 0) + parseNumber(expense.amount, 0), 2);
+  }
+
+  for (const payment of payments || []) {
+    const key = employeeMap.get(Number(payment.employee_id)) || `Funcionario ${payment.employee_id}`;
+    payrollByEmployee[key] = roundQty((payrollByEmployee[key] || 0) + parseNumber(payment.amount, 0), 2);
+  }
+
+  const expensesTotal = roundQty((expenses || []).reduce((acc, item) => acc + parseNumber(item.amount, 0), 0), 2);
+  const payrollTotal = roundQty((payments || []).reduce((acc, item) => acc + parseNumber(item.amount, 0), 0), 2);
+
+  return {
+    ok: true,
+    range,
+    expensesTotal,
+    payrollTotal,
+    totalOutflow: roundQty(expensesTotal + payrollTotal, 2),
+    expensesByCategory: Object.entries(expensesByCategory).map(([category, total]) => ({ category, total })),
+    payrollByEmployee: Object.entries(payrollByEmployee).map(([employee_name, total]) => ({ employee_name, total })),
+  };
+}
+
 async function callPaperlessOcr({ invoiceRecord, ocrHint }) {
   if (ocrHint && String(ocrHint).trim()) return String(ocrHint).trim();
 
@@ -3580,6 +3980,212 @@ app.post("/api/employee-payments", async (req, res) => {
   } catch (error) {
     return res.status(error?.status || 500).json({
       error: error?.message || "Erro interno ao registrar pagamento.",
+      detail: error?.detail || null,
+    });
+  }
+});
+
+app.get("/api/orders/admin", async (req, res) => {
+  try {
+    const range = resolveRangeFromQuery(req.query);
+    const payload = await buildOrdersAdminPayload({
+      start: range.start,
+      end: range.end,
+      status: String(req.query?.status || "").trim(),
+      city: String(req.query?.city || "").trim(),
+      search: String(req.query?.search || "").trim(),
+      onlyOpen: String(req.query?.onlyOpen || "").trim().toLowerCase() === "true",
+      page: Number(req.query?.page || 1),
+      pageSize: Number(req.query?.pageSize || 10),
+    });
+
+    return res.json({ ok: true, range, ...payload });
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro interno ao carregar pedidos administrativos.",
+      detail: error?.detail || null,
+    });
+  }
+});
+
+app.get("/api/clients/admin", async (req, res) => {
+  try {
+    const payload = await buildClientsAdminPayload({
+      search: String(req.query?.search || "").trim(),
+      segment: normalizeClientSegment(req.query?.segment),
+      withOrders: String(req.query?.withOrders || "").trim().toLowerCase() === "true",
+      page: Number(req.query?.page || 1),
+      pageSize: Number(req.query?.pageSize || 10),
+      sortField: String(req.query?.sortField || "nome").trim(),
+      sortDir: normalizeSortDirection(req.query?.sortDir),
+    });
+
+    return res.json({ ok: true, ...payload });
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro interno ao carregar clientes administrativos.",
+      detail: error?.detail || null,
+    });
+  }
+});
+
+app.post("/api/client-campaigns/preview", async (req, res) => {
+  try {
+    const segment = normalizeClientSegment(req.body?.segment);
+    const message = String(req.body?.message || "").trim();
+    if (!message) {
+      return res.status(400).json({ error: "message obrigatoria." });
+    }
+
+    const payload = await buildClientsAdminPayload({
+      search: String(req.body?.search || "").trim(),
+      segment,
+      withOrders: Boolean(req.body?.withOrders),
+      page: 1,
+      pageSize: 5000,
+    });
+
+    const validRecipients = payload.allRows
+      .map((client) => ({
+        id: client.id,
+        nome: client.nome,
+        vip: Boolean(client.vip),
+        order_count: Number(client.order_count || 0),
+        phone: normalizePhone(client.telefone),
+        previewText: renderClientCampaignMessage(message, client),
+      }))
+      .filter((client) => client.phone);
+
+    const excludedWithoutPhone = payload.allRows.filter((client) => !normalizePhone(client.telefone)).length;
+
+    return res.json({
+      ok: true,
+      audienceCount: validRecipients.length,
+      excludedWithoutPhone,
+      sampleRecipients: validRecipients.slice(0, 3),
+      previewText: validRecipients[0]?.previewText || renderClientCampaignMessage(message, { nome: "cliente" }),
+    });
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro interno ao gerar previa da campanha.",
+      detail: error?.detail || null,
+    });
+  }
+});
+
+app.post("/api/client-campaigns/send", async (req, res) => {
+  try {
+    const segment = normalizeClientSegment(req.body?.segment);
+    const message = String(req.body?.message || "").trim();
+    if (!message) {
+      return res.status(400).json({ error: "message obrigatoria." });
+    }
+
+    const payload = await buildClientsAdminPayload({
+      search: String(req.body?.search || "").trim(),
+      segment,
+      withOrders: Boolean(req.body?.withOrders),
+      page: 1,
+      pageSize: 5000,
+    });
+
+    const audience = payload.allRows.map((client) => ({
+      id: client.id,
+      nome: client.nome,
+      telefone: client.telefone,
+      phone: normalizePhone(client.telefone),
+      renderedMessage: renderClientCampaignMessage(message, client),
+    }));
+
+    const validRecipients = audience.filter((client) => client.phone);
+    const skippedCount = audience.length - validRecipients.length;
+    const fallbackCampaignId = `campaign-${Date.now()}`;
+    const campaign = await createClientCampaignAudit({
+      segment,
+      searchTerm: String(req.body?.search || "").trim(),
+      withOrders: Boolean(req.body?.withOrders),
+      messageTemplate: message,
+      targetCount: audience.length,
+      validCount: validRecipients.length,
+      skippedCount,
+      status: "sending",
+      createdBy: req.body?.createdBy || null,
+      metadata: { channel: "whatsapp" },
+    });
+    const campaignId = campaign?.id || fallbackCampaignId;
+
+    let sentCount = 0;
+    let failedCount = 0;
+
+    for (const recipient of validRecipients) {
+      const sendResult = await sendWhatsAppViaZApi({
+        phone: recipient.phone,
+        message: recipient.renderedMessage,
+      });
+
+      if (sendResult?.ok) sentCount += 1;
+      else failedCount += 1;
+
+      await persistWhatsAppAttempt({
+        orderId: null,
+        target: "client_campaign",
+        eventType: "client_campaign_broadcast",
+        destinationPhone: recipient.phone,
+        messageText: recipient.renderedMessage,
+        payload: {
+          campaignId,
+          clientId: recipient.id,
+          segment,
+        },
+        sendResult,
+      });
+
+      await insertClientCampaignRecipientAudit({
+        campaignId: campaign?.id || null,
+        clientId: recipient.id,
+        clientName: recipient.nome,
+        destinationPhone: recipient.phone,
+        renderedMessage: recipient.renderedMessage,
+        localStatus: sendResult?.ok ? "queued" : "failed",
+        errorDetail: sendResult?.detail || sendResult?.reason || null,
+        providerResponse: sendResult || {},
+        messageId: sendResult?.messageId || null,
+        zaapId: sendResult?.zaapId || null,
+      });
+    }
+
+    await updateClientCampaignAudit(campaign?.id || null, {
+      sentCount,
+      failedCount,
+      skippedCount,
+      validCount: validRecipients.length,
+      status: failedCount > 0 ? "completed_with_failures" : "completed",
+      metadata: { channel: "whatsapp" },
+    });
+
+    return res.json({
+      ok: true,
+      campaignId,
+      targetCount: audience.length,
+      sentCount,
+      skippedCount,
+      failedCount,
+    });
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro interno ao enviar campanha.",
+      detail: error?.detail || null,
+    });
+  }
+});
+
+app.get("/api/finance/overview", async (req, res) => {
+  try {
+    const payload = await buildFinanceOverviewPayload(req.query);
+    return res.json(payload);
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro interno ao carregar consolidado financeiro.",
       detail: error?.detail || null,
     });
   }

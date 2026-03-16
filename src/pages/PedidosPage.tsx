@@ -1,345 +1,330 @@
-import { useEffect, useMemo, useState } from 'react';
-import { supabase } from '@/lib/supabaseClient';
-import { Button } from '@/components/ui/button';
-import { Plus, Download } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
-import { OrderList, Order } from '@/components/dashboard/OrderList';
+import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
+import { Download, Plus } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Card } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
+import { OrderList, Order } from "@/components/dashboard/OrderList";
+import { useAdminOrdersQuery } from "@/hooks/useAdminQueries";
 
-type PedidoTableRow = Order & {
-  fullAddress?: string;
-  data_pedido?: string;
+const today = new Date().toISOString().slice(0, 10);
+const monthAgo = new Date(Date.now() - 29 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+const PAGE_SIZE = 10;
+
+type ProductChip = {
+  label: string;
 };
 
-const PEDIDOS_PAGE_SIZE = 10;
+type PedidoRow = Order & {
+  fullAddress: string;
+  data_pedido: string | null;
+  products: ProductChip[];
+};
+
+type OrdersResponse = {
+  rows: PedidoRow[];
+  summary: {
+    totalCount: number;
+    openCount: number;
+    concludedCount: number;
+    totalValue: number;
+  };
+  cities: string[];
+  pageInfo: {
+    page: number;
+    totalPages: number;
+    totalItems: number;
+    hasNextPage: boolean;
+  };
+};
+
+const money = (value: number | null | undefined) =>
+  Number(value || 0).toLocaleString("en-US", { style: "currency", currency: "USD" });
+
+const statusLabel = (status: number) => {
+  switch (status) {
+    case 0:
+      return "Pedido recebido";
+    case 1:
+      return "Confirmado";
+    case 2:
+      return "Em preparacao";
+    case 3:
+      return "Pronto";
+    case 4:
+      return "Saiu para entrega";
+    case 5:
+      return "Concluido";
+    default:
+      return "Desconhecido";
+  }
+};
+
+const statusClass = (status: number) => {
+  if (status === 5) return "status-ok";
+  if (status <= 1) return "status-warning";
+  return "status-critical";
+};
 
 export default function PedidosPage() {
-  const [filterSearchInput, setFilterSearchInput] = useState('');
-  const [filterSearch, setFilterSearch] = useState('');
-  const [filterState, setFilterState] = useState('');
-  const [filterCity, setFilterCity] = useState('');
-  const [pedidosParaCards, setPedidosParaCards] = useState<PedidoTableRow[]>([]);
-  const [pedidosOffset, setPedidosOffset] = useState(0);
-  const [hasMorePedidos, setHasMorePedidos] = useState(true);
-  const [isLoadingMorePedidos, setIsLoadingMorePedidos] = useState(false);
   const navigate = useNavigate();
-
-  const fetchPedidos = async ({ reset = false }: { reset?: boolean } = {}) => {
-    if (!reset && (!hasMorePedidos || isLoadingMorePedidos)) return;
-
-    const start = reset ? 0 : pedidosOffset;
-    if (!reset) setIsLoadingMorePedidos(true);
-
-    const { data: pedidosData, error } = await supabase
-      .from('orders')
-      .select('id, cliente_id, data_pedido, status, valor_total')
-      .order('data_pedido', { ascending: false })
-      .order('id', { ascending: false })
-      .range(start, start + PEDIDOS_PAGE_SIZE - 1);
-
-    if (error) {
-      setIsLoadingMorePedidos(false);
-      return;
-    }
-
-    const pedidosBase = pedidosData || [];
-    if (pedidosBase.length === 0) {
-      if (reset) setPedidosParaCards([]);
-      setHasMorePedidos(false);
-      setIsLoadingMorePedidos(false);
-      return;
-    }
-
-    const clienteIds = pedidosBase
-      .map((pedido: any) => pedido.cliente_id)
-      .filter(Boolean);
-
-    const { data: clientesData } = clienteIds.length
-      ? await supabase
-          .from('clients')
-          .select('id, nome, telefone, cidade, endereco_rua, endereco_numero, endereco_complemento, cep, estado')
-          .in('id', clienteIds)
-      : { data: [] as any[] };
-
-    const pedidoIds = pedidosBase.map((pedido: any) => pedido.id);
-    const { data: itensData } = pedidoIds.length
-      ? await supabase
-          .from('order_items')
-          .select('pedido_id, produto_id, quantidade')
-          .in('pedido_id', pedidoIds)
-      : { data: [] as any[] };
-
-    const produtoIds = (itensData || [])
-      .map((item: any) => item.produto_id)
-      .filter(Boolean);
-    const { data: produtosData } = produtoIds.length
-      ? await supabase
-          .from('products')
-          .select('id, nome')
-          .in('id', produtoIds)
-      : { data: [] as any[] };
-
-    const pedidos = pedidosBase.map((pedido: any) => {
-      const cliente = (clientesData || []).find((c: any) => c.id === pedido.cliente_id);
-      const itensPedido = (itensData || []).filter((item: any) => item.pedido_id === pedido.id);
-      const produtosPedido = itensPedido
-        .map((item: any) => {
-          const produto = (produtosData || []).find((p: any) => p.id === item.produto_id);
-          return produto ? `${produto.nome} (${item.quantidade}x)` : '';
-        })
-        .filter(Boolean);
-
-      const city = cliente?.cidade || '-';
-      const fullAddress = cliente
-        ? `${cliente.endereco_rua || '-'}${cliente.endereco_numero ? `, ${cliente.endereco_numero}` : ''}${cliente.endereco_complemento ? `, ${cliente.endereco_complemento}` : ''}, ${cliente.cidade || '-'}, ${cliente.estado || '-'} ${cliente.cep || '-'}`.replace(/\s+/g, ' ').trim()
-        : '-';
-
-      return {
-        id: pedido.id,
-        code: `IMP${pedido.id}`,
-        clientName: cliente?.nome || 'Cliente',
-        city,
-        phone: cliente?.telefone || '-',
-        address: fullAddress,
-        fullAddress,
-        produtos: produtosPedido.join(', '),
-        value: pedido.valor_total,
-        status: typeof pedido.status === 'number' ? pedido.status : 0,
-        data_pedido: pedido.data_pedido,
-      };
-    });
-
-    setPedidosParaCards((prev) => {
-      if (reset) return pedidos;
-      const existingIds = new Set(prev.map((p) => p.id));
-      const uniqueNew = pedidos.filter((p) => !existingIds.has(p.id));
-      return [...prev, ...uniqueNew];
-    });
-    setPedidosOffset(start + pedidosBase.length);
-    setHasMorePedidos(pedidosBase.length === PEDIDOS_PAGE_SIZE);
-    setIsLoadingMorePedidos(false);
-  };
+  const queryClient = useQueryClient();
+  const [start, setStart] = useState(monthAgo);
+  const [end, setEnd] = useState(today);
+  const [searchInput, setSearchInput] = useState("");
+  const [search, setSearch] = useState("");
+  const [status, setStatus] = useState("");
+  const [city, setCity] = useState("");
+  const [onlyOpen, setOnlyOpen] = useState(false);
+  const [page, setPage] = useState(1);
 
   useEffect(() => {
-    fetchPedidos({ reset: true });
-  }, []);
+    const timer = window.setTimeout(() => setSearch(searchInput.trim()), 250);
+    return () => window.clearTimeout(timer);
+  }, [searchInput]);
 
   useEffect(() => {
-    const timer = setTimeout(() => setFilterSearch(filterSearchInput), 250);
-    return () => clearTimeout(timer);
-  }, [filterSearchInput]);
+    setPage(1);
+  }, [start, end, search, status, city, onlyOpen]);
 
-  const statusLabel = (s: number) => {
-    switch (s) {
-      case 0:
-        return 'Pedido Recebido';
-      case 1:
-        return 'Aceito/Confirmado';
-      case 2:
-        return 'Em Preparacao';
-      case 3:
-        return 'Finalizado/Pronto';
-      case 4:
-        return 'Saiu para Entrega';
-      case 5:
-        return 'Concluido';
-      default:
-        return 'Desconhecido';
-    }
-  };
+  const ordersQuery = useAdminOrdersQuery({
+    start,
+    end,
+    search,
+    status,
+    city,
+    onlyOpen,
+    page,
+    pageSize: PAGE_SIZE,
+  });
 
-  const statusClass = (s: number) => {
-    switch (s) {
-      case 5:
-        return 'status-ok';
-      case 0:
-        return 'status-warning';
-      default:
-        return 'status-critical';
-    }
-  };
-
-  const cidadesDisponiveis = useMemo(() => {
-    const cities = Array.from(new Set(pedidosParaCards.map((p) => p.city).filter((c) => c && c !== '-')));
-    return cities.sort((a, b) => a.localeCompare(b));
-  }, [pedidosParaCards]);
-
-  const pedidosFiltrados = useMemo(() => {
-    const search = filterSearch.trim().toLowerCase();
-    return pedidosParaCards.filter((p) => {
-      const byStatus = filterState === '' || p.status === Number(filterState);
-      const byCity = filterCity === '' || p.city === filterCity;
-      const bySearch =
-        search === '' ||
-        p.clientName.toLowerCase().includes(search) ||
-        (p.phone || '').toLowerCase().includes(search) ||
-        (p.code || '').toLowerCase().includes(search);
-      return byStatus && byCity && bySearch;
-    });
-  }, [pedidosParaCards, filterSearch, filterState, filterCity]);
-
-  const pedidosEmAberto = useMemo(
-    () => pedidosParaCards.filter((p) => p.status < 5),
-    [pedidosParaCards],
-  );
+  const orders = (ordersQuery.data as OrdersResponse | undefined)?.rows || [];
+  const summary = (ordersQuery.data as OrdersResponse | undefined)?.summary;
+  const pageInfo = (ordersQuery.data as OrdersResponse | undefined)?.pageInfo;
+  const cities = (ordersQuery.data as OrdersResponse | undefined)?.cities || [];
+  const openOrders = useMemo(() => orders.filter((order) => Number(order.status) < 5), [orders]);
+  const isInitialLoading = ordersQuery.isLoading && !ordersQuery.data;
 
   const exportarCSV = () => {
-    const header = ['Nº Pedido', 'Cliente', 'Cidade', 'Endereco Completo', 'Produtos', 'Data', 'Valor Total', 'Status'];
-    const rows = pedidosFiltrados.map((p) => [
-      p.code,
-      p.clientName,
-      p.city || '-',
-      p.fullAddress || '-',
-      p.produtos || '-',
-      p.data_pedido ? new Date(p.data_pedido).toLocaleDateString('pt-BR') : '-',
-      p.value != null ? Number(p.value).toFixed(2) : '-',
-      statusLabel(p.status),
+    const header = ["Codigo", "Cliente", "Cidade", "Endereco", "Produtos", "Data", "Valor", "Status"];
+    const rows = orders.map((order) => [
+      order.code,
+      order.clientName,
+      order.city || "-",
+      order.fullAddress || "-",
+      order.products.map((product) => product.label).join(", "),
+      order.data_pedido ? new Date(order.data_pedido).toLocaleDateString("pt-BR") : "-",
+      Number(order.value || 0).toFixed(2),
+      statusLabel(Number(order.status || 0)),
     ]);
-    const csv = [header, ...rows].map((r) => r.join(';')).join('\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const csv = [header, ...rows].map((row) => row.join(";")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'pedidos.csv';
-    a.click();
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "pedidos-admin.csv";
+    anchor.click();
     URL.revokeObjectURL(url);
   };
 
   const limparFiltros = () => {
-    setFilterSearchInput('');
-    setFilterSearch('');
-    setFilterState('');
-    setFilterCity('');
+    setStart(monthAgo);
+    setEnd(today);
+    setSearchInput("");
+    setSearch("");
+    setStatus("");
+    setCity("");
+    setOnlyOpen(false);
+    setPage(1);
   };
+
+  const cards = [
+    { label: "Pedidos no filtro", value: summary?.totalCount || 0, accent: "text-foreground" },
+    { label: "Em aberto", value: summary?.openCount || 0, accent: "text-amber-300" },
+    { label: "Concluidos", value: summary?.concludedCount || 0, accent: "text-emerald-300" },
+    { label: "Valor total", value: money(summary?.totalValue), accent: "text-yellow-400" },
+  ];
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-foreground">Pedidos</h1>
-          <p className="text-sm text-muted-foreground">Gestao de vendas e baixa automatica</p>
+          <p className="text-sm text-muted-foreground">Resumo do periodo, filtros fortes e operacao dos pedidos em aberto.</p>
         </div>
-        <Button onClick={() => navigate('/admin/pedidos/novo')} className="gold-gradient-bg text-accent-foreground font-semibold hover:opacity-90 gold-shadow">
-          <Plus className="mr-2 h-4 w-4" /> Novo Pedido
+        <Button onClick={() => navigate("/admin/pedidos/novo")} className="gold-gradient-bg text-accent-foreground font-semibold hover:opacity-90 gold-shadow">
+          <Plus className="mr-2 h-4 w-4" /> Novo pedido
         </Button>
       </div>
 
-      <section className="relative z-20">
-        <h2 className="text-lg font-bold text-yellow-400 mb-2">Pedidos em Aberto</h2>
-        <OrderList orders={pedidosEmAberto} moeda="USD" unidadePeso="LB" onStatusChange={() => fetchPedidos({ reset: true })} />
-      </section>
-
-      <div className="flex flex-wrap gap-3 mb-4 items-center">
-        <input
-          type="text"
-          placeholder="Buscar por cliente, telefone ou codigo"
-          value={filterSearchInput}
-          onChange={(e) => setFilterSearchInput(e.target.value)}
-          className="min-w-[260px] border border-sidebar-border rounded px-3 py-2 bg-sidebar-foreground text-sidebar-primary placeholder-gold-dark focus:ring-gold focus-border-gold"
-        />
-        <select
-          value={filterState}
-          onChange={(e) => setFilterState(e.target.value)}
-          className="border border-sidebar-border rounded px-3 py-2 bg-sidebar-foreground text-sidebar-primary focus:ring-gold focus-border-gold"
-        >
-          <option value="">Status: todos</option>
-          <option value="0">Pedido Recebido</option>
-          <option value="1">Aceito/Confirmado</option>
-          <option value="2">Em Preparacao</option>
-          <option value="3">Finalizado/Pronto</option>
-          <option value="4">Saiu para Entrega</option>
-          <option value="5">Concluido</option>
-        </select>
-        <select
-          value={filterCity}
-          onChange={(e) => setFilterCity(e.target.value)}
-          className="border border-sidebar-border rounded px-3 py-2 bg-sidebar-foreground text-sidebar-primary focus:ring-gold focus-border-gold"
-        >
-          <option value="">Cidade: todas</option>
-          {cidadesDisponiveis.map((city) => (
-            <option key={city} value={city}>
-              {city}
-            </option>
-          ))}
-        </select>
-        <Button variant="outline" className="border-sidebar-border bg-gold text-black font-bold hover:bg-gold-dark transition" onClick={exportarCSV}>
-          <Download className="mr-2 h-4 w-4" /> Exportar CSV
-        </Button>
-        <Button variant="ghost" onClick={limparFiltros}>
-          Limpar filtros
-        </Button>
-        <span className="text-xs text-muted-foreground ml-auto">Resultados: {pedidosFiltrados.length}</span>
+      <div className="grid gap-4 md:grid-cols-4">
+        {cards.map((card) => (
+          <Card key={card.label} className="p-5">
+            <div className="text-sm text-muted-foreground">{card.label}</div>
+            {isInitialLoading ? <Skeleton className="mt-3 h-8 w-28" /> : <div className={`mt-3 text-3xl font-bold ${card.accent}`}>{card.value}</div>}
+          </Card>
+        ))}
       </div>
 
-      <div className="rounded-xl border border-border bg-card card-elevated overflow-hidden">
+      <Card className="sticky top-3 z-10 border-border/70 bg-card/95 p-4 backdrop-blur">
+        <div className="grid gap-3 xl:grid-cols-[1.3fr_repeat(5,minmax(0,1fr))]">
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-muted-foreground">Buscar por cliente, telefone ou codigo</label>
+            <Input value={searchInput} onChange={(event) => setSearchInput(event.target.value)} placeholder="Ex.: IMP102, Joao, 319..." />
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-muted-foreground">Inicio</label>
+            <Input type="date" value={start} onChange={(event) => setStart(event.target.value)} />
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-muted-foreground">Fim</label>
+            <Input type="date" value={end} onChange={(event) => setEnd(event.target.value)} />
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-muted-foreground">Status</label>
+            <select value={status} onChange={(event) => setStatus(event.target.value)} className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
+              <option value="">Todos</option>
+              <option value="0">Pedido recebido</option>
+              <option value="1">Confirmado</option>
+              <option value="2">Em preparacao</option>
+              <option value="3">Pronto</option>
+              <option value="4">Saiu para entrega</option>
+              <option value="5">Concluido</option>
+            </select>
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-muted-foreground">Cidade</label>
+            <select value={city} onChange={(event) => setCity(event.target.value)} className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
+              <option value="">Todas</option>
+              {cities.map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex flex-wrap items-end gap-2">
+            <label className="flex h-10 items-center gap-2 rounded-md border border-border px-3 text-sm">
+              <input type="checkbox" checked={onlyOpen} onChange={(event) => setOnlyOpen(event.target.checked)} />
+              Somente em aberto
+            </label>
+            <Button variant="outline" onClick={exportarCSV}>
+              <Download className="mr-2 h-4 w-4" /> Exportar
+            </Button>
+            <Button variant="ghost" onClick={limparFiltros}>Limpar</Button>
+          </div>
+        </div>
+        <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
+          <span>{pageInfo?.totalItems || 0} pedido(s) encontrados</span>
+          {ordersQuery.isFetching ? <span>Atualizando dados...</span> : null}
+        </div>
+      </Card>
+
+      {openOrders.length > 0 ? (
+        <section className="space-y-3">
+          <div>
+            <h2 className="text-lg font-semibold text-foreground">Pedidos em aberto nesta visao</h2>
+            <p className="text-sm text-muted-foreground">Atualize status rapido sem sair da pagina.</p>
+          </div>
+          <OrderList
+            orders={openOrders}
+            moeda="USD"
+            unidadePeso="LB"
+            onStatusChange={() => queryClient.invalidateQueries({ queryKey: ["admin", "orders"] })}
+          />
+        </section>
+      ) : null}
+
+      <Card className="overflow-hidden border-border/70 bg-card p-0">
         <div className="overflow-x-auto">
-          <table className="w-full text-sm rounded-xl overflow-hidden shadow-lg">
-            <thead className="bg-gold text-black">
+          <table className="w-full text-sm">
+            <thead className="bg-muted/40 text-left text-xs uppercase tracking-wide text-muted-foreground">
               <tr>
-                <th className="px-4 py-3 text-left font-bold">Nº Pedido</th>
-                <th className="px-4 py-3 text-left font-bold">Cliente</th>
-                <th className="px-4 py-3 text-left font-bold">Cidade</th>
-                <th className="px-4 py-3 text-left font-bold">Endereco</th>
-                <th className="px-4 py-3 text-left font-bold">Produtos</th>
-                <th className="px-4 py-3 text-left font-bold">Data</th>
-                <th className="px-4 py-3 text-right font-bold">Valor Total</th>
-                <th className="px-4 py-3 text-center font-bold">Status</th>
+                <th className="px-4 py-3">Pedido</th>
+                <th className="px-4 py-3">Cliente</th>
+                <th className="px-4 py-3">Cidade</th>
+                <th className="px-4 py-3">Endereco</th>
+                <th className="px-4 py-3">Produtos</th>
+                <th className="px-4 py-3">Data</th>
+                <th className="px-4 py-3 text-right">Valor</th>
+                <th className="px-4 py-3 text-center">Status</th>
               </tr>
             </thead>
-            <tbody className="bg-card text-white">
-              {pedidosFiltrados.map((p) => (
-                <tr key={p.id} className="border-b border-border last:border-0 hover:bg-gold/10 transition-colors">
-                  <td className="px-4 py-3 font-mono text-xs font-bold text-gold">{p.code}</td>
-                  <td className="px-4 py-3 font-semibold">{p.clientName}</td>
-                  <td className="px-4 py-3 text-sm text-muted-foreground">{p.city || '-'}</td>
-                  <td className="px-4 py-3 text-sm text-muted-foreground">{p.fullAddress || '-'}</td>
-                  <td className="px-4 py-3 text-sm">
-                    {p.produtos ? (
-                      p.produtos.split(', ').map((prod, idx) => (
-                        <span key={idx} className="inline-block bg-gold/20 text-gold-dark rounded px-2 py-1 mr-1 mb-1 font-semibold text-xs">
-                          {prod}
-                        </span>
-                      ))
-                    ) : (
-                      <span className="text-muted">-</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-muted-foreground">
-                    {p.data_pedido
-                      ? new Date(p.data_pedido).toLocaleDateString('pt-BR', {
-                          day: '2-digit',
-                          month: '2-digit',
-                          year: 'numeric',
-                        })
-                      : '-'}
-                  </td>
-                  <td className="px-4 py-3 text-right font-bold text-lg text-gold">
-                    {p.value != null ? p.value.toLocaleString('en-US', { style: 'currency', currency: 'USD' }) : '-'}
-                  </td>
-                  <td className="px-4 py-3 text-center">
-                    <span className={`inline-flex rounded-full border px-2.5 py-0.5 text-xs font-bold ${statusClass(p.status)}`}>
-                      {statusLabel(p.status)}
-                    </span>
+            <tbody>
+              {isInitialLoading ? (
+                Array.from({ length: 6 }).map((_, index) => (
+                  <tr key={`orders-skeleton-${index}`} className="border-t border-border/60">
+                    {Array.from({ length: 8 }).map((__, cellIndex) => (
+                      <td key={`orders-skeleton-${index}-${cellIndex}`} className="px-4 py-4">
+                        <Skeleton className="h-5 w-full max-w-[140px]" />
+                      </td>
+                    ))}
+                  </tr>
+                ))
+              ) : orders.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="px-4 py-12 text-center text-sm text-muted-foreground">
+                    Nenhum pedido encontrado com os filtros atuais.
                   </td>
                 </tr>
-              ))}
+              ) : (
+                orders.map((order) => (
+                  <tr key={order.id} className="border-t border-border/60 align-top">
+                    <td className="px-4 py-4">
+                      <div className="font-mono text-xs font-bold text-yellow-400">{order.code}</div>
+                    </td>
+                    <td className="px-4 py-4">
+                      <div className="font-semibold text-foreground">{order.clientName}</div>
+                      <div className="text-xs text-muted-foreground">{order.phone || "-"}</div>
+                    </td>
+                    <td className="px-4 py-4 text-muted-foreground">{order.city || "-"}</td>
+                    <td className="max-w-[280px] px-4 py-4 text-muted-foreground">{order.fullAddress || "-"}</td>
+                    <td className="px-4 py-4">
+                      <div className="flex max-w-[260px] flex-wrap gap-1.5">
+                        {order.products.slice(0, 3).map((product) => (
+                          <span key={`${order.id}-${product.label}`} className="rounded-full border border-border/70 bg-muted/30 px-2 py-1 text-[11px]">
+                            {product.label}
+                          </span>
+                        ))}
+                        {order.products.length > 3 ? (
+                          <span className="rounded-full border border-border/70 px-2 py-1 text-[11px] text-muted-foreground">
+                            +{order.products.length - 3} item(ns)
+                          </span>
+                        ) : null}
+                      </div>
+                    </td>
+                    <td className="px-4 py-4 text-muted-foreground">
+                      {order.data_pedido ? new Date(order.data_pedido).toLocaleString("pt-BR") : "-"}
+                    </td>
+                    <td className="px-4 py-4 text-right font-semibold text-yellow-400">{money(order.value)}</td>
+                    <td className="px-4 py-4 text-center">
+                      <span className={`inline-flex rounded-full border px-2.5 py-0.5 text-xs font-semibold ${statusClass(Number(order.status || 0))}`}>
+                        {statusLabel(Number(order.status || 0))}
+                      </span>
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>
-      </div>
+      </Card>
 
-      {hasMorePedidos ? (
-        <div className="flex justify-center">
-          <Button
-            type="button"
-            variant="outline"
-            className="border-sidebar-border bg-gold text-black font-bold hover:bg-gold-dark transition"
-            onClick={() => fetchPedidos()}
-            disabled={isLoadingMorePedidos}
-          >
-            {isLoadingMorePedidos ? 'Carregando...' : 'Carregar mais'}
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-xs text-muted-foreground">
+          Pagina {pageInfo?.page || 1} de {pageInfo?.totalPages || 1}
+        </p>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" disabled={(pageInfo?.page || 1) <= 1} onClick={() => setPage((current) => Math.max(1, current - 1))}>
+            Anterior
+          </Button>
+          <Button variant="outline" disabled={!pageInfo?.hasNextPage} onClick={() => setPage((current) => current + 1)}>
+            Proxima
           </Button>
         </div>
-      ) : null}
+      </div>
     </div>
   );
 }

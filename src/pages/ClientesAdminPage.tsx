@@ -1,379 +1,398 @@
-﻿import { useEffect, useMemo, useState } from 'react';
-import React from 'react';
-import { supabase } from '@/lib/supabaseClient';
-import { Input } from '@/components/ui/input';
-import { Button } from '@/components/ui/button';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import { Download, Search, Star, Phone, Mail, MapPin, ChevronRight, ChevronUp, ChevronDown } from 'lucide-react';
-import { Modal } from '@/components/ui/modal';
-import { Card } from '@/components/ui/card';
+import { useEffect, useMemo, useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Modal } from "@/components/ui/modal";
+import { Skeleton } from "@/components/ui/skeleton";
+import { backendRequest } from "@/lib/backendClient";
+import { supabase } from "@/lib/supabaseClient";
+import { useAdminClientsQuery } from "@/hooks/useAdminQueries";
+import { Download, Mail, MessageSquareText, Phone, Star } from "lucide-react";
+import { toast } from "sonner";
 
-type SortField = 'nome' | 'email' | 'vip' | 'pedidos';
+type SortField = "nome" | "email" | "vip" | "pedidos";
+type Segment = "all" | "vip" | "non_vip";
 
-class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean }> {
-  constructor(props: any) {
-    super(props);
-    this.state = { hasError: false };
-  }
+type ClientRow = {
+  id: string;
+  nome: string;
+  email: string | null;
+  telefone: string | null;
+  documento: string | null;
+  vip: boolean;
+  vip_observacao?: string | null;
+  order_count: number;
+  address: string;
+};
 
-  static getDerivedStateFromError() {
-    return { hasError: true };
-  }
+type ClientsResponse = {
+  rows: ClientRow[];
+  summary: {
+    totalClients: number;
+    totalVips: number;
+    totalOrders: number;
+    matchingClients: number;
+  };
+  pageInfo: {
+    page: number;
+    totalPages: number;
+    totalItems: number;
+    hasNextPage: boolean;
+  };
+};
 
-  componentDidCatch(error: any, errorInfo: any) {
-    console.error('ErrorBoundary:', error, errorInfo);
-  }
+type CampaignPreview = {
+  audienceCount: number;
+  excludedWithoutPhone: number;
+  sampleRecipients: Array<{
+    id: string;
+    nome: string;
+    phone: string;
+    previewText: string;
+  }>;
+  previewText: string;
+};
 
-  render() {
-    if (this.state.hasError) {
-      return (
-        <div className="p-8 text-center text-red-600">
-          Ocorreu um erro nesta pagina.
-          <br />
-          Verifique o console para detalhes.
-        </div>
-      );
-    }
-    return this.props.children;
-  }
-}
-
-function enderecoCompleto(c: any) {
-  return `${c.endereco_rua || ''}, ${c.endereco_numero || ''}${c.endereco_complemento ? ` - ${c.endereco_complemento}` : ''}, ${c.cidade || ''} - ${c.estado || ''}`
-    .replace(/^, |, $| - $/, '')
-    .trim();
+function enderecoCompleto(cliente: ClientRow) {
+  return cliente.address || "-";
 }
 
 export default function ClientesAdminPage() {
-  const [clientes, setClientes] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [pedidosPorCliente, setPedidosPorCliente] = useState<{ [id: string]: number }>({});
+  const queryClient = useQueryClient();
+  const [searchInput, setSearchInput] = useState("");
+  const [search, setSearch] = useState("");
+  const [segment, setSegment] = useState<Segment>("all");
+  const [withOrders, setWithOrders] = useState(false);
+  const [sortField, setSortField] = useState<SortField>("nome");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const [page, setPage] = useState(1);
+  const [modalVIP, setModalVIP] = useState<{ open: boolean; cliente: ClientRow | null }>({ open: false, cliente: null });
+  const [vipObservacao, setVipObservacao] = useState("");
+  const [modalPerfil, setModalPerfil] = useState<{ open: boolean; cliente: ClientRow | null }>({ open: false, cliente: null });
+  const [campaignSegment, setCampaignSegment] = useState<Segment>("all");
+  const [campaignMessage, setCampaignMessage] = useState("");
+  const [campaignPreview, setCampaignPreview] = useState<CampaignPreview | null>(null);
+  const [campaignPreviewOpen, setCampaignPreviewOpen] = useState(false);
 
-  const [buscaInput, setBuscaInput] = useState('');
-  const [busca, setBusca] = useState('');
-  const [filtroVIP, setFiltroVIP] = useState(false);
-  const [filtroComPedidos, setFiltroComPedidos] = useState(false);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSearch(searchInput.trim()), 300);
+    return () => window.clearTimeout(timer);
+  }, [searchInput]);
 
-  const [sortField, setSortField] = useState<SortField>('nome');
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  useEffect(() => {
+    setPage(1);
+  }, [search, segment, withOrders, sortField, sortDir]);
 
-  const [paginaAtual, setPaginaAtual] = useState(1);
-  const itensPorPagina = 10;
-
-  const [modalVIP, setModalVIP] = useState<{ open: boolean; clienteId: string | null; status: boolean }>({
-    open: false,
-    clienteId: null,
-    status: false,
+  const clientsQuery = useAdminClientsQuery({
+    search,
+    segment,
+    withOrders,
+    page,
+    pageSize: 10,
+    sortField,
+    sortDir,
   });
-  const [vipObservacao, setVipObservacao] = useState('');
-  const [vipSaving, setVipSaving] = useState(false);
-  const [vipLoadingId, setVipLoadingId] = useState<string | null>(null);
 
-  const [modalPerfil, setModalPerfil] = useState<{ open: boolean; cliente: any | null }>({ open: false, cliente: null });
+  const clients = (clientsQuery.data as ClientsResponse | undefined)?.rows || [];
+  const summary = (clientsQuery.data as ClientsResponse | undefined)?.summary;
+  const pageInfo = (clientsQuery.data as ClientsResponse | undefined)?.pageInfo;
+  const isInitialLoading = clientsQuery.isLoading && !clientsQuery.data;
 
-  useEffect(() => {
-    async function fetchClientes() {
-      setLoading(true);
-      const { data } = await supabase.from('clients').select('*');
-      setClientes(data || []);
-      setLoading(false);
-    }
+  const previewMutation = useMutation({
+    mutationFn: () =>
+      backendRequest<CampaignPreview>("/api/client-campaigns/preview", {
+        method: "POST",
+        body: JSON.stringify({
+          segment: campaignSegment,
+          search,
+          withOrders,
+          message: campaignMessage,
+        }),
+      }),
+    onSuccess: (payload) => {
+      setCampaignPreview(payload);
+      setCampaignPreviewOpen(true);
+    },
+    onError: (error: any) => {
+      toast.error(error.message || "Erro ao gerar previa da campanha");
+    },
+  });
 
-    async function fetchPedidos() {
-      const { data } = await supabase.from('orders').select('client_id');
-      const counts: { [id: string]: number } = {};
-      (data || []).forEach((pedido: any) => {
-        counts[pedido.client_id] = (counts[pedido.client_id] || 0) + 1;
-      });
-      setPedidosPorCliente(counts);
-    }
+  const sendMutation = useMutation({
+    mutationFn: () =>
+      backendRequest("/api/client-campaigns/send", {
+        method: "POST",
+        body: JSON.stringify({
+          segment: campaignSegment,
+          search,
+          withOrders,
+          message: campaignMessage,
+          createdBy: window.localStorage.getItem("imperial-flow-nome") || "admin",
+        }),
+      }),
+    onSuccess: (payload: any) => {
+      toast.success(`Campanha enviada: ${payload.sentCount} enviado(s), ${payload.failedCount} falha(s), ${payload.skippedCount} ignorado(s).`);
+      setCampaignPreviewOpen(false);
+      setCampaignPreview(null);
+      setCampaignMessage("");
+      setCampaignSegment("all");
+    },
+    onError: (error: any) => {
+      toast.error(error.message || "Erro ao enviar campanha");
+    },
+  });
 
-    fetchClientes();
-    fetchPedidos();
-  }, []);
+  const toggleVipMutation = useMutation({
+    mutationFn: async () => {
+      if (!modalVIP.cliente) throw new Error("Cliente invalido.");
+      const { error } = await supabase
+        .from("clients")
+        .update({
+          vip: !modalVIP.cliente.vip,
+          vip_observacao: vipObservacao || null,
+        })
+        .eq("id", modalVIP.cliente.id);
 
-  useEffect(() => {
-    const timer = setTimeout(() => setBusca(buscaInput), 300);
-    return () => clearTimeout(timer);
-  }, [buscaInput]);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "clients"] });
+      toast.success("Status VIP atualizado");
+      setModalVIP({ open: false, cliente: null });
+      setVipObservacao("");
+    },
+    onError: (error: any) => {
+      toast.error(error.message || "Erro ao atualizar VIP");
+    },
+  });
+
+  const exportarCSV = () => {
+    const header = ["Nome", "Email", "Telefone", "VIP", "Pedidos"];
+    const rows = clients.map((client) => [
+      client.nome,
+      client.email || "-",
+      client.telefone || "-",
+      client.vip ? "Sim" : "Nao",
+      client.order_count,
+    ]);
+    const csv = [header, ...rows].map((row) => row.join(";")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "clientes-admin.csv";
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const cards = useMemo(
+    () => [
+      { label: "VIPs", value: summary?.totalVips || 0, icon: <Star className="h-6 w-6 text-yellow-400" />, accent: "text-yellow-400" },
+      { label: "Clientes", value: summary?.totalClients || 0, icon: <Phone className="h-6 w-6 text-primary" />, accent: "text-primary" },
+      { label: "Pedidos", value: summary?.totalOrders || 0, icon: <Mail className="h-6 w-6 text-zinc-300" />, accent: "text-zinc-100" },
+    ],
+    [summary],
+  );
 
   const alternarOrdenacao = (field: SortField) => {
     if (sortField === field) {
-      setSortDir((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+      setSortDir((current) => (current === "asc" ? "desc" : "asc"));
       return;
     }
     setSortField(field);
-    setSortDir('asc');
+    setSortDir("asc");
   };
 
-  const clientesFiltrados = useMemo(() => {
-    let filtrados = [...clientes];
-
-    if (busca.trim()) {
-      const b = busca.toLowerCase();
-      filtrados = filtrados.filter(
-        (c) =>
-          c.nome?.toLowerCase().includes(b) ||
-          c.email?.toLowerCase().includes(b) ||
-          c.documento?.toLowerCase().includes(b)
-      );
-    }
-
-    if (filtroVIP) {
-      filtrados = filtrados.filter((c) => c.vip);
-    }
-
-    if (filtroComPedidos) {
-      filtrados = filtrados.filter((c) => (pedidosPorCliente[c.id] || 0) > 0);
-    }
-
-    filtrados.sort((a, b) => {
-      const pedidosA = pedidosPorCliente[a.id] || 0;
-      const pedidosB = pedidosPorCliente[b.id] || 0;
-
-      let compare = 0;
-      if (sortField === 'nome') compare = (a.nome || '').localeCompare(b.nome || '');
-      if (sortField === 'email') compare = (a.email || '').localeCompare(b.email || '');
-      if (sortField === 'vip') compare = Number(Boolean(a.vip)) - Number(Boolean(b.vip));
-      if (sortField === 'pedidos') compare = pedidosA - pedidosB;
-
-      return sortDir === 'asc' ? compare : -compare;
-    });
-
-    return filtrados;
-  }, [clientes, busca, filtroVIP, filtroComPedidos, sortField, sortDir, pedidosPorCliente]);
-
-  useEffect(() => {
-    setPaginaAtual(1);
-  }, [busca, filtroVIP, filtroComPedidos, sortField, sortDir]);
-
-  const totalPaginas = Math.max(1, Math.ceil(clientesFiltrados.length / itensPorPagina));
-  const inicio = (paginaAtual - 1) * itensPorPagina;
-  const fim = inicio + itensPorPagina;
-  const clientesPaginados = clientesFiltrados.slice(inicio, fim);
-
-  function exportarCSV() {
-    const header = ['Nome', 'Email', 'Telefone', 'VIP', 'Pedidos'];
-    const rows = clientesFiltrados.map((c) => [c.nome, c.email, c.telefone, c.vip ? 'Sim' : 'Nao', pedidosPorCliente[c.id] || 0]);
-    const csv = [header, ...rows].map((r) => r.join(';')).join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'clientes.csv';
-    a.click();
-    URL.revokeObjectURL(url);
-  }
-
-  const totalPedidos = Object.values(pedidosPorCliente).reduce((a, b) => a + b, 0);
-  const totalVips = clientes.filter((c) => c.vip).length;
-
-  const sortIcon = (field: SortField) => {
-    if (sortField !== field) return null;
-    return sortDir === 'asc' ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />;
+  const limparFiltros = () => {
+    setSearchInput("");
+    setSearch("");
+    setSegment("all");
+    setWithOrders(false);
+    setSortField("nome");
+    setSortDir("asc");
+    setPage(1);
   };
 
   return (
-    <ErrorBoundary>
-      <div className="w-full min-w-0 max-w-full py-6 px-2 sm:px-4 md:px-6 xl:px-8 space-y-6 overflow-x-hidden">
-        <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(280px,1fr))]">
-          <Card className="w-full min-w-0 flex items-center gap-4 border border-yellow-500/25 bg-[linear-gradient(120deg,rgba(255,205,60,0.12),rgba(20,20,20,0.9))] px-5 py-4 shadow-lg">
-            <div className="rounded-xl border border-yellow-500/40 bg-yellow-500/15 p-2.5">
-              <Star className="h-6 w-6 text-yellow-400" />
-            </div>
+    <div className="space-y-6">
+      <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(240px,1fr))]">
+        {cards.map((card) => (
+          <Card key={card.label} className="flex items-center gap-4 p-5">
+            <div className="rounded-xl border border-border/70 bg-muted/20 p-2.5">{card.icon}</div>
             <div>
-              <div className="text-sm font-semibold uppercase tracking-wide text-zinc-300">VIPs</div>
-              <div className="text-3xl leading-none font-extrabold text-yellow-400">{totalVips}</div>
+              <div className="text-sm font-semibold uppercase tracking-wide text-zinc-300">{card.label}</div>
+              {isInitialLoading ? <Skeleton className="mt-2 h-8 w-16" /> : <div className={`text-3xl font-extrabold ${card.accent}`}>{card.value}</div>}
             </div>
           </Card>
-          <Card className="w-full min-w-0 flex items-center gap-4 border border-border/70 bg-[linear-gradient(120deg,rgba(38,38,38,0.85),rgba(15,15,15,0.95))] px-5 py-4 shadow-lg">
-            <div className="rounded-xl border border-primary/40 bg-primary/10 p-2.5">
-              <Phone className="h-6 w-6 text-primary" />
-            </div>
-            <div>
-              <div className="text-sm font-semibold uppercase tracking-wide text-zinc-300">Clientes</div>
-              <div className="text-3xl leading-none font-extrabold text-primary">{clientes.length}</div>
-            </div>
-          </Card>
-          <Card className="w-full min-w-0 flex items-center gap-4 border border-border/70 bg-[linear-gradient(120deg,rgba(38,38,38,0.85),rgba(15,15,15,0.95))] px-5 py-4 shadow-lg">
-            <div className="rounded-xl border border-zinc-500/40 bg-zinc-500/10 p-2.5">
-              <Mail className="h-6 w-6 text-zinc-300" />
-            </div>
-            <div>
-              <div className="text-sm font-semibold uppercase tracking-wide text-zinc-300">Pedidos</div>
-              <div className="text-3xl leading-none font-extrabold text-zinc-100">{totalPedidos}</div>
-            </div>
-          </Card>
-        </div>
+        ))}
+      </div>
 
-        <div className="rounded-2xl border border-border/70 bg-[linear-gradient(160deg,rgba(30,30,30,0.85),rgba(9,9,9,0.98))] p-4 md:p-5">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+      <Card className="space-y-4 p-5">
+        <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
           <div>
-            <h1 className="text-3xl font-extrabold tracking-tight text-foreground">Clientes cadastrados</h1>
-            <p className="text-sm text-muted-foreground">Gestao premium dos clientes do sistema</p>
+            <h1 className="text-3xl font-extrabold tracking-tight text-foreground">Clientes</h1>
+            <p className="text-sm text-muted-foreground">Base do relacionamento, segmentacao VIP e campanhas por WhatsApp.</p>
           </div>
-          <div className="flex w-full flex-wrap items-center gap-2 lg:w-auto lg:justify-end">
-            <Input
-              placeholder="Buscar por nome, email ou documento..."
-              value={buscaInput}
-              onChange={(e) => setBuscaInput(e.target.value)}
-              className="min-w-0 w-full sm:w-80 md:w-72 lg:w-80 bg-black/40 border-border/70 focus:ring-primary"
-              prefix={<Search className="h-4 w-4 text-muted-foreground" />}
-            />
-            <Button variant="outline" onClick={exportarCSV} className="gap-2 border-border/70 bg-black/30 hover:bg-black/50">
-              <Download className="h-4 w-4" /> Exportar CSV
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" onClick={exportarCSV}>
+              <Download className="mr-2 h-4 w-4" /> Exportar CSV
             </Button>
-            <Button variant={filtroVIP ? 'default' : 'outline'} className={filtroVIP ? 'bg-yellow-500 text-black hover:bg-yellow-400' : 'border-border/70 bg-black/30 hover:bg-black/50'} onClick={() => setFiltroVIP((v) => !v)}>
-              VIPs {filtroVIP ? 'sim' : ''}
+            <span className="self-center text-xs text-muted-foreground">{summary?.matchingClients || 0} cliente(s) no filtro</span>
+          </div>
+        </div>
+
+        <div className="grid gap-3 xl:grid-cols-[1.2fr_repeat(4,minmax(0,1fr))]">
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-muted-foreground">Buscar cliente</label>
+            <Input value={searchInput} onChange={(event) => setSearchInput(event.target.value)} placeholder="Nome, email, telefone ou documento" />
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-muted-foreground">Segmento</label>
+            <select value={segment} onChange={(event) => setSegment(event.target.value as Segment)} className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
+              <option value="all">Todos</option>
+              <option value="vip">Somente VIP</option>
+              <option value="non_vip">Somente nao VIP</option>
+            </select>
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-muted-foreground">Ordenar por</label>
+            <select value={sortField} onChange={(event) => setSortField(event.target.value as SortField)} className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
+              <option value="nome">Nome</option>
+              <option value="email">Email</option>
+              <option value="vip">VIP</option>
+              <option value="pedidos">Pedidos</option>
+            </select>
+          </div>
+          <div className="flex items-end gap-2">
+            <Button variant="outline" onClick={() => setSortDir((current) => (current === "asc" ? "desc" : "asc"))}>
+              Ordem: {sortDir === "asc" ? "Crescente" : "Decrescente"}
             </Button>
-            <Button variant={filtroComPedidos ? 'default' : 'outline'} className={filtroComPedidos ? 'bg-primary text-primary-foreground hover:bg-primary/90' : 'border-border/70 bg-black/30 hover:bg-black/50'} onClick={() => setFiltroComPedidos((v) => !v)}>
+          </div>
+          <div className="flex flex-wrap items-end gap-2">
+            <label className="flex h-10 items-center gap-2 rounded-md border border-border px-3 text-sm">
+              <input type="checkbox" checked={withOrders} onChange={(event) => setWithOrders(event.target.checked)} />
               Com pedidos
-            </Button>
-            <Button
-              variant="ghost"
-              className="text-zinc-300 hover:text-white hover:bg-white/5"
-              onClick={() => {
-                setBuscaInput('');
-                setBusca('');
-                setFiltroVIP(false);
-                setFiltroComPedidos(false);
-              }}
-            >
-              Limpar filtros
-            </Button>
+            </label>
+            <Button variant="ghost" onClick={limparFiltros}>Limpar</Button>
           </div>
         </div>
+      </Card>
+
+      <Card className="space-y-4 border-emerald-500/20 bg-[linear-gradient(160deg,rgba(12,29,21,0.9),rgba(10,10,10,0.98))] p-5">
+        <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+          <div>
+            <div className="text-[11px] font-semibold uppercase tracking-[0.28em] text-emerald-300/80">Campanha para clientes</div>
+            <h2 className="mt-2 text-2xl font-bold text-foreground">WhatsApp com previa antes do envio</h2>
+            <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
+              Escolha a audiencia, personalize com <code>{`{nome}`}</code> e confira a previa antes de disparar.
+            </p>
+          </div>
+          <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
+            Filtros reaproveitados da tela: busca atual e opcao "com pedidos".
+          </div>
         </div>
 
-        <div className="md:hidden space-y-3">
-          {loading ? (
-            <div className="rounded-xl border border-border/60 bg-black/40 p-4 text-sm text-muted-foreground">Carregando...</div>
-          ) : clientesFiltrados.length === 0 ? (
-            <div className="rounded-xl border border-border/60 bg-black/40 p-4 text-sm text-muted-foreground">Nenhum cliente encontrado.</div>
-          ) : (
-            clientesPaginados.map((c) => (
-              <div key={`mobile-${c.id}`} className="rounded-xl border border-border/60 bg-[linear-gradient(160deg,rgba(28,28,28,0.9),rgba(10,10,10,0.98))] p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <Avatar className="h-10 w-10 ring-1 ring-border/60">
-                      <AvatarFallback>{c.nome?.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase()}</AvatarFallback>
-                    </Avatar>
-                    <div className="min-w-0">
-                      <p className="truncate font-semibold text-foreground">{c.nome}</p>
-                      <p className="truncate text-xs text-zinc-400">{c.email}</p>
-                    </div>
-                  </div>
-                  {c.vip ? (
-                    <span className="inline-flex items-center rounded-md bg-yellow-300 px-2 py-1 text-[10px] font-bold text-yellow-900">VIP</span>
-                  ) : null}
-                </div>
-
-                <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-                  <div className="rounded-md bg-black/30 p-2">
-                    <p className="text-zinc-400">Telefone</p>
-                    <p className="mt-0.5 font-medium text-zinc-100">{c.telefone || '-'}</p>
-                  </div>
-                  <div className="rounded-md bg-black/30 p-2">
-                    <p className="text-zinc-400">Pedidos</p>
-                    <p className="mt-0.5 font-bold text-yellow-400">{pedidosPorCliente[c.id] || 0}</p>
-                  </div>
-                  <div className="col-span-2 rounded-md bg-black/30 p-2">
-                    <p className="text-zinc-400">Endereco</p>
-                    <p className="mt-0.5 line-clamp-2 font-medium text-zinc-100">{enderecoCompleto(c)}</p>
-                  </div>
-                </div>
-
-                <div className="mt-3 flex gap-2">
-                  <Button size="sm" variant="outline" className="flex-1 border-border/70 bg-black/30 hover:bg-black/50" onClick={() => setModalPerfil({ open: true, cliente: c })}>
-                    Ver perfil
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant={c.vip ? 'outline' : 'default'}
-                    className={c.vip ? 'flex-1 border-border/70 bg-black/30 hover:bg-black/50' : 'flex-1 bg-yellow-500 text-black hover:bg-yellow-400'}
-                    disabled={vipLoadingId === c.id}
-                    onClick={() => {
-                      setVipObservacao(c.vip_observacao || '');
-                      setModalVIP({ open: true, clienteId: c.id, status: c.vip });
-                    }}
-                  >
-                    {vipLoadingId === c.id ? 'Salvando...' : c.vip ? 'Remover VIP' : 'Marcar VIP'}
-                  </Button>
-                </div>
-              </div>
-            ))
-          )}
+        <div className="grid gap-3 md:grid-cols-[220px,1fr]">
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-muted-foreground">Audiencia</label>
+            <select value={campaignSegment} onChange={(event) => setCampaignSegment(event.target.value as Segment)} className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
+              <option value="all">Todos os clientes</option>
+              <option value="vip">Somente VIP</option>
+              <option value="non_vip">Somente nao VIP</option>
+            </select>
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-muted-foreground">Mensagem</label>
+            <textarea
+              value={campaignMessage}
+              onChange={(event) => setCampaignMessage(event.target.value)}
+              className="min-h-[140px] w-full rounded-md border border-input bg-background px-3 py-3 text-sm"
+              placeholder="Ex.: Oi, {nome}! Temos novidades para voce hoje."
+            />
+          </div>
         </div>
 
-        <div className="hidden md:block max-w-full overflow-x-auto rounded-2xl border border-border/70 bg-[linear-gradient(180deg,rgba(20,20,20,0.94),rgba(8,8,8,0.98))] shadow-xl w-full">
-          <table className="w-full divide-y divide-border">
-            <thead className="bg-zinc-900/90 sticky top-0 z-10 backdrop-blur">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button onClick={() => previewMutation.mutate()} disabled={previewMutation.isPending || !campaignMessage.trim()}>
+            <MessageSquareText className="mr-2 h-4 w-4" />
+            {previewMutation.isPending ? "Gerando previa..." : "Gerar previa"}
+          </Button>
+          <span className="text-xs text-muted-foreground">
+            Segmento da campanha independe do filtro visual da lista, mas usa a busca atual e o filtro "com pedidos".
+          </span>
+        </div>
+      </Card>
+
+      <Card className="overflow-hidden p-0">
+        <div className="hidden md:block overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-muted/40 text-left text-xs uppercase tracking-wide text-muted-foreground">
               <tr>
-                <th className="px-5 py-3 text-left text-xs font-bold uppercase tracking-wide text-zinc-100 cursor-pointer" onClick={() => alternarOrdenacao('nome')}>
-                  <div className="inline-flex items-center gap-1">Nome {sortIcon('nome')}</div>
-                </th>
-                <th className="px-5 py-3 text-left text-xs font-bold uppercase tracking-wide text-zinc-100 cursor-pointer" onClick={() => alternarOrdenacao('email')}>
-                  <div className="inline-flex items-center gap-1">Email {sortIcon('email')}</div>
-                </th>
-                <th className="px-5 py-3 text-left text-xs font-bold uppercase tracking-wide text-zinc-100">Telefone</th>
-                <th className="px-5 py-3 text-left text-xs font-bold uppercase tracking-wide text-zinc-100">Endereco</th>
-                <th className="px-5 py-3 text-left text-xs font-bold uppercase tracking-wide text-zinc-100 cursor-pointer" onClick={() => alternarOrdenacao('vip')}>
-                  <div className="inline-flex items-center gap-1">VIP {sortIcon('vip')}</div>
-                </th>
-                <th className="px-5 py-3 text-left text-xs font-bold uppercase tracking-wide text-zinc-100 cursor-pointer" onClick={() => alternarOrdenacao('pedidos')}>
-                  <div className="inline-flex items-center gap-1">Pedidos {sortIcon('pedidos')}</div>
-                </th>
-                <th className="px-5 py-3 text-left text-xs font-bold uppercase tracking-wide text-zinc-100">Acoes</th>
+                <th className="px-5 py-3 cursor-pointer" onClick={() => alternarOrdenacao("nome")}>Nome</th>
+                <th className="px-5 py-3 cursor-pointer" onClick={() => alternarOrdenacao("email")}>Email</th>
+                <th className="px-5 py-3">Telefone</th>
+                <th className="px-5 py-3">Endereco</th>
+                <th className="px-5 py-3 cursor-pointer" onClick={() => alternarOrdenacao("vip")}>VIP</th>
+                <th className="px-5 py-3 cursor-pointer" onClick={() => alternarOrdenacao("pedidos")}>Pedidos</th>
+                <th className="px-5 py-3">Acoes</th>
               </tr>
             </thead>
             <tbody>
-              {loading ? (
+              {isInitialLoading ? (
+                Array.from({ length: 8 }).map((_, index) => (
+                  <tr key={`clients-skeleton-${index}`} className="border-t border-border/50">
+                    {Array.from({ length: 7 }).map((__, cellIndex) => (
+                      <td key={`clients-skeleton-${index}-${cellIndex}`} className="px-5 py-4">
+                        <Skeleton className="h-5 w-full max-w-[160px]" />
+                      </td>
+                    ))}
+                  </tr>
+                ))
+              ) : clients.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="p-8 text-center text-muted-foreground">Carregando...</td>
-                </tr>
-              ) : clientesFiltrados.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="p-8 text-center text-muted-foreground">Nenhum cliente encontrado.</td>
+                  <td colSpan={7} className="px-5 py-12 text-center text-sm text-muted-foreground">
+                    Nenhum cliente encontrado.
+                  </td>
                 </tr>
               ) : (
-                clientesPaginados.map((c) => (
-                  <tr key={c.id} className="border-t border-border/40 hover:bg-white/[0.03] transition-colors">
-                    <td className="px-5 py-3 whitespace-nowrap">
-                      <div className="flex items-center gap-2">
-                        <Avatar className="h-9 w-9 ring-1 ring-border/60">
-                          <AvatarFallback>{c.nome?.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase()}</AvatarFallback>
+                clients.map((client) => (
+                  <tr key={client.id} className="border-t border-border/50">
+                    <td className="px-5 py-4">
+                      <div className="flex items-center gap-3">
+                        <Avatar className="h-10 w-10 ring-1 ring-border/60">
+                          <AvatarFallback>{String(client.nome || "?").split(" ").map((item) => item[0]).join("").slice(0, 2).toUpperCase()}</AvatarFallback>
                         </Avatar>
-                        <span className="font-semibold text-foreground text-[1.03rem]">{c.nome}</span>
+                        <div>
+                          <div className="font-semibold text-foreground">{client.nome}</div>
+                          {client.telefone ? <div className="text-xs text-muted-foreground">{client.telefone}</div> : null}
+                        </div>
                       </div>
                     </td>
-                    <td className="px-5 py-3 whitespace-nowrap text-sm text-zinc-100">{c.email}</td>
-                    <td className="px-5 py-3 whitespace-nowrap text-sm text-zinc-100">{c.telefone}</td>
-                    <td className="px-5 py-3 whitespace-nowrap text-sm text-zinc-100">{enderecoCompleto(c)}</td>
-                    <td className="px-5 py-3 whitespace-nowrap">
-                      {c.vip && (
-                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-yellow-300 text-yellow-900 font-bold text-xs">
-                          VIP
-                        </span>
-                      )}
-                      {c.vip_observacao && <div className="mt-1 text-xs text-zinc-400 max-w-48 truncate">{c.vip_observacao}</div>}
+                    <td className="px-5 py-4">{client.email || "-"}</td>
+                    <td className="px-5 py-4">{client.telefone || "-"}</td>
+                    <td className="px-5 py-4 max-w-[280px] text-muted-foreground">{enderecoCompleto(client)}</td>
+                    <td className="px-5 py-4">
+                      {client.vip ? <span className="inline-flex rounded-full bg-yellow-300 px-2.5 py-1 text-xs font-bold text-yellow-900">VIP</span> : <span className="text-xs text-muted-foreground">Nao</span>}
+                      {client.vip_observacao ? <div className="mt-1 text-xs text-muted-foreground">{client.vip_observacao}</div> : null}
                     </td>
-                    <td className="px-5 py-3 whitespace-nowrap text-base font-bold text-yellow-400">{pedidosPorCliente[c.id] || 0}</td>
-                    <td className="px-5 py-3 whitespace-nowrap">
+                    <td className="px-5 py-4 font-bold text-yellow-400">{client.order_count}</td>
+                    <td className="px-5 py-4">
                       <div className="flex gap-2">
-                        <Button size="icon" variant="ghost" className="hover:bg-white/10" onClick={() => setModalPerfil({ open: true, cliente: c })}>
-                          <ChevronRight className="h-5 w-5" />
+                        <Button size="sm" variant="outline" onClick={() => setModalPerfil({ open: true, cliente: client })}>
+                          Ver perfil
                         </Button>
                         <Button
                           size="sm"
-                          variant={c.vip ? 'outline' : 'default'}
-                          className={c.vip ? 'border-border/70 bg-black/30 hover:bg-black/50' : 'bg-yellow-500 text-black hover:bg-yellow-400'}
-                          disabled={vipLoadingId === c.id}
+                          variant={client.vip ? "outline" : "default"}
+                          className={client.vip ? "" : "bg-yellow-500 text-black hover:bg-yellow-400"}
                           onClick={() => {
-                            setVipObservacao(c.vip_observacao || '');
-                            setModalVIP({ open: true, clienteId: c.id, status: c.vip });
+                            setVipObservacao(client.vip_observacao || "");
+                            setModalVIP({ open: true, cliente: client });
                           }}
                         >
-                          {vipLoadingId === c.id ? 'Salvando...' : c.vip ? 'Remover VIP' : 'Marcar VIP'}
+                          {client.vip ? "Remover VIP" : "Marcar VIP"}
                         </Button>
                       </div>
                     </td>
@@ -384,102 +403,154 @@ export default function ClientesAdminPage() {
           </table>
         </div>
 
-        <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-xs text-muted-foreground">
-            Mostrando {clientesFiltrados.length === 0 ? 0 : inicio + 1} - {Math.min(fim, clientesFiltrados.length)} de {clientesFiltrados.length}
-          </p>
-          <div className="flex items-center gap-2 rounded-xl border border-border/60 bg-black/30 p-1">
-            <Button variant="outline" size="sm" className="border-border/70 bg-transparent hover:bg-white/5" disabled={paginaAtual <= 1} onClick={() => setPaginaAtual((p) => Math.max(1, p - 1))}>
-              Anterior
-            </Button>
-            <span className="text-xs text-zinc-300 px-2">Pagina {paginaAtual} de {totalPaginas}</span>
-            <Button variant="outline" size="sm" className="border-border/70 bg-transparent hover:bg-white/5" disabled={paginaAtual >= totalPaginas} onClick={() => setPaginaAtual((p) => Math.min(totalPaginas, p + 1))}>
-              Proxima
+        <div className="space-y-3 p-4 md:hidden">
+          {isInitialLoading ? (
+            Array.from({ length: 4 }).map((_, index) => <Skeleton key={`client-mobile-${index}`} className="h-28 w-full rounded-xl" />)
+          ) : clients.length === 0 ? (
+            <div className="rounded-xl border border-border/60 p-4 text-sm text-muted-foreground">Nenhum cliente encontrado.</div>
+          ) : (
+            clients.map((client) => (
+              <div key={`mobile-${client.id}`} className="rounded-xl border border-border/60 bg-card p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="font-semibold text-foreground">{client.nome}</div>
+                    <div className="text-xs text-muted-foreground">{client.email || "-"}</div>
+                  </div>
+                  {client.vip ? <span className="inline-flex rounded-full bg-yellow-300 px-2 py-1 text-[10px] font-bold text-yellow-900">VIP</span> : null}
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                  <div className="rounded-md bg-muted/20 p-2">
+                    <p className="text-muted-foreground">Telefone</p>
+                    <p className="mt-0.5 font-medium text-foreground">{client.telefone || "-"}</p>
+                  </div>
+                  <div className="rounded-md bg-muted/20 p-2">
+                    <p className="text-muted-foreground">Pedidos</p>
+                    <p className="mt-0.5 font-bold text-yellow-400">{client.order_count}</p>
+                  </div>
+                </div>
+                <div className="mt-3 flex gap-2">
+                  <Button size="sm" variant="outline" className="flex-1" onClick={() => setModalPerfil({ open: true, cliente: client })}>
+                    Ver perfil
+                  </Button>
+                  <Button
+                    size="sm"
+                    className="flex-1"
+                    variant={client.vip ? "outline" : "default"}
+                    onClick={() => {
+                      setVipObservacao(client.vip_observacao || "");
+                      setModalVIP({ open: true, cliente: client });
+                    }}
+                  >
+                    {client.vip ? "Remover VIP" : "Marcar VIP"}
+                  </Button>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </Card>
+
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-xs text-muted-foreground">
+          Pagina {pageInfo?.page || 1} de {pageInfo?.totalPages || 1}
+        </p>
+        <div className="flex gap-2">
+          <Button variant="outline" disabled={(pageInfo?.page || 1) <= 1} onClick={() => setPage((current) => Math.max(1, current - 1))}>
+            Anterior
+          </Button>
+          <Button variant="outline" disabled={!pageInfo?.hasNextPage} onClick={() => setPage((current) => current + 1)}>
+            Proxima
+          </Button>
+        </div>
+      </div>
+
+      <Modal open={modalVIP.open} onClose={() => setModalVIP({ open: false, cliente: null })} title={modalVIP.cliente?.vip ? "Remover VIP" : "Marcar VIP"}>
+        <div className="space-y-4">
+          <label className="text-sm font-semibold text-foreground">Observacao para status VIP</label>
+          <textarea
+            value={vipObservacao}
+            onChange={(event) => setVipObservacao(event.target.value)}
+            className="min-h-[120px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+            placeholder="Justifique o status VIP..."
+          />
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setModalVIP({ open: false, cliente: null })}>Cancelar</Button>
+            <Button onClick={() => toggleVipMutation.mutate()} disabled={toggleVipMutation.isPending}>
+              {toggleVipMutation.isPending ? "Salvando..." : modalVIP.cliente?.vip ? "Remover VIP" : "Marcar VIP"}
             </Button>
           </div>
         </div>
+      </Modal>
 
-        <Modal open={modalVIP.open} onClose={() => setModalVIP({ open: false, clienteId: null, status: false })} title={modalVIP.status ? 'Remover VIP' : 'Marcar VIP'}>
+      <Modal open={modalPerfil.open} onClose={() => setModalPerfil({ open: false, cliente: null })} title={modalPerfil.cliente?.nome || "Perfil do cliente"}>
+        {modalPerfil.cliente ? (
           <div className="space-y-4">
-            <label className="text-sm font-semibold text-foreground">Observacao para status VIP:</label>
-            <textarea
-              className="w-full h-24 rounded border border-border bg-muted px-3 py-2 text-sm"
-              value={vipObservacao}
-              onChange={(e) => setVipObservacao(e.target.value)}
-              placeholder="Justifique o status VIP..."
-            />
-            <div className="flex gap-2 justify-end">
-              <Button variant="outline" disabled={vipSaving} onClick={() => setModalVIP({ open: false, clienteId: null, status: false })}>
-                Cancelar
-              </Button>
-              <Button
-                variant="default"
-                disabled={vipSaving}
-                onClick={async () => {
-                  if (!modalVIP.clienteId) return;
+            <div className="flex items-center gap-3">
+              <Avatar className="h-12 w-12">
+                <AvatarFallback>{String(modalPerfil.cliente.nome || "?").split(" ").map((item) => item[0]).join("").slice(0, 2).toUpperCase()}</AvatarFallback>
+              </Avatar>
+              <div>
+                <div className="font-bold text-lg text-foreground">{modalPerfil.cliente.nome}</div>
+                <div className="text-xs text-muted-foreground">{modalPerfil.cliente.email || "-"}</div>
+              </div>
+            </div>
+            <div className="grid gap-2 text-sm text-muted-foreground">
+              <div>Telefone: {modalPerfil.cliente.telefone || "-"}</div>
+              <div>Endereco: {enderecoCompleto(modalPerfil.cliente)}</div>
+              <div>Pedidos: <span className="font-semibold text-primary">{modalPerfil.cliente.order_count}</span></div>
+            </div>
+            {modalPerfil.cliente.vip ? <span className="inline-flex rounded-full bg-yellow-300 px-2.5 py-1 text-xs font-bold text-yellow-900">VIP</span> : null}
+            {modalPerfil.cliente.vip_observacao ? <div className="text-xs text-muted-foreground">{modalPerfil.cliente.vip_observacao}</div> : null}
+          </div>
+        ) : null}
+      </Modal>
 
-                  setVipSaving(true);
-                  setVipLoadingId(modalVIP.clienteId);
-                  await supabase
-                    .from('clients')
-                    .update({ vip: !modalVIP.status, vip_observacao: vipObservacao })
-                    .eq('id', modalVIP.clienteId);
+      <Modal open={campaignPreviewOpen} onClose={() => setCampaignPreviewOpen(false)} title="Confirmar campanha do WhatsApp">
+        <div className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <Card className="p-4">
+              <div className="text-xs text-muted-foreground">Destinatarios validos</div>
+              <div className="mt-2 text-2xl font-bold text-emerald-300">{campaignPreview?.audienceCount || 0}</div>
+            </Card>
+            <Card className="p-4">
+              <div className="text-xs text-muted-foreground">Sem telefone</div>
+              <div className="mt-2 text-2xl font-bold text-amber-300">{campaignPreview?.excludedWithoutPhone || 0}</div>
+            </Card>
+            <Card className="p-4">
+              <div className="text-xs text-muted-foreground">Segmento</div>
+              <div className="mt-2 text-sm font-semibold text-foreground">
+                {campaignSegment === "vip" ? "Somente VIP" : campaignSegment === "non_vip" ? "Somente nao VIP" : "Todos"}
+              </div>
+            </Card>
+          </div>
 
-                  setClientes((prev) =>
-                    prev.map((cli) =>
-                      cli.id === modalVIP.clienteId
-                        ? { ...cli, vip: !modalVIP.status, vip_observacao: vipObservacao }
-                        : cli
-                    )
-                  );
-
-                  setVipSaving(false);
-                  setVipLoadingId(null);
-                  setModalVIP({ open: false, clienteId: null, status: false });
-                }}
-              >
-                {vipSaving ? 'Salvando...' : modalVIP.status ? 'Remover VIP' : 'Marcar VIP'}
-              </Button>
+          <div>
+            <div className="mb-2 text-sm font-semibold text-foreground">Texto final</div>
+            <div className="rounded-xl border border-border/70 bg-muted/20 p-4 text-sm whitespace-pre-wrap">
+              {campaignPreview?.previewText || campaignMessage}
             </div>
           </div>
-        </Modal>
 
-        <Modal open={modalPerfil.open} onClose={() => setModalPerfil({ open: false, cliente: null })} title={modalPerfil.cliente?.nome || 'Perfil do Cliente'}>
-          {modalPerfil.cliente && (
-            <div className="space-y-4">
-              <div className="flex items-center gap-3">
-                <Avatar className="h-10 w-10">
-                  <AvatarFallback>
-                    {modalPerfil.cliente.nome?.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase()}
-                  </AvatarFallback>
-                </Avatar>
-                <div>
-                  <div className="font-bold text-lg text-foreground">{modalPerfil.cliente.nome}</div>
-                  <div className="text-xs text-muted-foreground">{modalPerfil.cliente.email}</div>
-                  {modalPerfil.cliente.vip && (
-                    <span className="inline-flex items-center gap-1 px-2 py-1 rounded bg-yellow-300 text-yellow-900 font-bold text-xs">
-                      VIP
-                    </span>
-                  )}
+          <div>
+            <div className="mb-2 text-sm font-semibold text-foreground">Exemplos de destinatarios</div>
+            <div className="space-y-2">
+              {(campaignPreview?.sampleRecipients || []).map((recipient) => (
+                <div key={recipient.id} className="rounded-lg border border-border/60 p-3">
+                  <div className="font-medium text-foreground">{recipient.nome}</div>
+                  <div className="text-xs text-muted-foreground">{recipient.phone}</div>
                 </div>
-              </div>
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Phone className="h-4 w-4" /> {modalPerfil.cliente.telefone}
-                <Mail className="h-4 w-4 ml-2" /> {modalPerfil.cliente.email}
-                <MapPin className="h-4 w-4 ml-2" /> {enderecoCompleto(modalPerfil.cliente)}
-              </div>
-              <div className="flex items-center gap-2 mt-2">
-                <span className="text-xs text-muted-foreground">
-                  Pedidos: <span className="font-bold text-primary">{pedidosPorCliente[modalPerfil.cliente.id] || 0}</span>
-                </span>
-              </div>
-              {modalPerfil.cliente.vip_observacao && (
-                <div className="mt-1 text-xs text-muted-foreground">{modalPerfil.cliente.vip_observacao}</div>
-              )}
+              ))}
             </div>
-          )}
-        </Modal>
-      </div>
-    </ErrorBoundary>
+          </div>
+
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setCampaignPreviewOpen(false)}>Cancelar</Button>
+            <Button onClick={() => sendMutation.mutate()} disabled={sendMutation.isPending}>
+              {sendMutation.isPending ? "Enviando..." : "Confirmar envio"}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+    </div>
   );
 }

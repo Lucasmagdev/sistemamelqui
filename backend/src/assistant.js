@@ -1,424 +1,105 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-
-const INDEXABLE_EXTENSIONS = new Set([".js", ".ts", ".tsx", ".sql", ".md", ".json"]);
-const INDEXABLE_PATHS = [
-  "src",
-  "backend/src",
-  "banco de dados",
-  "README.md",
-  "DOCUMENTACAO_ATUAL.md",
-  "CHECKLIST_GO_LIVE.md",
-  "TUTORIAL_ZAPI_BACKEND.md",
-];
-const INDEX_CACHE_TTL_MS = 60 * 1000;
-const CHUNK_SIZE_LINES = 40;
-const CHUNK_OVERLAP_LINES = 8;
-const MAX_FILE_SIZE_BYTES = 350 * 1024;
-const MAX_SNIPPET_CHARS = 1200;
 const ASSISTANT_TIMEZONE = process.env.ASSISTANT_TIMEZONE || "America/Sao_Paulo";
-const STOPWORDS = new Set([
-  "a",
-  "o",
-  "os",
-  "as",
-  "de",
-  "da",
-  "do",
-  "das",
-  "dos",
-  "e",
-  "em",
-  "para",
-  "por",
-  "com",
-  "sem",
-  "na",
-  "no",
-  "nas",
-  "nos",
-  "uma",
-  "um",
-  "umas",
-  "uns",
-  "que",
-  "como",
-  "quais",
-  "qual",
-  "quais",
-  "onde",
-  "quando",
-  "sobre",
-  "tudo",
-  "isso",
-  "essa",
-  "esse",
-  "meu",
-  "minha",
-  "meus",
-  "minhas",
-  "pra",
-  "pro",
-  "sao",
-  "ser",
-  "ter",
-  "tem",
-  "mais",
-  "menos",
-  "dos",
-  "das",
-  "the",
-  "and",
-  "for",
-  "with",
-]);
+const DEFAULT_AGGREGATE_PERIOD_DAYS = Number(process.env.ASSISTANT_DEFAULT_PERIOD_DAYS || 30);
+const CLARIFICATION_TTL_MS = 10 * 60 * 1000;
+const MAX_LIST_ROWS = 20;
+const MAX_CLARIFICATION_OPTIONS = 5;
 
-const TABLE_CONFIG = {
-  orders: {
-    aliases: ["orders", "order", "pedido", "pedidos"],
-    orderColumn: "data_pedido",
-  },
-  order_items: {
-    aliases: ["order_items", "item pedido", "itens do pedido", "itens pedido"],
-    orderColumn: "id",
-  },
-  clients: {
-    aliases: ["clients", "client", "cliente", "clientes"],
-    orderColumn: "id",
-  },
-  products: {
-    aliases: ["products", "product", "produto", "produtos", "item", "itens"],
-    orderColumn: "id",
-  },
-  batches: {
-    aliases: ["batches", "batch", "lote", "lotes"],
-    orderColumn: "id",
-  },
-  store_sales: {
-    aliases: ["store_sales", "venda presencial", "vendas presenciais", "venda loja", "loja"],
-    orderColumn: "sale_datetime",
-  },
-  expenses: {
-    aliases: ["expenses", "expense", "despesa", "despesas", "gasto", "gastos"],
-    orderColumn: "posted_at",
-  },
-  employees: {
-    aliases: ["employees", "employee", "funcionario", "funcionarios", "colaborador", "colaboradores"],
-    orderColumn: "id",
-  },
-  employee_payments: {
-    aliases: ["employee_payments", "pagamento funcionario", "pagamentos funcionarios", "folha", "salario", "salarios"],
-    orderColumn: "paid_at",
-  },
-  users: {
-    aliases: ["users", "user", "usuario", "usuarios"],
-    orderColumn: "id",
-  },
-  stock_entries: {
-    aliases: ["stock_entries", "entrada estoque", "entradas estoque"],
-    orderColumn: "created_at",
-  },
-  stock_movements: {
-    aliases: ["stock_movements", "movimento estoque", "movimentos estoque"],
-    orderColumn: "created_at",
-  },
-  invoices: {
-    aliases: ["invoices", "invoice", "nota", "nota fiscal", "notas"],
-    orderColumn: "created_at",
-  },
+const TOOL_TO_DOMAIN = {
+  count_orders: "pedidos",
+  sum_order_revenue: "vendas",
+  get_max_order: "pedidos",
+  get_orders_by_status: "pedidos",
+  sum_store_sales: "vendas",
+  sum_total_sales: "vendas",
+  count_total_sales: "vendas",
+  sum_employee_payments: "funcionarios",
+  list_employee_payments: "funcionarios",
+  sum_expenses: "financeiro",
+  group_expenses_by_category: "financeiro",
+  get_top_clients: "clientes",
+  get_client_order_summary: "clientes",
 };
 
-const DOMAIN_TABLES = {
-  pedidos: ["orders", "order_items", "clients"],
-  vendas: ["orders", "store_sales", "products"],
-  estoque: ["products", "batches", "stock_entries", "stock_movements"],
-  financeiro: ["expenses", "store_sales", "orders"],
-  funcionarios: ["employees", "employee_payments"],
+const SUPPORTED_TOOLS = new Set(Object.keys(TOOL_TO_DOMAIN));
+
+const TOOL_DEFAULT_PERIOD = {
+  count_orders: "last_30_days",
+  sum_order_revenue: "last_30_days",
+  get_orders_by_status: "last_30_days",
+  sum_store_sales: "last_30_days",
+  sum_total_sales: "last_30_days",
+  count_total_sales: "last_30_days",
+  sum_employee_payments: "last_30_days",
+  sum_expenses: "last_30_days",
+  group_expenses_by_category: "last_30_days",
+  get_top_clients: "last_30_days",
+  get_max_order: "all_time",
+  list_employee_payments: "all_time",
+  get_client_order_summary: "all_time",
 };
+
+const STATUS_ALIASES = [
+  { value: 5, labels: ["concluido", "concluidos", "concluida", "concluidas", "finalizado", "finalizados"] },
+  { value: 4, labels: ["entrega", "em entrega", "saiu para entrega"] },
+  { value: 3, labels: ["pronto", "prontos", "pronta", "prontas"] },
+  { value: 2, labels: ["preparo", "preparacao", "preparação", "em preparo", "em preparacao"] },
+  { value: 1, labels: ["confirmado", "confirmados", "confirmada", "confirmadas", "aceito", "aceitos"] },
+  { value: 0, labels: ["recebido", "recebidos", "recebida", "recebidas", "aberto", "abertos", "pendente", "pendentes"] },
+];
+
+const PAYMENT_METHOD_ALIASES = [
+  { value: "pix", labels: ["pix"] },
+  { value: "cartao", labels: ["cartao", "cartão", "card", "credito", "crédito", "debito", "débito"] },
+  { value: "dinheiro", labels: ["dinheiro", "cash"] },
+];
+
+const EXPENSE_CATEGORY_ALIASES = [
+  { value: "carne", labels: ["carne", "compra de carne"] },
+  { value: "limpeza", labels: ["limpeza", "material de limpeza"] },
+  { value: "aluguel", labels: ["aluguel"] },
+  { value: "outras", labels: ["outras", "outros", "diversas", "diversos"] },
+];
+
+const clarificationStore = new Map();
 
 function unique(values) {
   return Array.from(new Set(values.filter(Boolean)));
 }
 
-function clipText(value, maxLength = MAX_SNIPPET_CHARS) {
+function clipText(value, maxLength = 500) {
   const text = String(value || "").trim();
   if (text.length <= maxLength) return text;
   return `${text.slice(0, maxLength - 3)}...`;
 }
 
-function sanitizeValue(value, depth = 0) {
-  if (value === null || value === undefined) return value;
-  if (typeof value === "string") {
-    if (value.length > 220) return `${value.slice(0, 217)}...`;
-    if (value.startsWith("data:")) return "[data-url removida]";
-    return value;
-  }
-  if (typeof value === "number" || typeof value === "boolean") return value;
-  if (Array.isArray(value)) {
-    if (depth >= 2) return `[${value.length} itens]`;
-    return value.slice(0, 5).map((item) => sanitizeValue(item, depth + 1));
-  }
-  if (typeof value === "object") {
-    if (depth >= 2) return "[objeto]";
-    return Object.fromEntries(
-      Object.entries(value)
-        .slice(0, 12)
-        .map(([key, current]) => [key, sanitizeValue(current, depth + 1)]),
-    );
-  }
-  return String(value);
+function parseNumber(value, fallback = 0) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
 }
 
-function buildTokens(normalizeSearchText, text) {
-  const normalized = normalizeSearchText(text);
-  return unique(
-    normalized
-      .split(" ")
-      .map((token) => token.trim())
-      .filter((token) => token.length >= 2 && !STOPWORDS.has(token)),
-  );
+function roundMoney(value) {
+  return Number(parseNumber(value, 0).toFixed(2));
 }
 
-function scoreTextMatch(normalizedText, tokens, fullQuestion) {
-  let score = 0;
-
-  for (const token of tokens) {
-    if (!normalizedText.includes(token)) continue;
-    score += token.length >= 6 ? 6 : token.length >= 4 ? 4 : 2;
-  }
-
-  if (fullQuestion && normalizedText.includes(fullQuestion)) score += 10;
-  return score;
+function formatMoney(value) {
+  return Number(parseNumber(value, 0)).toLocaleString("en-US", { style: "currency", currency: "USD" });
 }
 
-async function collectFiles(repoRoot) {
-  const files = [];
-  const queue = [...INDEXABLE_PATHS];
-
-  while (queue.length > 0) {
-    const relativePath = queue.shift();
-    const absolutePath = path.join(repoRoot, relativePath);
-
-    let stats;
-    try {
-      stats = await fs.stat(absolutePath);
-    } catch {
-      continue;
-    }
-
-    if (stats.isDirectory()) {
-      const entries = await fs.readdir(absolutePath, { withFileTypes: true });
-      for (const entry of entries) {
-        if ([".git", "node_modules", "dist"].includes(entry.name)) continue;
-        queue.push(path.join(relativePath, entry.name));
-      }
-      continue;
-    }
-
-    const extension = path.extname(relativePath).toLowerCase();
-    if (!INDEXABLE_EXTENSIONS.has(extension)) continue;
-    if (stats.size > MAX_FILE_SIZE_BYTES) continue;
-    files.push(relativePath);
-  }
-
-  return files.sort((left, right) => left.localeCompare(right));
+function formatDateShort(value, timeZone = ASSISTANT_TIMEZONE) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return new Intl.DateTimeFormat("pt-BR", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
 }
 
-function chunkContent({ relativePath, content }) {
-  const lines = String(content || "").split(/\r?\n/);
-  const kind = relativePath.endsWith(".sql")
-    ? "schema"
-    : relativePath.endsWith(".md")
-      ? "doc"
-      : "code";
-  const chunks = [];
-
-  for (let start = 0; start < lines.length; start += CHUNK_SIZE_LINES - CHUNK_OVERLAP_LINES) {
-    const end = Math.min(lines.length, start + CHUNK_SIZE_LINES);
-    const slice = lines.slice(start, end).join("\n").trim();
-    if (!slice) continue;
-    chunks.push({
-      kind,
-      relativePath,
-      startLine: start + 1,
-      endLine: end,
-      content: clipText(slice, 1600),
-    });
-    if (end >= lines.length) break;
-  }
-
-  return chunks;
-}
-
-function getSchemaEntry(schemaMap, tableName) {
-  const normalizedName = String(tableName || "")
-    .trim()
-    .replace(/"/g, "")
-    .split(".")
-    .pop()
-    .toLowerCase();
-  if (!normalizedName) return null;
-
-  if (!schemaMap.has(normalizedName)) {
-    schemaMap.set(normalizedName, {
-      table: normalizedName,
-      columns: new Set(),
-      sources: new Set(),
-    });
-  }
-
-  return schemaMap.get(normalizedName);
-}
-
-function parseSqlSchema(relativePath, content, schemaMap) {
-  const createRegex = /create\s+table(?:\s+if\s+not\s+exists)?\s+("?[\w.]+"?)\s*\(([\s\S]*?)\);/gi;
-  const alterRegex = /alter\s+table(?:\s+if\s+exists)?\s+("?[\w.]+"?)\s+add\s+column(?:\s+if\s+not\s+exists)?\s+"?([a-zA-Z_][\w]*)"?/gi;
-
-  for (const match of content.matchAll(createRegex)) {
-    const entry = getSchemaEntry(schemaMap, match[1]);
-    if (!entry) continue;
-
-    entry.sources.add(relativePath);
-
-    const body = String(match[2] || "");
-    for (const rawLine of body.split(/\r?\n/)) {
-      const line = rawLine.replace(/--.*$/, "").trim().replace(/,$/, "");
-      if (!line) continue;
-      if (/^(constraint|primary|foreign|unique|check|index)\b/i.test(line)) continue;
-      const columnMatch = line.match(/^"?(?<column>[a-zA-Z_][\w]*)"?\s+/);
-      if (columnMatch?.groups?.column) {
-        entry.columns.add(columnMatch.groups.column);
-      }
-    }
-  }
-
-  for (const match of content.matchAll(alterRegex)) {
-    const entry = getSchemaEntry(schemaMap, match[1]);
-    if (!entry) continue;
-    entry.sources.add(relativePath);
-    entry.columns.add(match[2]);
-  }
-}
-
-async function buildKnowledgeBase({ repoRoot, normalizeSearchText }) {
-  const relativePaths = await collectFiles(repoRoot);
-  const chunks = [];
-  const schemaMap = new Map();
-
-  for (const relativePath of relativePaths) {
-    const absolutePath = path.join(repoRoot, relativePath);
-    let content = "";
-
-    try {
-      content = await fs.readFile(absolutePath, "utf8");
-    } catch {
-      continue;
-    }
-
-    chunks.push(
-      ...chunkContent({ relativePath, content }).map((chunk) => ({
-        ...chunk,
-        normalizedContent: normalizeSearchText(chunk.content),
-      })),
-    );
-
-    if (relativePath.endsWith(".sql")) {
-      parseSqlSchema(relativePath, content, schemaMap);
-    }
-  }
-
-  const schemaTables = Array.from(schemaMap.values())
-    .map((entry) => ({
-      table: entry.table,
-      columns: Array.from(entry.columns).sort((left, right) => left.localeCompare(right)),
-      sources: Array.from(entry.sources).sort((left, right) => left.localeCompare(right)),
-    }))
-    .sort((left, right) => left.table.localeCompare(right.table));
-
-  return {
-    indexedAt: Date.now(),
-    chunks,
-    schemaTables,
-  };
-}
-
-function searchChunks({ chunks, normalizeSearchText, question, kind, limit = 4 }) {
-  const normalizedQuestion = normalizeSearchText(question);
-  const tokens = buildTokens(normalizeSearchText, question);
-
-  return chunks
-    .filter((chunk) => !kind || chunk.kind === kind)
-    .map((chunk) => ({
-      ...chunk,
-      score: scoreTextMatch(chunk.normalizedContent, tokens, normalizedQuestion),
-    }))
-    .filter((chunk) => chunk.score > 0)
-    .sort((left, right) => right.score - left.score)
-    .slice(0, limit)
-    .map((chunk) => ({
-      relativePath: chunk.relativePath,
-      startLine: chunk.startLine,
-      endLine: chunk.endLine,
-      kind: chunk.kind,
-      content: chunk.content,
-      score: chunk.score,
-    }));
-}
-
-function detectRelevantTables({ question, domain, schemaTables, normalizeSearchText }) {
-  const normalizedQuestion = normalizeSearchText(question);
-  const detected = [];
-
-  for (const [tableName, config] of Object.entries(TABLE_CONFIG)) {
-    if (normalizedQuestion.includes(tableName.replace(/_/g, " "))) {
-      detected.push(tableName);
-      continue;
-    }
-
-    if ((config.aliases || []).some((alias) => normalizedQuestion.includes(normalizeSearchText(alias)))) {
-      detected.push(tableName);
-    }
-  }
-
-  for (const domainTable of DOMAIN_TABLES[domain] || []) {
-    detected.push(domainTable);
-  }
-
-  const existingTables = new Set(schemaTables.map((item) => item.table));
-  return unique(detected).filter((tableName) => existingTables.has(tableName) || TABLE_CONFIG[tableName]).slice(0, 4);
-}
-
-async function fetchTablePreview(supabase, tableName) {
-  const config = TABLE_CONFIG[tableName] || {};
-  let query = supabase.from(tableName).select("*").limit(5);
-  if (config.orderColumn) {
-    query = query.order(config.orderColumn, { ascending: false });
-  }
-
-  const [{ data, error }, countResult] = await Promise.all([
-    query,
-    supabase.from(tableName).select("*", { head: true, count: "exact" }),
-  ]);
-
-  if (error) {
-    return {
-      table: tableName,
-      error: error.message,
-      totalRows: countResult.error ? null : countResult.count ?? null,
-      rows: [],
-    };
-  }
-
-  return {
-    table: tableName,
-    totalRows: countResult.error ? null : countResult.count ?? null,
-    rows: (data || []).map((row) => sanitizeValue(row)),
-    error: null,
-  };
-}
-
-function formatJsonBlock(value) {
-  return clipText(JSON.stringify(value, null, 2), 2200);
+function normalizeFilterValue(value) {
+  if (value === null || value === undefined || value === "") return null;
+  return String(value).trim();
 }
 
 function getTimeZoneParts(date, timeZone = ASSISTANT_TIMEZONE) {
@@ -507,10 +188,82 @@ function buildPeriodBounds(startDateParts, endDateParts, label) {
     end: end.toISOString(),
     startDate: toDateKey(startDateParts),
     endDate: toDateKey(endDateParts),
+    timezone: ASSISTANT_TIMEZONE,
+    allTime: false,
   };
 }
 
+function buildAllTimePeriod(label = "todo o historico disponivel") {
+  return {
+    label,
+    start: null,
+    end: null,
+    startDate: null,
+    endDate: null,
+    timezone: ASSISTANT_TIMEZONE,
+    allTime: true,
+  };
+}
+
+function parseDateToken(token, now = new Date()) {
+  const raw = String(token || "").trim();
+  if (!raw) return null;
+
+  const isoMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoMatch) {
+    return {
+      year: Number(isoMatch[1]),
+      month: Number(isoMatch[2]),
+      day: Number(isoMatch[3]),
+    };
+  }
+
+  const brMatch = raw.match(/^(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?$/);
+  if (brMatch) {
+    const nowParts = getTimeZoneParts(now);
+    let year = brMatch[3] ? Number(brMatch[3]) : nowParts.year;
+    if (year < 100) year += 2000;
+    return {
+      year,
+      month: Number(brMatch[2]),
+      day: Number(brMatch[1]),
+    };
+  }
+
+  return null;
+}
+
+function resolveExplicitPeriod(question, now = new Date()) {
+  const rawQuestion = String(question || "");
+  const betweenMatch = rawQuestion.match(/(?:entre|de)\s+(\d{1,4}[/-]\d{1,2}(?:[/-]\d{1,4})?)\s+(?:e|ate|até)\s+(\d{1,4}[/-]\d{1,2}(?:[/-]\d{1,4})?)/i);
+  if (betweenMatch) {
+    const start = parseDateToken(betweenMatch[1], now);
+    const end = parseDateToken(betweenMatch[2], now);
+    if (start && end) {
+      return buildPeriodBounds(start, end, `${toDateKey(start)} ate ${toDateKey(end)}`);
+    }
+  }
+
+  const tokenMatches = rawQuestion.match(/\b(\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)\b/g) || [];
+  const parsedDates = tokenMatches
+    .map((token) => parseDateToken(token, now))
+    .filter(Boolean);
+
+  if (parsedDates.length >= 2) {
+    return buildPeriodBounds(parsedDates[0], parsedDates[1], `${toDateKey(parsedDates[0])} ate ${toDateKey(parsedDates[1])}`);
+  }
+
+  if (parsedDates.length === 1) {
+    return buildPeriodBounds(parsedDates[0], parsedDates[0], `dia ${toDateKey(parsedDates[0])}`);
+  }
+
+  return null;
+}
+
 function resolveQuestionPeriod(question, normalizeSearchText, now = new Date()) {
+  const explicit = resolveExplicitPeriod(question, now);
+  if (explicit) return explicit;
+
   const normalized = normalizeSearchText(question);
   const todayParts = getTimeZoneParts(now);
   const today = { year: todayParts.year, month: todayParts.month, day: todayParts.day };
@@ -561,540 +314,1184 @@ function resolveQuestionPeriod(question, normalizeSearchText, now = new Date()) 
   return null;
 }
 
-function detectReadOnlyIntent(question, normalizeSearchText) {
-  const normalized = normalizeSearchText(question);
-  const asksHowMany = /(quantos|quantas|qtd|quantidade|numero de|número de|contagem|total de)/.test(normalized);
-  const asksRevenue = /(quanto vendeu|quanto vendemos|faturamento|receita|vendas totais|total vendido)/.test(normalized);
-  const asksOrders = /(pedido|pedidos|orders)/.test(normalized);
-  const asksSales = /(venda|vendas|vendeu|vendemos)/.test(normalized);
-  const asksStoreSales = /(venda presencial|vendas presenciais|loja|store sales|store_sales)/.test(normalized);
-  const asksDelivery = /(delivery|entrega)/.test(normalized);
+function resolveDefaultPeriod(tool, now = new Date()) {
+  const strategy = TOOL_DEFAULT_PERIOD[tool] || "last_30_days";
+  const todayParts = getTimeZoneParts(now);
+  const today = { year: todayParts.year, month: todayParts.month, day: todayParts.day };
 
-  if (asksHowMany && asksOrders) {
-    return { type: "orders_count" };
+  if (strategy === "all_time") {
+    return buildAllTimePeriod();
   }
 
-  if (asksRevenue && (asksOrders || asksSales || asksDelivery || asksStoreSales)) {
-    if (asksStoreSales && !asksDelivery) return { type: "store_sales_total" };
-    if (asksDelivery && !asksStoreSales) return { type: "delivery_sales_total" };
-    return { type: "total_sales" };
+  const start = shiftDateParts(today, -(DEFAULT_AGGREGATE_PERIOD_DAYS - 1));
+  return buildPeriodBounds(start, today, `ultimos ${DEFAULT_AGGREGATE_PERIOD_DAYS} dias`);
+}
+
+function findAliasValue(aliases, normalizedQuestion) {
+  for (const entry of aliases) {
+    if (entry.labels.some((label) => normalizedQuestion.includes(label))) {
+      return entry.value;
+    }
+  }
+  return null;
+}
+
+function extractQuotedEntity(question) {
+  const match = String(question || "").match(/["“](.+?)["”]/);
+  return match ? clipText(match[1], 80) : null;
+}
+
+function trimEntityCandidate(value) {
+  return clipText(
+    String(value || "")
+      .replace(/\b(hoje|ontem|esta semana|semana passada|este mes|mes passado|ultimos \d+ dias)\b/gi, "")
+      .replace(/\b(em|no|na|nos|nas|entre|de|do|da|dos|das|com|por|para|durante)\b.*$/i, "")
+      .replace(/[?.!,;:]+$/g, "")
+      .trim(),
+    80,
+  );
+}
+
+function extractNamedEntity(question, kind) {
+  const quoted = extractQuotedEntity(question);
+  if (quoted) return quoted;
+
+  const patterns = kind === "employee"
+    ? [
+        /funcion[aá]ri[oa]\s+([a-zA-ZÀ-ÿ0-9' -]{2,80})/i,
+        /pagament[oa]s?\s+(?:de|do|da|para)\s+([a-zA-ZÀ-ÿ0-9' -]{2,80})/i,
+        /pago\s+(?:a|ao|para)\s+([a-zA-ZÀ-ÿ0-9' -]{2,80})/i,
+      ]
+    : [
+        /cliente\s+([a-zA-ZÀ-ÿ0-9' -]{2,80})/i,
+        /compras?\s+(?:de|do|da)\s+([a-zA-ZÀ-ÿ0-9' -]{2,80})/i,
+        /resumo\s+(?:de|do|da)\s+([a-zA-ZÀ-ÿ0-9' -]{2,80})/i,
+      ];
+
+  for (const pattern of patterns) {
+    const match = String(question || "").match(pattern);
+    if (match?.[1]) {
+      const candidate = trimEntityCandidate(match[1]);
+      if (candidate) return candidate;
+    }
   }
 
   return null;
 }
 
-function formatDateRangeLabel(period) {
-  return `${period.startDate} ate ${period.endDate}`;
+function extractJsonObject(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return null;
+
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidate = fenced ? fenced[1].trim() : raw;
+
+  try {
+    return JSON.parse(candidate);
+  } catch {
+    const match = candidate.match(/\{[\s\S]*\}/);
+    if (!match) return null;
+    try {
+      return JSON.parse(match[0]);
+    } catch {
+      return null;
+    }
+  }
 }
 
-async function executeReadOnlyInsight({ supabase, question, normalizeSearchText }) {
-  const intent = detectReadOnlyIntent(question, normalizeSearchText);
-  if (!intent) return null;
+async function classifyWithModel({ question, normalizeSearchText, callGeminiText }) {
+  if (typeof callGeminiText !== "function") return null;
 
-  const period = resolveQuestionPeriod(question, normalizeSearchText);
-  if (!period) return null;
+  const result = await callGeminiText({
+    prompt: [
+      "Classifique a pergunta do usuario em uma ferramenta administrativa read-only.",
+      "Responda somente JSON valido, sem markdown.",
+      'Campo "tool" permitido: "count_orders", "sum_order_revenue", "get_max_order", "get_orders_by_status", "sum_store_sales", "sum_total_sales", "count_total_sales", "sum_employee_payments", "list_employee_payments", "sum_expenses", "group_expenses_by_category", "get_top_clients", "get_client_order_summary", ou null.',
+      'Campo "status" permitido: 0,1,2,3,4,5 ou null.',
+      'Campo "payment_method" permitido: "pix", "cartao", "dinheiro" ou null.',
+      'Campo "source" permitido: "delivery", "store" ou null.',
+      'Campo "expense_category" permitido: "carne", "limpeza", "aluguel", "outras" ou null.',
+      'Campos opcionais: "client_name", "employee_name".',
+      "Nao invente dados nem SQL.",
+      `Pergunta normalizada: ${normalizeSearchText(question)}`,
+      `Pergunta original: ${question}`,
+    ].join("\n"),
+    temperature: 0,
+    maxOutputTokens: 250,
+  });
 
-  if (intent.type === "orders_count") {
-    const { count, error } = await supabase
-      .from("orders")
-      .select("*", { head: true, count: "exact" })
-      .gte("data_pedido", period.start)
-      .lte("data_pedido", period.end);
+  const payload = extractJsonObject(result);
+  if (!payload || typeof payload !== "object") return null;
 
-    if (error) {
-      return {
-        type: intent.type,
-        period,
-        error: error.message,
-      };
-    }
+  const tool = SUPPORTED_TOOLS.has(payload.tool) ? payload.tool : null;
+  if (!tool) return null;
 
-    const total = Number(count || 0);
-    return {
-      type: intent.type,
-      period,
-      result: {
-        total,
-      },
-      answerText: [
-        `Foram feitos ${total} pedido(s) em ${period.label}.`,
-        `Periodo consultado: ${formatDateRangeLabel(period)} (${ASSISTANT_TIMEZONE}).`,
-        "Consulta read-only executada diretamente na tabela orders usando a coluna data_pedido.",
-        "",
-        "Fontes:",
-        `- consulta orders.data_pedido entre ${period.start} e ${period.end}`,
-        "- tabela orders",
-      ].join("\n"),
-      sources: [
-        {
-          type: "query",
-          label: `orders.data_pedido:${period.startDate}-${period.endDate}`,
-          table: "orders",
-          column: "data_pedido",
-        },
-        {
-          type: "table",
-          label: "orders",
-          table: "orders",
-        },
-      ],
-    };
-  }
-
-  if (intent.type === "delivery_sales_total") {
-    const { data, error } = await supabase
-      .from("orders")
-      .select("valor_total, status, data_pedido")
-      .gte("data_pedido", period.start)
-      .lte("data_pedido", period.end);
-
-    if (error) {
-      return {
-        type: intent.type,
-        period,
-        error: error.message,
-      };
-    }
-
-    const total = (data || [])
-      .filter((row) => Number(row.status) === 5)
-      .reduce((acc, row) => acc + Number(row.valor_total || 0), 0);
-
-    return {
-      type: intent.type,
-      period,
-      result: {
-        total,
-      },
-      answerText: [
-        `O faturamento de delivery concluido em ${period.label} foi ${total.toLocaleString("en-US", { style: "currency", currency: "USD" })}.`,
-        `Periodo consultado: ${formatDateRangeLabel(period)} (${ASSISTANT_TIMEZONE}).`,
-        "Consulta read-only executada diretamente na tabela orders, filtrando pela coluna data_pedido.",
-        "",
-        "Fontes:",
-        `- consulta orders.data_pedido entre ${period.start} e ${period.end}`,
-        "- tabela orders",
-      ].join("\n"),
-      sources: [
-        {
-          type: "query",
-          label: `orders.valor_total:${period.startDate}-${period.endDate}`,
-          table: "orders",
-          column: "valor_total",
-        },
-        {
-          type: "table",
-          label: "orders",
-          table: "orders",
-        },
-      ],
-    };
-  }
-
-  if (intent.type === "store_sales_total") {
-    const { data, error } = await supabase
-      .from("store_sales")
-      .select("total_amount, sale_datetime")
-      .gte("sale_datetime", period.start)
-      .lte("sale_datetime", period.end);
-
-    if (error) {
-      return {
-        type: intent.type,
-        period,
-        error: error.message,
-      };
-    }
-
-    const total = (data || []).reduce((acc, row) => acc + Number(row.total_amount || 0), 0);
-    return {
-      type: intent.type,
-      period,
-      result: {
-        total,
-      },
-      answerText: [
-        `O faturamento presencial em ${period.label} foi ${total.toLocaleString("en-US", { style: "currency", currency: "USD" })}.`,
-        `Periodo consultado: ${formatDateRangeLabel(period)} (${ASSISTANT_TIMEZONE}).`,
-        "Consulta read-only executada diretamente na tabela store_sales usando a coluna sale_datetime.",
-        "",
-        "Fontes:",
-        `- consulta store_sales.sale_datetime entre ${period.start} e ${period.end}`,
-        "- tabela store_sales",
-      ].join("\n"),
-      sources: [
-        {
-          type: "query",
-          label: `store_sales.sale_datetime:${period.startDate}-${period.endDate}`,
-          table: "store_sales",
-          column: "sale_datetime",
-        },
-        {
-          type: "table",
-          label: "store_sales",
-          table: "store_sales",
-        },
-      ],
-    };
-  }
-
-  if (intent.type === "total_sales") {
-    const [deliveryQuery, storeQuery] = await Promise.all([
-      supabase
-        .from("orders")
-        .select("valor_total, status, data_pedido")
-        .gte("data_pedido", period.start)
-        .lte("data_pedido", period.end),
-      supabase
-        .from("store_sales")
-        .select("total_amount, sale_datetime")
-        .gte("sale_datetime", period.start)
-        .lte("sale_datetime", period.end),
-    ]);
-
-    if (deliveryQuery.error || storeQuery.error) {
-      return {
-        type: intent.type,
-        period,
-        error: deliveryQuery.error?.message || storeQuery.error?.message,
-      };
-    }
-
-    const deliveryTotal = (deliveryQuery.data || [])
-      .filter((row) => Number(row.status) === 5)
-      .reduce((acc, row) => acc + Number(row.valor_total || 0), 0);
-    const storeTotal = (storeQuery.data || []).reduce((acc, row) => acc + Number(row.total_amount || 0), 0);
-
-    const total = Number(deliveryTotal || 0) + Number(storeTotal || 0);
-    return {
-      type: intent.type,
-      period,
-      result: {
-        delivery_total: Number(deliveryTotal || 0),
-        store_total: Number(storeTotal || 0),
-        total,
-      },
-      answerText: [
-        `O faturamento total em ${period.label} foi ${total.toLocaleString("en-US", { style: "currency", currency: "USD" })}.`,
-        `Delivery concluido: ${Number(deliveryTotal || 0).toLocaleString("en-US", { style: "currency", currency: "USD" })}.`,
-        `Presencial: ${Number(storeTotal || 0).toLocaleString("en-US", { style: "currency", currency: "USD" })}.`,
-        `Periodo consultado: ${formatDateRangeLabel(period)} (${ASSISTANT_TIMEZONE}).`,
-        "",
-        "Fontes:",
-        `- consulta orders.data_pedido entre ${period.start} e ${period.end}`,
-        `- consulta store_sales.sale_datetime entre ${period.start} e ${period.end}`,
-      ].join("\n"),
-      sources: [
-        {
-          type: "query",
-          label: `orders.data_pedido:${period.startDate}-${period.endDate}`,
-          table: "orders",
-          column: "data_pedido",
-        },
-        {
-          type: "query",
-          label: `store_sales.sale_datetime:${period.startDate}-${period.endDate}`,
-          table: "store_sales",
-          column: "sale_datetime",
-        },
-      ],
-    };
-  }
-
-  return null;
-}
-
-function buildContextSummary({ codeMatches, docMatches, schemaSummaries, tablePreviews, readOnlyInsight }) {
   return {
-    code_matches: codeMatches.map((item) => ({
-      file: item.relativePath,
-      lines: `${item.startLine}-${item.endLine}`,
-    })),
-    doc_matches: docMatches.map((item) => ({
-      file: item.relativePath,
-      lines: `${item.startLine}-${item.endLine}`,
-    })),
-    schema_tables: schemaSummaries.map((item) => item.table),
-    live_tables: tablePreviews.map((item) => item.table),
-    live_query: readOnlyInsight?.type
-      ? {
-          type: readOnlyInsight.type,
-          period: readOnlyInsight.period
-            ? {
-                label: readOnlyInsight.period.label,
-                startDate: readOnlyInsight.period.startDate,
-                endDate: readOnlyInsight.period.endDate,
-              }
-            : null,
-        }
-      : null,
+    tool,
+    status: Number.isInteger(payload.status) ? payload.status : null,
+    paymentMethod: normalizeFilterValue(payload.payment_method),
+    source: normalizeFilterValue(payload.source),
+    expenseCategory: normalizeFilterValue(payload.expense_category),
+    clientName: normalizeFilterValue(payload.client_name),
+    employeeName: normalizeFilterValue(payload.employee_name),
   };
 }
 
-function buildPrompt({
-  question,
-  domain,
-  report,
-  codeMatches,
-  docMatches,
-  schemaSummaries,
-  tablePreviews,
-  readOnlyInsight,
-}) {
-  const sections = [
-    "Voce e um assistente tecnico read-only do Imperial Flow Gold.",
-    "Responda em portugues do Brasil.",
-    "Nao invente dados, nao proponha UPDATE/DELETE/INSERT automatico e deixe claro quando algo foi inferido.",
-    `Dominio principal detectado: ${domain}.`,
-    "Se a pergunta envolver codigo, cite arquivo e linha.",
-    "Se envolver banco, cite tabela e colunas relevantes.",
-    "Se a informacao nao estiver suficiente, diga o que falta.",
-    "",
-    "Resumo operacional:",
-    formatJsonBlock({
-      range: report.range,
-      summary: report.summary,
-      sales_by_payment: report.sales_by_payment,
-      orders_by_status: report.orders_by_status,
-      expenses_by_category: report.expenses_by_category,
-      payroll_by_employee: report.payroll_by_employee,
-      stock_alerts: report.stock_alerts.slice(0, 8),
-    }),
-    "",
-    "Schema relevante:",
-    formatJsonBlock(schemaSummaries),
-    "",
-    "Amostras read-only do banco:",
-    formatJsonBlock(tablePreviews),
-    "",
-    "Consulta read-only estruturada:",
-    formatJsonBlock(readOnlyInsight || null),
-    "",
-    "Trechos de codigo/documentacao relevantes:",
-    formatJsonBlock(
-      [...codeMatches, ...docMatches].map((item) => ({
-        file: item.relativePath,
-        lines: `${item.startLine}-${item.endLine}`,
-        kind: item.kind,
-        snippet: item.content,
-      })),
-    ),
-    "",
-    "Pergunta do usuario:",
+function classifyHeuristically({ question, normalizeSearchText }) {
+  const normalized = normalizeSearchText(question);
+  const asksCount = /(quantos?|quantas?|qtd|quantidade|numero de|numero total|contagem|foram feitos|houve|tivemos)/.test(normalized);
+  const asksRevenue = /(quanto vendeu|quanto vendemos|faturamento|receita|total vendido|valor vendido|quanto foi vendido)/.test(normalized);
+  const asksList = /(listar|liste|mostre|mostrar|quais foram|quais sao|quais são)/.test(normalized);
+  const asksMostExpensive = /(mais caro|maior valor|maior pedido)/.test(normalized);
+  const asksTopClient = /(cliente que mais comprou|clientes que mais compraram|top clientes|ranking de clientes)/.test(normalized);
+  const asksClientSummary = /(resumo de compras|historico de compras|hist[óo]rico de compras|compras do cliente)/.test(normalized);
+  const asksStatus = /(status|pendentes|concluidos|confirmados|em preparo|prontos|entrega)/.test(normalized);
+  const asksOrders = /(pedido|pedidos|orders)/.test(normalized);
+  const asksStore = /(presencial|loja|balcao|caixa|store sales|store_sales)/.test(normalized);
+  const asksDelivery = /(delivery|entrega|site|online)/.test(normalized);
+  const asksSales = /(venda|vendas|vendeu|vendemos)/.test(normalized);
+  const asksEmployeePayment = /(pagamento|pagamentos|folha|salario|salarios|funcionario|funcionarios)/.test(normalized);
+  const asksExpense = /(despesa|despesas|gasto|gastos|categoria de despesa|financeiro)/.test(normalized);
+
+  if (asksTopClient) return { tool: "get_top_clients" };
+  if (asksClientSummary) return { tool: "get_client_order_summary", clientName: extractNamedEntity(question, "client") };
+  if (asksMostExpensive && asksOrders) return { tool: "get_max_order" };
+
+  if (asksEmployeePayment) {
+    if (asksList) {
+      return { tool: "list_employee_payments", employeeName: extractNamedEntity(question, "employee") };
+    }
+    return { tool: "sum_employee_payments", employeeName: extractNamedEntity(question, "employee") };
+  }
+
+  if (asksExpense) {
+    if (/(por categoria|categorias|categoria)/.test(normalized)) {
+      return { tool: "group_expenses_by_category", expenseCategory: findAliasValue(EXPENSE_CATEGORY_ALIASES, normalized) };
+    }
+    return { tool: "sum_expenses", expenseCategory: findAliasValue(EXPENSE_CATEGORY_ALIASES, normalized) };
+  }
+
+  if (asksOrders && asksStatus && !asksRevenue) {
+    return { tool: asksCount ? "count_orders" : "get_orders_by_status", status: findAliasValue(STATUS_ALIASES, normalized) };
+  }
+
+  if (asksCount && asksOrders) {
+    return {
+      tool: "count_orders",
+      status: findAliasValue(STATUS_ALIASES, normalized),
+      paymentMethod: findAliasValue(PAYMENT_METHOD_ALIASES, normalized),
+      source: asksStore ? "store" : asksDelivery ? "delivery" : null,
+      clientName: extractNamedEntity(question, "client"),
+    };
+  }
+
+  if (asksCount && asksSales) {
+    if (asksStore && !asksDelivery) return { tool: "count_total_sales", source: "store" };
+    if (asksDelivery && !asksStore) return { tool: "count_total_sales", source: "delivery" };
+    return { tool: "count_total_sales" };
+  }
+
+  if (asksRevenue || asksSales) {
+    if (asksStore && !asksDelivery) {
+      return { tool: "sum_store_sales", paymentMethod: findAliasValue(PAYMENT_METHOD_ALIASES, normalized) };
+    }
+    if (asksDelivery && !asksStore) {
+      return {
+        tool: "sum_order_revenue",
+        paymentMethod: findAliasValue(PAYMENT_METHOD_ALIASES, normalized),
+        source: "delivery",
+        clientName: extractNamedEntity(question, "client"),
+      };
+    }
+    if (asksOrders && !asksStore) {
+      return {
+        tool: "sum_order_revenue",
+        paymentMethod: findAliasValue(PAYMENT_METHOD_ALIASES, normalized),
+        status: findAliasValue(STATUS_ALIASES, normalized),
+        clientName: extractNamedEntity(question, "client"),
+      };
+    }
+    return { tool: "sum_total_sales", paymentMethod: findAliasValue(PAYMENT_METHOD_ALIASES, normalized) };
+  }
+
+  return null;
+}
+
+async function planIntent({ question, normalizeSearchText, callGeminiText }) {
+  try {
+    const modelPlan = await classifyWithModel({ question, normalizeSearchText, callGeminiText });
+    if (modelPlan?.tool) return modelPlan;
+  } catch {
+    // fallback heuristico
+  }
+
+  return classifyHeuristically({ question, normalizeSearchText });
+}
+
+function normalizePlannedFilters(plan, question, normalizeSearchText) {
+  const normalizedQuestion = normalizeSearchText(question);
+  return {
+    tool: plan.tool,
+    domain: TOOL_TO_DOMAIN[plan.tool] || "central",
+    status: Number.isInteger(plan.status) ? plan.status : findAliasValue(STATUS_ALIASES, normalizedQuestion),
+    paymentMethod: normalizeFilterValue(plan.paymentMethod || plan.payment_method || findAliasValue(PAYMENT_METHOD_ALIASES, normalizedQuestion)),
+    source: normalizeFilterValue(plan.source || (normalizedQuestion.includes("delivery") ? "delivery" : normalizedQuestion.includes("loja") || normalizedQuestion.includes("presencial") ? "store" : null)),
+    expenseCategory: normalizeFilterValue(plan.expenseCategory || plan.expense_category || findAliasValue(EXPENSE_CATEGORY_ALIASES, normalizedQuestion)),
+    clientName: normalizeFilterValue(plan.clientName || plan.client_name || extractNamedEntity(question, "client")),
+    employeeName: normalizeFilterValue(plan.employeeName || plan.employee_name || extractNamedEntity(question, "employee")),
+  };
+}
+
+function applyPeriodToQuery(query, column, period) {
+  if (period?.allTime) return query;
+  if (period?.start) query = query.gte(column, period.start);
+  if (period?.end) query = query.lte(column, period.end);
+  return query;
+}
+
+function buildPeriodResponse(period) {
+  return {
+    label: period.label,
+    startDate: period.startDate,
+    endDate: period.endDate,
+    timezone: period.timezone,
+    allTime: Boolean(period.allTime),
+  };
+}
+
+function buildAppliedFilters(filters, extras = []) {
+  const chips = [];
+  if (filters.period?.label) chips.push({ label: "Periodo", value: filters.period.label });
+  if (filters.clientNameResolved) chips.push({ label: "Cliente", value: filters.clientNameResolved });
+  if (filters.employeeNameResolved) chips.push({ label: "Funcionario", value: filters.employeeNameResolved });
+  if (normalizeFilterValue(filters.paymentMethod)) chips.push({ label: "Pagamento", value: filters.paymentMethod });
+  if (normalizeFilterValue(filters.source)) chips.push({ label: "Origem", value: filters.source === "store" ? "presencial" : "delivery" });
+  if (filters.statusLabel) chips.push({ label: "Status", value: filters.statusLabel });
+  if (normalizeFilterValue(filters.expenseCategory)) chips.push({ label: "Categoria", value: filters.expenseCategory });
+  return [...chips, ...extras];
+}
+
+function getStatusLabel(status) {
+  const match = STATUS_ALIASES.find((entry) => entry.value === Number(status));
+  return match ? match.labels[0] : `status ${status}`;
+}
+
+function extractClientId(order) {
+  return order?.cliente_id || order?.client_id || null;
+}
+
+function extractOrderCode(order) {
+  const raw = order?.codigo_pedido || order?.numero_pedido || order?.codigo || order?.id;
+  return raw ? `IMP${String(raw).replace(/^IMP/i, "")}` : null;
+}
+
+function getClarificationRecord(conversationId) {
+  if (!conversationId) return null;
+  const record = clarificationStore.get(conversationId) || null;
+  if (!record) return null;
+  if (record.expiresAt < Date.now()) {
+    clarificationStore.delete(conversationId);
+    return null;
+  }
+  return record;
+}
+
+function setClarificationRecord(conversationId, payload) {
+  if (!conversationId) return;
+  clarificationStore.set(conversationId, {
+    ...payload,
+    expiresAt: Date.now() + CLARIFICATION_TTL_MS,
+  });
+}
+
+function clearClarificationRecord(conversationId) {
+  if (!conversationId) return;
+  clarificationStore.delete(conversationId);
+}
+
+async function resolveClientFilter({ supabase, clientName, filters, question, conversationId, confirmation }) {
+  if (!clientName) return { filters };
+
+  const activeConfirmation = confirmation?.type === "client" ? String(confirmation.selectedId || "") : null;
+  let query = supabase.from("clients").select("id, nome, email, telefone");
+  query = query.ilike("nome", `%${clientName}%`).limit(MAX_CLARIFICATION_OPTIONS);
+  const { data, error } = await query;
+
+  if (error) {
+    throw new Error(`Erro ao buscar cliente: ${error.message}`);
+  }
+
+  const candidates = data || [];
+  if (activeConfirmation) {
+    const selected = candidates.find((candidate) => String(candidate.id) === activeConfirmation);
+    if (selected) {
+      return {
+        filters: {
+          ...filters,
+          clientId: Number(selected.id),
+          clientNameResolved: selected.nome,
+        },
+      };
+    }
+  }
+
+  if (candidates.length === 0) {
+    return {
+      answer: {
+        ok: true,
+        mode: "answer",
+        domain: "clientes",
+        answer: `Nao encontrei cliente com nome parecido com "${clientName}".`,
+        sources: [{ type: "table", label: "clients" }],
+        applied_filters: buildAppliedFilters(filters),
+        period: buildPeriodResponse(filters.period),
+      },
+    };
+  }
+
+  if (candidates.length === 1) {
+    return {
+      filters: {
+        ...filters,
+        clientId: Number(candidates[0].id),
+        clientNameResolved: candidates[0].nome,
+      },
+    };
+  }
+
+  setClarificationRecord(conversationId, {
+    type: "client",
     question,
-    "",
-    "Formato esperado:",
-    "1. Resposta objetiva com 4 a 8 linhas.",
-    "2. Em seguida escreva 'Fontes:' e liste de 2 a 6 fontes curtas.",
-  ];
+    pendingFilters: filters,
+    rawName: clientName,
+    options: candidates.map((candidate) => ({
+      id: String(candidate.id),
+      label: candidate.nome,
+      description: [candidate.email, candidate.telefone].filter(Boolean).join(" | ") || `ID ${candidate.id}`,
+    })),
+  });
 
-  return sections.join("\n");
+  return {
+    answer: {
+      ok: true,
+      mode: "clarification",
+      domain: "clientes",
+      clarification: `Encontrei ${candidates.length} clientes parecidos com "${clientName}". Escolha o cliente correto.`,
+      options: candidates.map((candidate) => ({
+        id: String(candidate.id),
+        label: candidate.nome,
+        description: [candidate.email, candidate.telefone].filter(Boolean).join(" | ") || `ID ${candidate.id}`,
+      })),
+      pending_intent: {
+        type: "client",
+        raw_name: clientName,
+        tool: filters.tool,
+      },
+    },
+  };
 }
 
-function buildFallbackAnswer({ question, domain, report, codeMatches, docMatches, schemaSummaries, tablePreviews, readOnlyInsight }) {
-  if (readOnlyInsight?.answerText) {
-    return readOnlyInsight.answerText;
+async function resolveEmployeeFilter({ supabase, employeeName, filters, question, conversationId, confirmation }) {
+  if (!employeeName) return { filters };
+
+  const activeConfirmation = confirmation?.type === "employee" ? String(confirmation.selectedId || "") : null;
+  let query = supabase.from("employees").select("id, name, email, role_title, active");
+  query = query.ilike("name", `%${employeeName}%`).limit(MAX_CLARIFICATION_OPTIONS);
+  const { data, error } = await query;
+
+  if (error) {
+    throw new Error(`Erro ao buscar funcionario: ${error.message}`);
   }
 
-  const normalizedQuestion = question.toLowerCase();
-  const lines = [];
-
-  if (schemaSummaries.length > 0 && /(coluna|colunas|campo|campos|schema|estrutura|tabela|banco)/.test(normalizedQuestion)) {
-    for (const table of schemaSummaries.slice(0, 3)) {
-      lines.push(`Tabela ${table.table}: ${table.columns.slice(0, 12).join(", ")}${table.columns.length > 12 ? ", ..." : ""}`);
+  const candidates = data || [];
+  if (activeConfirmation) {
+    const selected = candidates.find((candidate) => String(candidate.id) === activeConfirmation);
+    if (selected) {
+      return {
+        filters: {
+          ...filters,
+          employeeId: Number(selected.id),
+          employeeNameResolved: selected.name,
+        },
+      };
     }
   }
 
-  if (tablePreviews.length > 0 && /(quant|total|registro|linha|linhas|dados|amostra|exemplo|ultimo|ultimos|recent)/.test(normalizedQuestion)) {
-    for (const table of tablePreviews.slice(0, 2)) {
-      const rowsLabel = table.totalRows === null ? "total desconhecido" : `${table.totalRows} registro(s)`;
-      lines.push(`Tabela ${table.table}: ${rowsLabel}.`);
-      if (table.rows[0]) {
-        lines.push(`Exemplo em ${table.table}: ${formatJsonBlock(table.rows[0])}`);
-      }
-    }
+  if (candidates.length === 0) {
+    return {
+      answer: {
+        ok: true,
+        mode: "answer",
+        domain: "funcionarios",
+        answer: `Nao encontrei funcionario com nome parecido com "${employeeName}".`,
+        sources: [{ type: "table", label: "employees" }],
+        applied_filters: buildAppliedFilters(filters),
+        period: buildPeriodResponse(filters.period),
+      },
+    };
   }
 
-  if (codeMatches.length > 0) {
-    const firstMatch = codeMatches[0];
-    lines.push(
-      `No codigo, o trecho mais relacionado esta em ${firstMatch.relativePath}:${firstMatch.startLine}-${firstMatch.endLine}.`,
+  if (candidates.length === 1) {
+    return {
+      filters: {
+        ...filters,
+        employeeId: Number(candidates[0].id),
+        employeeNameResolved: candidates[0].name,
+      },
+    };
+  }
+
+  setClarificationRecord(conversationId, {
+    type: "employee",
+    question,
+    pendingFilters: filters,
+    rawName: employeeName,
+    options: candidates.map((candidate) => ({
+      id: String(candidate.id),
+      label: candidate.name,
+      description: [candidate.role_title, candidate.email].filter(Boolean).join(" | ") || `ID ${candidate.id}`,
+    })),
+  });
+
+  return {
+    answer: {
+      ok: true,
+      mode: "clarification",
+      domain: "funcionarios",
+      clarification: `Encontrei ${candidates.length} funcionarios parecidos com "${employeeName}". Escolha o funcionario correto.`,
+      options: candidates.map((candidate) => ({
+        id: String(candidate.id),
+        label: candidate.name,
+        description: [candidate.role_title, candidate.email].filter(Boolean).join(" | ") || `ID ${candidate.id}`,
+      })),
+      pending_intent: {
+        type: "employee",
+        raw_name: employeeName,
+        tool: filters.tool,
+      },
+    },
+  };
+}
+
+async function resolveClarificationFlow({ conversationId, confirmation }) {
+  const record = getClarificationRecord(conversationId);
+  if (!record) {
+    return {
+      ok: true,
+      mode: "answer",
+      domain: "central",
+      answer: "A confirmacao expirou. Reenvie a pergunta para continuar.",
+      sources: [],
+      applied_filters: [],
+      period: buildPeriodResponse(buildAllTimePeriod()),
+    };
+  }
+
+  if (!confirmation || !confirmation.type || !confirmation.selectedId || confirmation.type !== record.type) {
+    return {
+      ok: true,
+      mode: "clarification",
+      domain: TOOL_TO_DOMAIN[record.pendingFilters?.tool] || "central",
+      clarification: "Escolha uma das opcoes abaixo para eu continuar.",
+      options: record.options,
+      pending_intent: {
+        type: record.type,
+        tool: record.pendingFilters?.tool || null,
+      },
+    };
+  }
+
+  return { record };
+}
+
+function applyOrderFilters(query, filters) {
+  query = applyPeriodToQuery(query, "data_pedido", filters.period);
+  if (filters.clientId) query = query.eq("cliente_id", filters.clientId);
+  if (Number.isInteger(filters.status)) query = query.eq("status", filters.status);
+  if (filters.paymentMethod) query = query.eq("payment_method", filters.paymentMethod);
+  if (filters.source) query = query.eq("source", filters.source);
+  return query;
+}
+
+function applyStoreSalesFilters(query, filters) {
+  query = applyPeriodToQuery(query, "sale_datetime", filters.period);
+  if (filters.paymentMethod) query = query.eq("payment_method", filters.paymentMethod);
+  return query;
+}
+
+function applyExpensesFilters(query, filters) {
+  if (!filters.period?.allTime) {
+    if (filters.period?.startDate) query = query.gte("competency_date", filters.period.startDate);
+    if (filters.period?.endDate) query = query.lte("competency_date", filters.period.endDate);
+  }
+  if (filters.expenseCategory) query = query.eq("category", filters.expenseCategory);
+  return query;
+}
+
+function applyEmployeePaymentsFilters(query, filters) {
+  query = applyPeriodToQuery(query, "paid_at", filters.period);
+  if (filters.employeeId) query = query.eq("employee_id", filters.employeeId);
+  return query;
+}
+
+async function fetchClientNamesMap(supabase, orders) {
+  const clientIds = unique((orders || []).map((order) => extractClientId(order)).map((value) => Number(value)).filter(Boolean));
+  if (!clientIds.length) return new Map();
+
+  const { data, error } = await supabase.from("clients").select("id, nome").in("id", clientIds);
+  if (error) return new Map();
+  return new Map((data || []).map((client) => [Number(client.id), client.nome]));
+}
+
+async function executeTool({ supabase, tool, filters }) {
+  if (tool === "count_orders") {
+    const { count, error } = await applyOrderFilters(
+      supabase.from("orders").select("*", { head: true, count: "exact" }),
+      filters,
     );
+    if (error) throw new Error(error.message);
+
+    return {
+      domain: "pedidos",
+      answer: `Foram feitos ${Number(count || 0)} pedido(s) em ${filters.period.label}.`,
+      sources: [{ type: "table", label: "orders.data_pedido" }],
+      appliedFilters: buildAppliedFilters({
+        ...filters,
+        statusLabel: Number.isInteger(filters.status) ? getStatusLabel(filters.status) : null,
+      }),
+      toolsUsed: ["count_orders"],
+    };
   }
 
-  if (docMatches.length > 0) {
-    const firstDoc = docMatches[0];
-    lines.push(`A documentacao relevante aparece em ${firstDoc.relativePath}:${firstDoc.startLine}-${firstDoc.endLine}.`);
+  if (tool === "sum_order_revenue") {
+    const { data, error } = await applyOrderFilters(
+      supabase.from("orders").select("valor_total, status, data_pedido, payment_method, source"),
+      filters,
+    );
+    if (error) throw new Error(error.message);
+
+    const total = roundMoney((data || [])
+      .filter((row) => Number(row.status) === 5)
+      .reduce((sum, row) => sum + parseNumber(row.valor_total, 0), 0));
+
+    return {
+      domain: "vendas",
+      answer: `O faturamento de pedidos/delivery em ${filters.period.label} foi ${formatMoney(total)}.`,
+      sources: [
+        { type: "table", label: "orders.valor_total" },
+        { type: "table", label: "orders.status" },
+      ],
+      appliedFilters: buildAppliedFilters({
+        ...filters,
+        source: filters.source || "delivery",
+        statusLabel: "concluido",
+      }),
+      toolsUsed: ["sum_order_revenue"],
+    };
   }
 
-  if (lines.length === 0) {
-    lines.push(`Dominio detectado: ${domain}.`);
-    lines.push(`Resumo atual: vendas totais ${report.summary ? report.summary.total_sales : "n/d"}, pedidos ${report.summary ? report.summary.orders_count : "n/d"}.`);
+  if (tool === "get_max_order") {
+    const { data, error } = await applyOrderFilters(
+      supabase.from("orders").select("*").order("valor_total", { ascending: false }).limit(10),
+      filters,
+    );
+    if (error) throw new Error(error.message);
+
+    const rows = data || [];
+    const top = rows[0];
+    if (!top) {
+      return {
+        domain: "pedidos",
+        answer: `Nao encontrei pedidos no periodo ${filters.period.label}.`,
+        sources: [{ type: "table", label: "orders" }],
+        appliedFilters: buildAppliedFilters(filters),
+        toolsUsed: ["get_max_order"],
+      };
+    }
+
+    const clientNameMap = await fetchClientNamesMap(supabase, [top]);
+    const clientName = clientNameMap.get(Number(extractClientId(top))) || "Cliente nao identificado";
+
+    return {
+      domain: "pedidos",
+      answer: [
+        `O pedido mais caro em ${filters.period.label} foi ${extractOrderCode(top) || `#${top.id}`}, no valor de ${formatMoney(top.valor_total)}.`,
+        `Cliente: ${clientName}.`,
+        `Data do pedido: ${formatDateShort(top.data_pedido) || "nao informada"}.`,
+        `Status: ${getStatusLabel(top.status)}.`,
+      ].join("\n"),
+      sources: [
+        { type: "table", label: "orders.valor_total" },
+        { type: "table", label: "clients.nome" },
+      ],
+      appliedFilters: buildAppliedFilters(filters),
+      toolsUsed: ["get_max_order"],
+    };
   }
 
-  const sources = [];
-  for (const item of codeMatches.slice(0, 2)) sources.push(`- arquivo ${item.relativePath}:${item.startLine}-${item.endLine}`);
-  for (const item of docMatches.slice(0, 2)) sources.push(`- documento ${item.relativePath}:${item.startLine}-${item.endLine}`);
-  for (const item of schemaSummaries.slice(0, 2)) sources.push(`- tabela ${item.table}`);
+  if (tool === "get_orders_by_status") {
+    const { data, error } = await applyOrderFilters(
+      supabase.from("orders").select("status, data_pedido"),
+      filters,
+    );
+    if (error) throw new Error(error.message);
 
-  return `${lines.join("\n")}\n\nFontes:\n${sources.join("\n")}`;
+    const totals = new Map();
+    for (const row of data || []) {
+      const key = Number(row.status);
+      totals.set(key, (totals.get(key) || 0) + 1);
+    }
+
+    const lines = Array.from(totals.entries())
+      .sort((left, right) => left[0] - right[0])
+      .map(([status, count]) => `- ${getStatusLabel(status)}: ${count}`);
+
+    return {
+      domain: "pedidos",
+      answer: lines.length
+        ? `Pedidos por status em ${filters.period.label}:\n${lines.join("\n")}`
+        : `Nao encontrei pedidos no periodo ${filters.period.label}.`,
+      sources: [{ type: "table", label: "orders.status" }],
+      appliedFilters: buildAppliedFilters(filters),
+      toolsUsed: ["get_orders_by_status"],
+    };
+  }
+
+  if (tool === "sum_store_sales") {
+    const { data, error } = await applyStoreSalesFilters(
+      supabase.from("store_sales").select("total_amount, sale_datetime, payment_method"),
+      filters,
+    );
+    if (error) throw new Error(error.message);
+
+    const total = roundMoney((data || []).reduce((sum, row) => sum + parseNumber(row.total_amount, 0), 0));
+    return {
+      domain: "vendas",
+      answer: `O faturamento presencial em ${filters.period.label} foi ${formatMoney(total)}.`,
+      sources: [{ type: "table", label: "store_sales.total_amount" }],
+      appliedFilters: buildAppliedFilters({ ...filters, source: "store" }),
+      toolsUsed: ["sum_store_sales"],
+    };
+  }
+
+  if (tool === "sum_total_sales") {
+    const [{ data: orders, error: ordersError }, { data: storeSales, error: storeError }] = await Promise.all([
+      applyOrderFilters(
+        supabase.from("orders").select("valor_total, status, data_pedido, payment_method, source"),
+        { ...filters, source: "delivery" },
+      ),
+      filters.clientId
+        ? Promise.resolve({ data: [], error: null })
+        : applyStoreSalesFilters(
+            supabase.from("store_sales").select("total_amount, sale_datetime, payment_method"),
+            filters,
+          ),
+    ]);
+
+    if (ordersError) throw new Error(ordersError.message);
+    if (storeError) throw new Error(storeError.message);
+
+    const deliveryTotal = roundMoney((orders || [])
+      .filter((row) => Number(row.status) === 5)
+      .reduce((sum, row) => sum + parseNumber(row.valor_total, 0), 0));
+    const storeTotal = roundMoney((storeSales || []).reduce((sum, row) => sum + parseNumber(row.total_amount, 0), 0));
+    const total = roundMoney(deliveryTotal + storeTotal);
+
+    return {
+      domain: "vendas",
+      answer: [
+        `O faturamento total em ${filters.period.label} foi ${formatMoney(total)}.`,
+        `Delivery: ${formatMoney(deliveryTotal)}.`,
+        `Presencial: ${formatMoney(storeTotal)}.`,
+      ].join("\n"),
+      sources: [
+        { type: "table", label: "orders.valor_total" },
+        { type: "table", label: "store_sales.total_amount" },
+      ],
+      appliedFilters: buildAppliedFilters(filters),
+      toolsUsed: ["sum_order_revenue", "sum_store_sales", "sum_total_sales"],
+    };
+  }
+
+  if (tool === "count_total_sales") {
+    const [{ count: ordersCount, error: ordersError }, { count: storeCount, error: storeError }] = await Promise.all([
+      filters.source === "store"
+        ? Promise.resolve({ count: 0, error: null })
+        : applyOrderFilters(
+            supabase.from("orders").select("*", { head: true, count: "exact" }),
+            filters,
+          ),
+      filters.source === "delivery" || filters.clientId
+        ? Promise.resolve({ count: 0, error: null })
+        : applyStoreSalesFilters(
+            supabase.from("store_sales").select("*", { head: true, count: "exact" }),
+            filters,
+          ),
+    ]);
+
+    if (ordersError) throw new Error(ordersError.message);
+    if (storeError) throw new Error(storeError.message);
+
+    const deliveryCount = Number(ordersCount || 0);
+    const storeSaleCount = Number(storeCount || 0);
+    const total = deliveryCount + storeSaleCount;
+    const scopeLabel = filters.source === "delivery" ? "de delivery" : filters.source === "store" ? "presenciais" : "";
+
+    return {
+      domain: "vendas",
+      answer: [
+        `Foram registradas ${total} venda(s) ${scopeLabel} em ${filters.period.label}.`.replace(/\s+/g, " ").trim(),
+        filters.source ? null : `Delivery/pedidos: ${deliveryCount}.`,
+        filters.source ? null : `Presencial: ${storeSaleCount}.`,
+      ].filter(Boolean).join("\n"),
+      sources: [
+        { type: "table", label: "orders.data_pedido" },
+        { type: "table", label: "store_sales.sale_datetime" },
+      ],
+      appliedFilters: buildAppliedFilters(filters),
+      toolsUsed: ["count_orders", "count_total_sales"],
+    };
+  }
+
+  if (tool === "sum_employee_payments") {
+    const { data, error } = await applyEmployeePaymentsFilters(
+      supabase.from("employee_payments").select("amount, paid_at, employee_id"),
+      filters,
+    );
+    if (error) throw new Error(error.message);
+
+    const total = roundMoney((data || []).reduce((sum, row) => sum + parseNumber(row.amount, 0), 0));
+    const employeeLabel = filters.employeeNameResolved || "funcionarios filtrados";
+
+    return {
+      domain: "funcionarios",
+      answer: `O total pago para ${employeeLabel} em ${filters.period.label} foi ${formatMoney(total)}.`,
+      sources: [{ type: "table", label: "employee_payments.amount" }],
+      appliedFilters: buildAppliedFilters(filters),
+      toolsUsed: ["sum_employee_payments"],
+    };
+  }
+
+  if (tool === "list_employee_payments") {
+    const { data, error } = await applyEmployeePaymentsFilters(
+      supabase.from("employee_payments").select("*").order("paid_at", { ascending: false }).limit(MAX_LIST_ROWS),
+      filters,
+    );
+    if (error) throw new Error(error.message);
+
+    const rows = data || [];
+    if (!rows.length) {
+      return {
+        domain: "funcionarios",
+        answer: `Nao encontrei pagamentos para ${filters.employeeNameResolved || "o funcionario"} em ${filters.period.label}.`,
+        sources: [{ type: "table", label: "employee_payments" }],
+        appliedFilters: buildAppliedFilters(filters),
+        toolsUsed: ["list_employee_payments"],
+      };
+    }
+
+    const total = roundMoney(rows.reduce((sum, row) => sum + parseNumber(row.amount, 0), 0));
+    const lines = rows.slice(0, 8).map((row) => `- ${formatDateShort(row.paid_at)}: ${formatMoney(row.amount)}`);
+
+    return {
+      domain: "funcionarios",
+      answer: [
+        `Encontrei ${rows.length} pagamento(s) para ${filters.employeeNameResolved || "o funcionario"} em ${filters.period.label}.`,
+        `Total no periodo: ${formatMoney(total)}.`,
+        "Lancamentos recentes:",
+        ...lines,
+      ].join("\n"),
+      sources: [{ type: "table", label: "employee_payments.paid_at" }],
+      appliedFilters: buildAppliedFilters(filters),
+      toolsUsed: ["list_employee_payments"],
+    };
+  }
+
+  if (tool === "sum_expenses") {
+    const { data, error } = await applyExpensesFilters(
+      supabase.from("expenses").select("amount, competency_date, category"),
+      filters,
+    );
+    if (error) throw new Error(error.message);
+
+    const total = roundMoney((data || []).reduce((sum, row) => sum + parseNumber(row.amount, 0), 0));
+    return {
+      domain: "financeiro",
+      answer: `O total de despesas em ${filters.period.label} foi ${formatMoney(total)}.`,
+      sources: [{ type: "table", label: "expenses.amount" }],
+      appliedFilters: buildAppliedFilters(filters),
+      toolsUsed: ["sum_expenses"],
+    };
+  }
+
+  if (tool === "group_expenses_by_category") {
+    const { data, error } = await applyExpensesFilters(
+      supabase.from("expenses").select("category, amount, competency_date"),
+      filters,
+    );
+    if (error) throw new Error(error.message);
+
+    const totals = new Map();
+    for (const row of data || []) {
+      const category = row.category || "outras";
+      totals.set(category, roundMoney((totals.get(category) || 0) + parseNumber(row.amount, 0)));
+    }
+
+    const lines = Array.from(totals.entries())
+      .sort((left, right) => right[1] - left[1])
+      .map(([category, total]) => `- ${category}: ${formatMoney(total)}`);
+
+    return {
+      domain: "financeiro",
+      answer: lines.length
+        ? `Despesas por categoria em ${filters.period.label}:\n${lines.join("\n")}`
+        : `Nao encontrei despesas no periodo ${filters.period.label}.`,
+      sources: [{ type: "table", label: "expenses.category" }],
+      appliedFilters: buildAppliedFilters(filters),
+      toolsUsed: ["group_expenses_by_category"],
+    };
+  }
+
+  if (tool === "get_top_clients") {
+    const { data, error } = await applyOrderFilters(
+      supabase.from("orders").select("cliente_id, valor_total, status, data_pedido"),
+      filters,
+    );
+    if (error) throw new Error(error.message);
+
+    const concluded = (data || []).filter((row) => Number(row.status) === 5 && extractClientId(row));
+    const totals = new Map();
+    for (const row of concluded) {
+      const clientId = Number(extractClientId(row));
+      if (!clientId) continue;
+      const current = totals.get(clientId) || { total: 0, count: 0 };
+      current.total = roundMoney(current.total + parseNumber(row.valor_total, 0));
+      current.count += 1;
+      totals.set(clientId, current);
+    }
+
+    const clientMap = await fetchClientNamesMap(supabase, concluded);
+    const ranking = Array.from(totals.entries())
+      .map(([clientId, summary]) => ({
+        clientId,
+        nome: clientMap.get(clientId) || `Cliente ${clientId}`,
+        total: summary.total,
+        count: summary.count,
+      }))
+      .sort((left, right) => right.total - left.total)
+      .slice(0, 5);
+
+    if (!ranking.length) {
+      return {
+        domain: "clientes",
+        answer: `Nao encontrei compras concluidas em ${filters.period.label}.`,
+        sources: [{ type: "table", label: "orders.valor_total" }],
+        appliedFilters: buildAppliedFilters(filters),
+        toolsUsed: ["get_top_clients"],
+      };
+    }
+
+    const lines = ranking.map((row, index) => `${index + 1}. ${row.nome} - ${formatMoney(row.total)} em ${row.count} pedido(s)`);
+    return {
+      domain: "clientes",
+      answer: `Top clientes em ${filters.period.label}:\n${lines.join("\n")}`,
+      sources: [
+        { type: "table", label: "orders.valor_total" },
+        { type: "table", label: "clients.nome" },
+      ],
+      appliedFilters: buildAppliedFilters(filters),
+      toolsUsed: ["get_top_clients"],
+    };
+  }
+
+  throw new Error(`Ferramenta nao suportada: ${tool}`);
 }
 
-function buildSources({ codeMatches, docMatches, schemaSummaries, tablePreviews, readOnlyInsight }) {
+async function executeClientOrderSummary({ supabase, filters }) {
+  const { data, error } = await applyOrderFilters(
+    supabase.from("orders").select("*").order("data_pedido", { ascending: false }).limit(MAX_LIST_ROWS),
+    filters,
+  );
+  if (error) throw new Error(error.message);
+
+  const rows = data || [];
+  if (!rows.length) {
+    return {
+      domain: "clientes",
+      answer: `Nao encontrei pedidos para ${filters.clientNameResolved || "o cliente"} em ${filters.period.label}.`,
+      sources: [{ type: "table", label: "orders" }],
+      appliedFilters: buildAppliedFilters(filters),
+      toolsUsed: ["get_client_order_summary"],
+    };
+  }
+
+  const totalSpent = roundMoney(rows
+    .filter((row) => Number(row.status) === 5)
+    .reduce((sum, row) => sum + parseNumber(row.valor_total, 0), 0));
+
+  const lastOrder = rows[0];
+  const highestOrder = rows.slice().sort((left, right) => parseNumber(right.valor_total, 0) - parseNumber(left.valor_total, 0))[0];
+
+  return {
+    domain: "clientes",
+    answer: [
+      `Resumo de compras de ${filters.clientNameResolved || "cliente"} em ${filters.period.label}:`,
+      `- Pedidos encontrados: ${rows.length}.`,
+      `- Total gasto em pedidos concluidos: ${formatMoney(totalSpent)}.`,
+      `- Ultimo pedido: ${formatDateShort(lastOrder.data_pedido) || "nao informado"}.`,
+      `- Maior pedido: ${formatMoney(highestOrder.valor_total)}.`,
+    ].join("\n"),
+    sources: [
+      { type: "table", label: "orders.valor_total" },
+      { type: "table", label: "orders.data_pedido" },
+    ],
+    appliedFilters: buildAppliedFilters(filters),
+    toolsUsed: ["get_client_order_summary"],
+  };
+}
+
+function isMissingRelationError(error, relationName) {
+  const message = String(error?.message || "");
+  return message.includes(`Could not find the table '${relationName}'`) || message.includes(`relation "${relationName}" does not exist`);
+}
+
+async function persistAuditLog(supabase, entry) {
+  const payload = {
+    conversation_id: entry.conversationId || null,
+    admin_auth_user_id: entry.actor?.authUserId || null,
+    admin_profile_id: entry.actor?.profileId || null,
+    admin_email: entry.actor?.email || null,
+    question: entry.question || null,
+    resolved_intent: entry.resolvedIntent || {},
+    tools_used: entry.toolsUsed || [],
+    status: entry.status || "answer",
+    detail: entry.detail || {},
+    created_at: new Date().toISOString(),
+  };
+
+  const { error } = await supabase.from("assistant_audit_logs").insert([payload]);
+  if (error && !isMissingRelationError(error, "assistant_audit_logs")) {
+    console.error("Falha ao registrar assistant_audit_logs", error.message);
+  }
+}
+
+async function buildFallbackBusinessAnswer({ question, buildOperationalReport }) {
+  if (typeof buildOperationalReport !== "function") {
+    return "No momento eu cubro perguntas administrativas sobre pedidos, vendas, financeiro, funcionarios e clientes.";
+  }
+
+  const report = await buildOperationalReport({});
   return [
-    ...((readOnlyInsight?.sources || []).map((item) => ({
-      ...item,
-    }))),
-    ...codeMatches.map((item) => ({
-      type: "file",
-      label: `${item.relativePath}:${item.startLine}-${item.endLine}`,
-      path: item.relativePath,
-      lineStart: item.startLine,
-      lineEnd: item.endLine,
-    })),
-    ...docMatches.map((item) => ({
-      type: "file",
-      label: `${item.relativePath}:${item.startLine}-${item.endLine}`,
-      path: item.relativePath,
-      lineStart: item.startLine,
-      lineEnd: item.endLine,
-    })),
-    ...schemaSummaries.map((item) => ({
-      type: "table",
-      label: item.table,
-      table: item.table,
-      columns: item.columns,
-    })),
-    ...tablePreviews.map((item) => ({
-      type: "table_data",
-      label: item.table,
-      table: item.table,
-      totalRows: item.totalRows,
-    })),
-  ].slice(0, 10);
+    `Nao consegui classificar a pergunta "${clipText(question, 120)}" com seguranca.`,
+    "Posso responder melhor sobre pedidos, vendas, financeiro, funcionarios e clientes.",
+    `Resumo atual: vendas totais ${formatMoney(report.summary?.total_sales || 0)}, pedidos ${report.summary?.orders_count || 0}, despesas ${formatMoney(report.summary?.expenses_total || 0)}.`,
+  ].join("\n");
 }
 
 export function createAssistantService({
   supabase,
-  repoRoot,
   normalizeSearchText,
   buildOperationalReport,
-  resolveAssistantDomain,
   callGeminiText,
 }) {
-  let knowledgeCache = null;
-
-  async function loadKnowledgeBase() {
-    if (knowledgeCache && Date.now() - knowledgeCache.indexedAt < INDEX_CACHE_TTL_MS) {
-      return knowledgeCache;
-    }
-
-    knowledgeCache = await buildKnowledgeBase({ repoRoot, normalizeSearchText });
-    return knowledgeCache;
-  }
-
-  async function answerQuestion({ question, range = {} }) {
+  async function answerQuestion({ question, conversationId, confirmation, actor }) {
     const trimmedQuestion = String(question || "").trim();
     if (!trimmedQuestion) {
       throw new Error("question obrigatoria.");
     }
 
-    const knowledgeBase = await loadKnowledgeBase();
-    const domain = resolveAssistantDomain(trimmedQuestion);
-    const report = await buildOperationalReport(range);
-    const readOnlyInsight = await executeReadOnlyInsight({
-      supabase,
-      question: trimmedQuestion,
-      normalizeSearchText,
-    });
-    const relevantTables = detectRelevantTables({
-      question: trimmedQuestion,
-      domain,
-      schemaTables: knowledgeBase.schemaTables,
-      normalizeSearchText,
-    });
-    const tablePreviews = (
-      await Promise.all(relevantTables.map((tableName) => fetchTablePreview(supabase, tableName)))
-    ).filter(Boolean);
+    let plannedFilters = null;
+    let toolsUsed = [];
 
-    const schemaSummaries = relevantTables
-      .map((tableName) => knowledgeBase.schemaTables.find((item) => item.table === tableName))
-      .filter(Boolean)
-      .map((item) => ({
-        table: item.table,
-        columns: item.columns.slice(0, 20),
-        sources: item.sources.slice(0, 4),
-      }));
-
-    const codeMatches = searchChunks({
-      chunks: knowledgeBase.chunks.filter((item) => item.kind === "code"),
-      normalizeSearchText,
-      question: trimmedQuestion,
-      limit: 4,
-    });
-
-    const docMatches = searchChunks({
-      chunks: knowledgeBase.chunks.filter((item) => item.kind !== "code"),
-      normalizeSearchText,
-      question: trimmedQuestion,
-      limit: 3,
-    });
-
-    const prompt = buildPrompt({
-      question: trimmedQuestion,
-      domain,
-      report,
-      codeMatches,
-      docMatches,
-      schemaSummaries,
-      tablePreviews,
-      readOnlyInsight,
-    });
-
-    let answer = buildFallbackAnswer({
-      question: trimmedQuestion,
-      domain,
-      report,
-      codeMatches,
-      docMatches,
-      schemaSummaries,
-      tablePreviews,
-      readOnlyInsight,
-    });
-
-    if (!readOnlyInsight?.answerText) {
-      try {
-        const llmAnswer = await callGeminiText({
-          prompt,
-          temperature: 0.1,
-          maxOutputTokens: 1400,
-        });
-        if (llmAnswer) answer = llmAnswer;
-      } catch {
-        // fallback local
+    try {
+      if (confirmation?.selectedId) {
+        const clarificationResolution = await resolveClarificationFlow({ conversationId, confirmation });
+        if (clarificationResolution.record) {
+          plannedFilters = {
+            ...clarificationResolution.record.pendingFilters,
+            tool: clarificationResolution.record.pendingFilters.tool,
+          };
+          if (clarificationResolution.record.type === "client") plannedFilters.clientName = clarificationResolution.record.rawName;
+          if (clarificationResolution.record.type === "employee") plannedFilters.employeeName = clarificationResolution.record.rawName;
+        } else {
+          await persistAuditLog(supabase, {
+            conversationId,
+            actor,
+            question: trimmedQuestion,
+            status: clarificationResolution.mode || "answer",
+            resolvedIntent: {},
+            detail: clarificationResolution,
+          });
+          return clarificationResolution;
+        }
       }
-    }
 
-    return {
-      ok: true,
-      domain,
-      answer,
-      report_summary: report.summary,
-      context_summary: buildContextSummary({
-        codeMatches,
-        docMatches,
-        schemaSummaries,
-        tablePreviews,
-        readOnlyInsight,
-      }),
-      sources: buildSources({
-        codeMatches,
-        docMatches,
-        schemaSummaries,
-        tablePreviews,
-        readOnlyInsight,
-      }),
-    };
+      if (!plannedFilters) {
+        const rawPlan = await planIntent({
+          question: trimmedQuestion,
+          normalizeSearchText,
+          callGeminiText,
+        });
+
+        if (!rawPlan?.tool) {
+          const fallbackAnswer = await buildFallbackBusinessAnswer({
+            question: trimmedQuestion,
+            buildOperationalReport,
+          });
+
+          const payload = {
+            ok: true,
+            mode: "answer",
+            domain: "central",
+            answer: fallbackAnswer,
+            sources: [],
+            applied_filters: [],
+            period: buildPeriodResponse(buildAllTimePeriod()),
+            conversationId,
+          };
+
+          await persistAuditLog(supabase, {
+            conversationId,
+            actor,
+            question: trimmedQuestion,
+            status: "answer",
+            resolvedIntent: { tool: null, domain: "central" },
+            detail: payload,
+          });
+
+          return payload;
+        }
+
+        plannedFilters = normalizePlannedFilters(rawPlan, trimmedQuestion, normalizeSearchText);
+        plannedFilters.tool = rawPlan.tool;
+      }
+
+      const explicitPeriod = resolveQuestionPeriod(trimmedQuestion, normalizeSearchText);
+      plannedFilters.period = explicitPeriod || resolveDefaultPeriod(plannedFilters.tool);
+      plannedFilters.defaultedPeriod = !explicitPeriod;
+
+      if (plannedFilters.tool === "get_client_order_summary" && !plannedFilters.clientName) {
+        const payload = {
+          ok: true,
+          mode: "answer",
+          domain: "clientes",
+          answer: "Para montar o resumo de compras, informe o nome do cliente.",
+          sources: [{ type: "table", label: "clients.nome" }],
+          applied_filters: buildAppliedFilters(plannedFilters),
+          period: buildPeriodResponse(plannedFilters.period),
+          conversationId,
+        };
+
+        await persistAuditLog(supabase, {
+          conversationId,
+          actor,
+          question: trimmedQuestion,
+          status: "answer",
+          resolvedIntent: { tool: plannedFilters.tool, domain: plannedFilters.domain },
+          detail: payload,
+        });
+
+        return payload;
+      }
+
+      const clientResolution = await resolveClientFilter({
+        supabase,
+        clientName: plannedFilters.clientName,
+        filters: plannedFilters,
+        question: trimmedQuestion,
+        conversationId,
+        confirmation,
+      });
+
+      if (clientResolution.answer) {
+        await persistAuditLog(supabase, {
+          conversationId,
+          actor,
+          question: trimmedQuestion,
+          status: clientResolution.answer.mode,
+          resolvedIntent: { tool: plannedFilters.tool, domain: plannedFilters.domain, clientName: plannedFilters.clientName },
+          detail: clientResolution.answer,
+        });
+        return {
+          ...clientResolution.answer,
+          conversationId,
+        };
+      }
+      plannedFilters = clientResolution.filters;
+
+      const employeeResolution = await resolveEmployeeFilter({
+        supabase,
+        employeeName: plannedFilters.employeeName,
+        filters: plannedFilters,
+        question: trimmedQuestion,
+        conversationId,
+        confirmation,
+      });
+
+      if (employeeResolution.answer) {
+        await persistAuditLog(supabase, {
+          conversationId,
+          actor,
+          question: trimmedQuestion,
+          status: employeeResolution.answer.mode,
+          resolvedIntent: { tool: plannedFilters.tool, domain: plannedFilters.domain, employeeName: plannedFilters.employeeName },
+          detail: employeeResolution.answer,
+        });
+        return {
+          ...employeeResolution.answer,
+          conversationId,
+        };
+      }
+      plannedFilters = employeeResolution.filters;
+
+      let execution;
+      if (plannedFilters.tool === "get_client_order_summary") {
+        execution = await executeClientOrderSummary({ supabase, filters: plannedFilters });
+      } else {
+        execution = await executeTool({ supabase, tool: plannedFilters.tool, filters: plannedFilters });
+      }
+
+      toolsUsed = execution.toolsUsed || [plannedFilters.tool];
+      clearClarificationRecord(conversationId);
+
+      const payload = {
+        ok: true,
+        mode: "answer",
+        domain: execution.domain,
+        answer: execution.answer,
+        sources: execution.sources,
+        applied_filters: execution.appliedFilters,
+        period: buildPeriodResponse(plannedFilters.period),
+        conversationId,
+      };
+
+      await persistAuditLog(supabase, {
+        conversationId,
+        actor,
+        question: trimmedQuestion,
+        status: "answer",
+        resolvedIntent: {
+          tool: plannedFilters.tool,
+          domain: plannedFilters.domain,
+          filters: plannedFilters,
+        },
+        toolsUsed,
+        detail: { period: payload.period, applied_filters: payload.applied_filters },
+      });
+
+      return payload;
+    } catch (error) {
+      await persistAuditLog(supabase, {
+        conversationId,
+        actor,
+        question: trimmedQuestion,
+        status: "error",
+        resolvedIntent: plannedFilters ? { tool: plannedFilters.tool, domain: plannedFilters.domain } : {},
+        toolsUsed,
+        detail: { message: error?.message || "Erro interno no assistente." },
+      });
+      throw error;
+    }
   }
 
   return {

@@ -2,7 +2,6 @@
 import express from "express";
 import cors from "cors";
 import { createClient } from "@supabase/supabase-js";
-import { fileURLToPath } from "node:url";
 import { createAssistantService } from "./assistant.js";
 
 const app = express();
@@ -44,13 +43,71 @@ if (!supabaseUrl || !supabaseServiceRoleKey) {
 }
 
 const supabase = createClient(supabaseUrl, supabaseServiceRoleKey);
-const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 
 function createHttpError(status, message, detail = null) {
   const error = new Error(message);
   error.status = status;
   error.detail = detail;
   return error;
+}
+
+async function requireAssistantAdmin(req) {
+  const authHeader = String(req.headers?.authorization || "").trim();
+  if (!authHeader.toLowerCase().startsWith("bearer ")) {
+    throw createHttpError(401, "Acesso nao autorizado.", "Envie um token Bearer valido.");
+  }
+
+  const accessToken = authHeader.slice(7).trim();
+  if (!accessToken) {
+    throw createHttpError(401, "Acesso nao autorizado.", "Token Bearer ausente.");
+  }
+
+  const { data: authData, error: authError } = await supabase.auth.getUser(accessToken);
+  if (authError || !authData?.user) {
+    throw createHttpError(401, "Sessao invalida.", authError?.message || null);
+  }
+
+  let profile = null;
+  const email = String(authData.user.email || "").trim().toLowerCase();
+
+  const byAuthUser = await supabase
+    .from("users")
+    .select("id, nome, email, tipo, auth_user_id")
+    .eq("auth_user_id", authData.user.id)
+    .order("id", { ascending: false })
+    .limit(1);
+
+  if (!byAuthUser.error && byAuthUser.data?.[0]) {
+    profile = byAuthUser.data[0];
+  }
+
+  if (!profile && email) {
+    const byEmail = await supabase
+      .from("users")
+      .select("id, nome, email, tipo")
+      .eq("email", email)
+      .order("id", { ascending: false })
+      .limit(1);
+
+    if (!byEmail.error && byEmail.data?.[0]) {
+      profile = byEmail.data[0];
+    }
+  }
+
+  if (!profile) {
+    throw createHttpError(403, "Perfil administrativo nao encontrado.");
+  }
+
+  if (String(profile.tipo || "").toLowerCase() !== "admin") {
+    throw createHttpError(403, "Acesso restrito a administradores.");
+  }
+
+  return {
+    authUserId: authData.user.id,
+    profileId: profile.id,
+    name: profile.nome || authData.user.email || "admin",
+    email: email || String(profile.email || "").trim().toLowerCase() || null,
+  };
 }
 
 function parseNumber(value, fallback = 0) {
@@ -2301,21 +2358,10 @@ async function buildOperationalReport(rangeQuery = {}) {
   };
 }
 
-function resolveAssistantDomain(question) {
-  const text = normalizeSearchText(question);
-  if (/(estoque|lote|produto|baixa|saldo)/.test(text)) return "estoque";
-  if (/(financeiro|despesa|gasto|aluguel|limpeza|carne)/.test(text)) return "financeiro";
-  if (/(funcionario|pagamento|folha|semanal)/.test(text)) return "funcionarios";
-  if (/(venda|faturamento|delivery|presencial|loja)/.test(text)) return "vendas";
-  return "pedidos";
-}
-
 const assistantService = createAssistantService({
   supabase,
-  repoRoot,
   normalizeSearchText,
   buildOperationalReport,
-  resolveAssistantDomain,
   callGeminiText,
 });
 
@@ -3582,13 +3628,16 @@ app.get("/api/reports/operational.csv", async (req, res) => {
 
 app.post("/api/assistant/query", async (req, res) => {
   try {
+    const actor = await requireAssistantAdmin(req);
     const question = String(req.body?.question || "").trim();
     if (!question) {
       return res.status(400).json({ error: "question obrigatoria." });
     }
     const payload = await assistantService.answerQuestion({
       question,
-      range: req.body?.range || {},
+      conversationId: req.body?.conversationId || null,
+      confirmation: req.body?.confirmation || null,
+      actor,
     });
     return res.json(payload);
   } catch (error) {

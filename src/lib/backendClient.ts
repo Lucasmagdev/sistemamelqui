@@ -1,3 +1,5 @@
+import { supabase } from '@/lib/supabaseClient';
+
 export const backendBaseUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
 
 export class BackendRequestError extends Error {
@@ -13,10 +15,14 @@ export class BackendRequestError extends Error {
 }
 
 export async function backendRequest<T = any>(path: string, init: RequestInit = {}): Promise<T> {
+  const { data: sessionData } = await supabase.auth.getSession();
+  const accessToken = sessionData?.session?.access_token || null;
+
   const response = await fetch(`${backendBaseUrl}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
+      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
       ...(init.headers || {}),
     },
   });

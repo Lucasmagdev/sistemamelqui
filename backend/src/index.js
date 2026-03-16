@@ -2,6 +2,8 @@
 import express from "express";
 import cors from "cors";
 import { createClient } from "@supabase/supabase-js";
+import { fileURLToPath } from "node:url";
+import { createAssistantService } from "./assistant.js";
 
 const app = express();
 app.use(express.json({ limit: "20mb" }));
@@ -42,6 +44,7 @@ if (!supabaseUrl || !supabaseServiceRoleKey) {
 }
 
 const supabase = createClient(supabaseUrl, supabaseServiceRoleKey);
+const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 
 function createHttpError(status, message, detail = null) {
   const error = new Error(message);
@@ -2307,32 +2310,14 @@ function resolveAssistantDomain(question) {
   return "pedidos";
 }
 
-function buildAssistantFallbackAnswer({ question, domain, report }) {
-  const summary = report.summary;
-  const lines = [
-    `Especialista acionado: ${domain}.`,
-    `Pergunta: ${question}`,
-    "",
-    `Vendas delivery concluidas: ${formatMoney(summary.delivery_sales_total)}`,
-    `Vendas presenciais registradas: ${formatMoney(summary.store_sales_total)}`,
-    `Vendas totais: ${formatMoney(summary.total_sales)}`,
-    `Despesas no periodo: ${formatMoney(summary.expenses_total)}`,
-    `Pagamentos de funcionarios: ${formatMoney(summary.payroll_total)}`,
-    `Pedidos no periodo: ${summary.orders_count}`,
-    `Pedidos concluidos no delivery: ${summary.delivery_sales_count || 0}`,
-    `Produtos com alerta de estoque: ${summary.low_stock_products}`,
-  ];
-
-  if (domain === "estoque" && report.stock_alerts.length) {
-    lines.push(
-      "",
-      "Itens em alerta:",
-      ...report.stock_alerts.slice(0, 5).map((item) => `- ${item.product_name}: ${formatQuantity(item.saldo_qty)} ${item.stock_unit}`),
-    );
-  }
-
-  return lines.join("\n");
-}
+const assistantService = createAssistantService({
+  supabase,
+  repoRoot,
+  normalizeSearchText,
+  buildOperationalReport,
+  resolveAssistantDomain,
+  callGeminiText,
+});
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true });
@@ -3601,43 +3586,11 @@ app.post("/api/assistant/query", async (req, res) => {
     if (!question) {
       return res.status(400).json({ error: "question obrigatoria." });
     }
-
-    const domain = resolveAssistantDomain(question);
-    const report = await buildOperationalReport(req.body?.range || {});
-    const context = JSON.stringify(
-      {
-        domain,
-        summary: report.summary,
-        sales_by_payment: report.sales_by_payment,
-        orders_by_status: report.orders_by_status,
-        expenses_by_category: report.expenses_by_category,
-        payroll_by_employee: report.payroll_by_employee,
-        stock_alerts: report.stock_alerts.slice(0, 10),
-      },
-      null,
-      2,
-    );
-
-    let answer = buildAssistantFallbackAnswer({ question, domain, report });
-    try {
-      const geminiAnswer = await callGeminiText({
-        prompt: [
-          "Voce e um assistente administrativo read-only do Imperial Flow Gold.",
-          "Responda em portugues do Brasil, sem inventar dados e sem sugerir escrita no banco.",
-          `Especialista acionado: ${domain}.`,
-          "Dados operacionais disponiveis:",
-          context,
-          "Pergunta do usuario:",
-          question,
-          "Responda de forma objetiva, com 3 a 6 linhas.",
-        ].join("\n\n"),
-      });
-      if (geminiAnswer) answer = geminiAnswer;
-    } catch {
-      // fallback local
-    }
-
-    return res.json({ ok: true, domain, answer, report_summary: report.summary });
+    const payload = await assistantService.answerQuestion({
+      question,
+      range: req.body?.range || {},
+    });
+    return res.json(payload);
   } catch (error) {
     return res.status(error?.status || 500).json({
       error: error?.message || "Erro interno no assistente.",

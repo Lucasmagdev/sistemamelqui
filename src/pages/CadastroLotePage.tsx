@@ -793,11 +793,30 @@ export default function CadastroLotePage() {
     <div className="mx-auto max-w-5xl space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-foreground">Entrada de Estoque</h1>
-        <p className="text-sm text-muted-foreground">Manual ou por foto de nota fiscal</p>
+        <p className="text-sm text-muted-foreground">Registre entradas rapidas manualmente ou use a nota fiscal para revisar e aplicar no estoque.</p>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-2">
+        <div className="rounded-xl border border-border bg-card p-4">
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Fluxo 1</p>
+          <h2 className="mt-1 text-base font-semibold">Entrada manual</h2>
+          <p className="mt-1 text-sm text-muted-foreground">Melhor para reposicoes simples, ajustes e entradas sem nota fiscal.</p>
+        </div>
+        <div className="rounded-xl border border-border bg-card p-4">
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Fluxo 2</p>
+          <h2 className="mt-1 text-base font-semibold">Nota fiscal por foto</h2>
+          <p className="mt-1 text-sm text-muted-foreground">Envie a nota, revise os itens extraidos e aplique apenas quando tudo estiver mapeado.</p>
+        </div>
       </div>
 
       <form onSubmit={submitManualEntry} className="space-y-4 rounded-xl border border-border bg-card p-6 card-elevated">
-        <h2 className="text-lg font-semibold">Entrada Manual</h2>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 className="text-lg font-semibold">Entrada Manual</h2>
+            <p className="text-sm text-muted-foreground">Preencha os dados do lote e registre a entrada imediatamente.</p>
+          </div>
+          <span className="rounded-full border border-border px-3 py-1 text-xs text-muted-foreground">Etapa unica</span>
+        </div>
         <div className="grid gap-4 md:grid-cols-3">
           <div className="space-y-1.5 md:col-span-2">
             <Label>Produto</Label>
@@ -842,14 +861,25 @@ export default function CadastroLotePage() {
           </div>
         </div>
         <div className="flex gap-3">
-          <Button type="submit" disabled={savingManual || loadingProducts}>{savingManual ? "Salvando..." : "Salvar Entrada Manual"}</Button>
+          <Button type="submit" disabled={savingManual || loadingProducts}>{savingManual ? "Salvando..." : "Registrar entrada manual"}</Button>
           <Button type="button" variant="outline" onClick={() => navigate("/admin/estoque")}>Voltar</Button>
           {selectedProduct ? <span className="self-center text-xs text-muted-foreground">Unidade base: {selectedProduct.stock_unit}</span> : null}
         </div>
       </form>
 
       <div className="space-y-4 rounded-xl border border-border bg-card p-6 card-elevated">
-        <h2 className="text-lg font-semibold">Nota Fiscal por Foto</h2>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold">Nota Fiscal por Foto</h2>
+            <p className="text-sm text-muted-foreground">Siga as etapas: enviar, processar, revisar os itens e so depois aplicar no estoque.</p>
+          </div>
+          <div className="flex flex-wrap gap-2 text-xs">
+            <span className="rounded-full border border-border px-3 py-1 text-muted-foreground">1. Enviar nota</span>
+            <span className="rounded-full border border-border px-3 py-1 text-muted-foreground">2. Ler OCR + IA</span>
+            <span className="rounded-full border border-border px-3 py-1 text-muted-foreground">3. Revisar itens</span>
+            <span className="rounded-full border border-border px-3 py-1 text-muted-foreground">4. Aplicar estoque</span>
+          </div>
+        </div>
 
         <div className="flex flex-wrap items-end gap-3">
           <div className="space-y-1.5">
@@ -857,12 +887,12 @@ export default function CadastroLotePage() {
             <Input type="file" accept="image/*,application/pdf" onChange={(e) => setInvoiceFile(e.target.files?.[0] || null)} />
           </div>
           <Button type="button" onClick={uploadInvoice} disabled={uploadingInvoice || !invoiceFile}>{uploadingInvoice ? "Enviando..." : "Enviar Nota"}</Button>
-          <Button type="button" variant="outline" onClick={processInvoice} disabled={processingInvoice || !invoiceId}>{processingInvoice ? "Processando..." : "Processar OCR + IA"}</Button>
+          <Button type="button" variant="outline" onClick={processInvoice} disabled={processingInvoice || !invoiceId}>{processingInvoice ? "Processando..." : "Ler nota com OCR + IA"}</Button>
           {invoiceId ? <span className="text-xs text-muted-foreground">ID nota: {invoiceId}</span> : null}
         </div>
 
         {invoiceId ? (
-          <div className="grid gap-4 md:grid-cols-3">
+          <div className="grid gap-4 rounded-xl border border-border bg-muted/20 p-4 md:grid-cols-3">
             <div className="space-y-1.5"><Label>Fornecedor</Label><Input value={invoiceMeta.supplier} onChange={(e) => setInvoiceMeta((prev) => ({ ...prev, supplier: e.target.value }))} /></div>
             <div className="space-y-1.5"><Label>Numero da nota</Label><Input value={invoiceMeta.invoice_number} onChange={(e) => setInvoiceMeta((prev) => ({ ...prev, invoice_number: e.target.value }))} /></div>
             <div className="space-y-1.5"><Label>Data da nota</Label><Input type="date" value={invoiceMeta.invoice_date} onChange={(e) => setInvoiceMeta((prev) => ({ ...prev, invoice_date: e.target.value }))} /></div>
@@ -932,9 +962,9 @@ export default function CadastroLotePage() {
                   <tr>
                     <th className="w-14 px-3 py-2 text-left font-medium">#</th>
                     <th className="w-28 px-3 py-2 text-left font-medium">Status</th>
-                    <th className="px-3 py-2 text-left font-medium">Product/Service</th>
-                    <th className="px-3 py-2 text-left font-medium">Quantity</th>
-                    <th className="px-3 py-2 text-left font-medium">Price</th>
+                    <th className="px-3 py-2 text-left font-medium">Descricao na nota</th>
+                    <th className="px-3 py-2 text-left font-medium">Quantidade</th>
+                    <th className="px-3 py-2 text-left font-medium">Preco unitario</th>
                     <th className="px-3 py-2 text-left font-medium">Total</th>
                     <th className="px-3 py-2 text-right font-medium">Acoes</th>
                   </tr>
@@ -1123,8 +1153,9 @@ export default function CadastroLotePage() {
               </table>
             </div>
 
-            <div className="flex gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Button type="button" variant="outline" onClick={() => setInvoiceItems((prev) => [...prev, emptyItem()])}>Adicionar item</Button>
+              <span className="text-xs text-muted-foreground">Use esta opcao quando a nota tiver uma linha que nao veio na leitura automatica.</span>
               <Button type="button" onClick={applyInvoice} disabled={applyingInvoice || unresolvedActionableCount > 0}>
                 {applyingInvoice ? "Aplicando..." : "Aplicar no Estoque"}
               </Button>

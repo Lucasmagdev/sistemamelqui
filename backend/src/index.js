@@ -4570,7 +4570,14 @@ app.post("/api/employee-payments", async (req, res) => {
 app.get("/api/orders/admin", async (req, res) => {
   const startedAt = Date.now();
   try {
-    const range = resolveRangeFromQuery(req.query);
+    const startRaw = String(req.query?.start || req.query?.date_from || "").trim();
+    const endRaw = String(req.query?.end || req.query?.date_to || "").trim();
+    const range = {
+      start: startRaw ? new Date(`${startRaw}T00:00:00.000Z`).toISOString() : null,
+      end: endRaw ? new Date(`${endRaw}T23:59:59.999Z`).toISOString() : null,
+      startDate: startRaw || null,
+      endDate: endRaw || null,
+    };
     const payload = await buildOrdersAdminPayload({
       start: range.start,
       end: range.end,

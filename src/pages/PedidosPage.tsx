@@ -9,8 +9,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { OrderList, Order } from "@/components/dashboard/OrderList";
 import { useAdminOrdersQuery } from "@/hooks/useAdminQueries";
 
-const today = new Date().toISOString().slice(0, 10);
-const monthAgo = new Date(Date.now() - 29 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 const PAGE_SIZE = 10;
 
 type ProductChip = {
@@ -71,8 +69,8 @@ const statusClass = (status: number) => {
 export default function PedidosPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [start, setStart] = useState(monthAgo);
-  const [end, setEnd] = useState(today);
+  const [start, setStart] = useState("");
+  const [end, setEnd] = useState("");
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
@@ -130,8 +128,8 @@ export default function PedidosPage() {
   };
 
   const limparFiltros = () => {
-    setStart(monthAgo);
-    setEnd(today);
+    setStart("");
+    setEnd("");
     setSearchInput("");
     setSearch("");
     setStatus("");

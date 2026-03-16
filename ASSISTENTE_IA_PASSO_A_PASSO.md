@@ -15,6 +15,7 @@ O endpoint `POST /api/assistant/query` agora:
 - le documentos principais em `.md`
 - identifica tabelas relacionadas com a pergunta
 - busca amostras reais dessas tabelas no Supabase
+- executa algumas consultas read-only por periodo em linguagem natural
 - monta uma resposta com fontes
 
 Pagina usada no frontend:
@@ -88,6 +89,8 @@ Teste perguntas como:
 - `me mostre as colunas de products e orders`
 - `quais arquivos falam de estoque e lotes?`
 - `quanto vendemos no delivery esta semana?`
+- `quantos pedidos foram feitos semana passada?`
+- `qual foi o faturamento do mes passado?`
 - `quais tabelas parecem guardar funcionarios e pagamentos?`
 
 ## 5. Como validar que esta lendo codigo e banco
@@ -108,6 +111,7 @@ Se as fontes aparecerem, significa que o contexto foi recuperado corretamente.
 - busca trechos relevantes do codigo e documentacao local
 - monta um resumo de schema com base nos SQLs do repositorio
 - consulta tabelas relevantes no Supabase em modo leitura
+- resolve periodos como `hoje`, `ontem`, `semana passada`, `este mes` e `ultimos X dias`
 - devolve resposta com base em contexto tecnico e operacional
 
 ## 7. Limitacoes atuais

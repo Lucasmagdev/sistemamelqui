@@ -16,6 +16,7 @@ const CHUNK_SIZE_LINES = 40;
 const CHUNK_OVERLAP_LINES = 8;
 const MAX_FILE_SIZE_BYTES = 350 * 1024;
 const MAX_SNIPPET_CHARS = 1200;
+const ASSISTANT_TIMEZONE = process.env.ASSISTANT_TIMEZONE || "America/Sao_Paulo";
 const STOPWORDS = new Set([
   "a",
   "o",
@@ -420,7 +421,390 @@ function formatJsonBlock(value) {
   return clipText(JSON.stringify(value, null, 2), 2200);
 }
 
-function buildContextSummary({ codeMatches, docMatches, schemaSummaries, tablePreviews }) {
+function getTimeZoneParts(date, timeZone = ASSISTANT_TIMEZONE) {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+
+  const values = Object.fromEntries(
+    formatter.formatToParts(date)
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value]),
+  );
+
+  return {
+    year: Number(values.year),
+    month: Number(values.month),
+    day: Number(values.day),
+    hour: Number(values.hour),
+    minute: Number(values.minute),
+    second: Number(values.second),
+    weekday: values.weekday,
+  };
+}
+
+function getWeekdayIndex(dateParts) {
+  return new Date(Date.UTC(dateParts.year, dateParts.month - 1, dateParts.day, 12, 0, 0)).getUTCDay();
+}
+
+function shiftDateParts(dateParts, days) {
+  const shifted = new Date(Date.UTC(dateParts.year, dateParts.month - 1, dateParts.day + days, 12, 0, 0));
+  return {
+    year: shifted.getUTCFullYear(),
+    month: shifted.getUTCMonth() + 1,
+    day: shifted.getUTCDate(),
+  };
+}
+
+function toDateKey(dateParts) {
+  return [
+    String(dateParts.year).padStart(4, "0"),
+    String(dateParts.month).padStart(2, "0"),
+    String(dateParts.day).padStart(2, "0"),
+  ].join("-");
+}
+
+function zonedDateTimeToUtc(dateParts, hour, minute, second, millisecond, timeZone = ASSISTANT_TIMEZONE) {
+  const utcGuess = new Date(Date.UTC(
+    dateParts.year,
+    dateParts.month - 1,
+    dateParts.day,
+    hour,
+    minute,
+    second,
+    millisecond,
+  ));
+  const actualParts = getTimeZoneParts(utcGuess, timeZone);
+  const targetUtcMillis = Date.UTC(dateParts.year, dateParts.month - 1, dateParts.day, hour, minute, second, millisecond);
+  const actualUtcMillis = Date.UTC(
+    actualParts.year,
+    actualParts.month - 1,
+    actualParts.day,
+    actualParts.hour,
+    actualParts.minute,
+    actualParts.second,
+    0,
+  );
+  const offsetDiff = targetUtcMillis - actualUtcMillis;
+  return new Date(utcGuess.getTime() + offsetDiff);
+}
+
+function buildPeriodBounds(startDateParts, endDateParts, label) {
+  const start = zonedDateTimeToUtc(startDateParts, 0, 0, 0, 0);
+  const nextDay = shiftDateParts(endDateParts, 1);
+  const end = new Date(zonedDateTimeToUtc(nextDay, 0, 0, 0, 0).getTime() - 1);
+  return {
+    label,
+    start: start.toISOString(),
+    end: end.toISOString(),
+    startDate: toDateKey(startDateParts),
+    endDate: toDateKey(endDateParts),
+  };
+}
+
+function resolveQuestionPeriod(question, normalizeSearchText, now = new Date()) {
+  const normalized = normalizeSearchText(question);
+  const todayParts = getTimeZoneParts(now);
+  const today = { year: todayParts.year, month: todayParts.month, day: todayParts.day };
+  const weekdayIndex = getWeekdayIndex(today);
+  const mondayOffset = (weekdayIndex + 6) % 7;
+
+  if (/\bhoje\b/.test(normalized)) {
+    return buildPeriodBounds(today, today, "hoje");
+  }
+
+  if (/\bontem\b/.test(normalized)) {
+    const yesterday = shiftDateParts(today, -1);
+    return buildPeriodBounds(yesterday, yesterday, "ontem");
+  }
+
+  if (/(semana passada|ultima semana)/.test(normalized)) {
+    const start = shiftDateParts(today, -mondayOffset - 7);
+    const end = shiftDateParts(start, 6);
+    return buildPeriodBounds(start, end, "semana passada");
+  }
+
+  if (/(esta semana|nessa semana|semana atual)/.test(normalized)) {
+    const start = shiftDateParts(today, -mondayOffset);
+    return buildPeriodBounds(start, today, "esta semana");
+  }
+
+  if (/(mes passado|ultimo mes)/.test(normalized)) {
+    const monthStart = { year: today.year, month: today.month, day: 1 };
+    const lastMonthEnd = shiftDateParts(monthStart, -1);
+    const lastMonthStart = { year: lastMonthEnd.year, month: lastMonthEnd.month, day: 1 };
+    return buildPeriodBounds(lastMonthStart, lastMonthEnd, "mes passado");
+  }
+
+  if (/(este mes|nesse mes|mes atual)/.test(normalized)) {
+    const monthStart = { year: today.year, month: today.month, day: 1 };
+    return buildPeriodBounds(monthStart, today, "este mes");
+  }
+
+  const lastDaysMatch = normalized.match(/ultim(?:o|a|os|as)\s+(\d{1,3})\s+dias?/);
+  if (lastDaysMatch) {
+    const days = Number(lastDaysMatch[1]);
+    if (Number.isFinite(days) && days > 0) {
+      const start = shiftDateParts(today, -(days - 1));
+      return buildPeriodBounds(start, today, `ultimos ${days} dias`);
+    }
+  }
+
+  return null;
+}
+
+function detectReadOnlyIntent(question, normalizeSearchText) {
+  const normalized = normalizeSearchText(question);
+  const asksHowMany = /(quantos|quantas|qtd|quantidade|numero de|número de|contagem|total de)/.test(normalized);
+  const asksRevenue = /(quanto vendeu|quanto vendemos|faturamento|receita|vendas totais|total vendido)/.test(normalized);
+  const asksOrders = /(pedido|pedidos|orders)/.test(normalized);
+  const asksSales = /(venda|vendas|vendeu|vendemos)/.test(normalized);
+  const asksStoreSales = /(venda presencial|vendas presenciais|loja|store sales|store_sales)/.test(normalized);
+  const asksDelivery = /(delivery|entrega)/.test(normalized);
+
+  if (asksHowMany && asksOrders) {
+    return { type: "orders_count" };
+  }
+
+  if (asksRevenue && (asksOrders || asksSales || asksDelivery || asksStoreSales)) {
+    if (asksStoreSales && !asksDelivery) return { type: "store_sales_total" };
+    if (asksDelivery && !asksStoreSales) return { type: "delivery_sales_total" };
+    return { type: "total_sales" };
+  }
+
+  return null;
+}
+
+function formatDateRangeLabel(period) {
+  return `${period.startDate} ate ${period.endDate}`;
+}
+
+async function executeReadOnlyInsight({ supabase, question, normalizeSearchText }) {
+  const intent = detectReadOnlyIntent(question, normalizeSearchText);
+  if (!intent) return null;
+
+  const period = resolveQuestionPeriod(question, normalizeSearchText);
+  if (!period) return null;
+
+  if (intent.type === "orders_count") {
+    const { count, error } = await supabase
+      .from("orders")
+      .select("*", { head: true, count: "exact" })
+      .gte("data_pedido", period.start)
+      .lte("data_pedido", period.end);
+
+    if (error) {
+      return {
+        type: intent.type,
+        period,
+        error: error.message,
+      };
+    }
+
+    const total = Number(count || 0);
+    return {
+      type: intent.type,
+      period,
+      result: {
+        total,
+      },
+      answerText: [
+        `Foram feitos ${total} pedido(s) em ${period.label}.`,
+        `Periodo consultado: ${formatDateRangeLabel(period)} (${ASSISTANT_TIMEZONE}).`,
+        "Consulta read-only executada diretamente na tabela orders usando a coluna data_pedido.",
+        "",
+        "Fontes:",
+        `- consulta orders.data_pedido entre ${period.start} e ${period.end}`,
+        "- tabela orders",
+      ].join("\n"),
+      sources: [
+        {
+          type: "query",
+          label: `orders.data_pedido:${period.startDate}-${period.endDate}`,
+          table: "orders",
+          column: "data_pedido",
+        },
+        {
+          type: "table",
+          label: "orders",
+          table: "orders",
+        },
+      ],
+    };
+  }
+
+  if (intent.type === "delivery_sales_total") {
+    const { data, error } = await supabase
+      .from("orders")
+      .select("valor_total, status, data_pedido")
+      .gte("data_pedido", period.start)
+      .lte("data_pedido", period.end);
+
+    if (error) {
+      return {
+        type: intent.type,
+        period,
+        error: error.message,
+      };
+    }
+
+    const total = (data || [])
+      .filter((row) => Number(row.status) === 5)
+      .reduce((acc, row) => acc + Number(row.valor_total || 0), 0);
+
+    return {
+      type: intent.type,
+      period,
+      result: {
+        total,
+      },
+      answerText: [
+        `O faturamento de delivery concluido em ${period.label} foi ${total.toLocaleString("en-US", { style: "currency", currency: "USD" })}.`,
+        `Periodo consultado: ${formatDateRangeLabel(period)} (${ASSISTANT_TIMEZONE}).`,
+        "Consulta read-only executada diretamente na tabela orders, filtrando pela coluna data_pedido.",
+        "",
+        "Fontes:",
+        `- consulta orders.data_pedido entre ${period.start} e ${period.end}`,
+        "- tabela orders",
+      ].join("\n"),
+      sources: [
+        {
+          type: "query",
+          label: `orders.valor_total:${period.startDate}-${period.endDate}`,
+          table: "orders",
+          column: "valor_total",
+        },
+        {
+          type: "table",
+          label: "orders",
+          table: "orders",
+        },
+      ],
+    };
+  }
+
+  if (intent.type === "store_sales_total") {
+    const { data, error } = await supabase
+      .from("store_sales")
+      .select("total_amount, sale_datetime")
+      .gte("sale_datetime", period.start)
+      .lte("sale_datetime", period.end);
+
+    if (error) {
+      return {
+        type: intent.type,
+        period,
+        error: error.message,
+      };
+    }
+
+    const total = (data || []).reduce((acc, row) => acc + Number(row.total_amount || 0), 0);
+    return {
+      type: intent.type,
+      period,
+      result: {
+        total,
+      },
+      answerText: [
+        `O faturamento presencial em ${period.label} foi ${total.toLocaleString("en-US", { style: "currency", currency: "USD" })}.`,
+        `Periodo consultado: ${formatDateRangeLabel(period)} (${ASSISTANT_TIMEZONE}).`,
+        "Consulta read-only executada diretamente na tabela store_sales usando a coluna sale_datetime.",
+        "",
+        "Fontes:",
+        `- consulta store_sales.sale_datetime entre ${period.start} e ${period.end}`,
+        "- tabela store_sales",
+      ].join("\n"),
+      sources: [
+        {
+          type: "query",
+          label: `store_sales.sale_datetime:${period.startDate}-${period.endDate}`,
+          table: "store_sales",
+          column: "sale_datetime",
+        },
+        {
+          type: "table",
+          label: "store_sales",
+          table: "store_sales",
+        },
+      ],
+    };
+  }
+
+  if (intent.type === "total_sales") {
+    const [deliveryQuery, storeQuery] = await Promise.all([
+      supabase
+        .from("orders")
+        .select("valor_total, status, data_pedido")
+        .gte("data_pedido", period.start)
+        .lte("data_pedido", period.end),
+      supabase
+        .from("store_sales")
+        .select("total_amount, sale_datetime")
+        .gte("sale_datetime", period.start)
+        .lte("sale_datetime", period.end),
+    ]);
+
+    if (deliveryQuery.error || storeQuery.error) {
+      return {
+        type: intent.type,
+        period,
+        error: deliveryQuery.error?.message || storeQuery.error?.message,
+      };
+    }
+
+    const deliveryTotal = (deliveryQuery.data || [])
+      .filter((row) => Number(row.status) === 5)
+      .reduce((acc, row) => acc + Number(row.valor_total || 0), 0);
+    const storeTotal = (storeQuery.data || []).reduce((acc, row) => acc + Number(row.total_amount || 0), 0);
+
+    const total = Number(deliveryTotal || 0) + Number(storeTotal || 0);
+    return {
+      type: intent.type,
+      period,
+      result: {
+        delivery_total: Number(deliveryTotal || 0),
+        store_total: Number(storeTotal || 0),
+        total,
+      },
+      answerText: [
+        `O faturamento total em ${period.label} foi ${total.toLocaleString("en-US", { style: "currency", currency: "USD" })}.`,
+        `Delivery concluido: ${Number(deliveryTotal || 0).toLocaleString("en-US", { style: "currency", currency: "USD" })}.`,
+        `Presencial: ${Number(storeTotal || 0).toLocaleString("en-US", { style: "currency", currency: "USD" })}.`,
+        `Periodo consultado: ${formatDateRangeLabel(period)} (${ASSISTANT_TIMEZONE}).`,
+        "",
+        "Fontes:",
+        `- consulta orders.data_pedido entre ${period.start} e ${period.end}`,
+        `- consulta store_sales.sale_datetime entre ${period.start} e ${period.end}`,
+      ].join("\n"),
+      sources: [
+        {
+          type: "query",
+          label: `orders.data_pedido:${period.startDate}-${period.endDate}`,
+          table: "orders",
+          column: "data_pedido",
+        },
+        {
+          type: "query",
+          label: `store_sales.sale_datetime:${period.startDate}-${period.endDate}`,
+          table: "store_sales",
+          column: "sale_datetime",
+        },
+      ],
+    };
+  }
+
+  return null;
+}
+
+function buildContextSummary({ codeMatches, docMatches, schemaSummaries, tablePreviews, readOnlyInsight }) {
   return {
     code_matches: codeMatches.map((item) => ({
       file: item.relativePath,
@@ -432,6 +816,18 @@ function buildContextSummary({ codeMatches, docMatches, schemaSummaries, tablePr
     })),
     schema_tables: schemaSummaries.map((item) => item.table),
     live_tables: tablePreviews.map((item) => item.table),
+    live_query: readOnlyInsight?.type
+      ? {
+          type: readOnlyInsight.type,
+          period: readOnlyInsight.period
+            ? {
+                label: readOnlyInsight.period.label,
+                startDate: readOnlyInsight.period.startDate,
+                endDate: readOnlyInsight.period.endDate,
+              }
+            : null,
+        }
+      : null,
   };
 }
 
@@ -443,6 +839,7 @@ function buildPrompt({
   docMatches,
   schemaSummaries,
   tablePreviews,
+  readOnlyInsight,
 }) {
   const sections = [
     "Voce e um assistente tecnico read-only do Imperial Flow Gold.",
@@ -470,6 +867,9 @@ function buildPrompt({
     "Amostras read-only do banco:",
     formatJsonBlock(tablePreviews),
     "",
+    "Consulta read-only estruturada:",
+    formatJsonBlock(readOnlyInsight || null),
+    "",
     "Trechos de codigo/documentacao relevantes:",
     formatJsonBlock(
       [...codeMatches, ...docMatches].map((item) => ({
@@ -491,7 +891,11 @@ function buildPrompt({
   return sections.join("\n");
 }
 
-function buildFallbackAnswer({ question, domain, report, codeMatches, docMatches, schemaSummaries, tablePreviews }) {
+function buildFallbackAnswer({ question, domain, report, codeMatches, docMatches, schemaSummaries, tablePreviews, readOnlyInsight }) {
+  if (readOnlyInsight?.answerText) {
+    return readOnlyInsight.answerText;
+  }
+
   const normalizedQuestion = question.toLowerCase();
   const lines = [];
 
@@ -536,8 +940,11 @@ function buildFallbackAnswer({ question, domain, report, codeMatches, docMatches
   return `${lines.join("\n")}\n\nFontes:\n${sources.join("\n")}`;
 }
 
-function buildSources({ codeMatches, docMatches, schemaSummaries, tablePreviews }) {
+function buildSources({ codeMatches, docMatches, schemaSummaries, tablePreviews, readOnlyInsight }) {
   return [
+    ...((readOnlyInsight?.sources || []).map((item) => ({
+      ...item,
+    }))),
     ...codeMatches.map((item) => ({
       type: "file",
       label: `${item.relativePath}:${item.startLine}-${item.endLine}`,
@@ -595,6 +1002,11 @@ export function createAssistantService({
     const knowledgeBase = await loadKnowledgeBase();
     const domain = resolveAssistantDomain(trimmedQuestion);
     const report = await buildOperationalReport(range);
+    const readOnlyInsight = await executeReadOnlyInsight({
+      supabase,
+      question: trimmedQuestion,
+      normalizeSearchText,
+    });
     const relevantTables = detectRelevantTables({
       question: trimmedQuestion,
       domain,
@@ -636,6 +1048,7 @@ export function createAssistantService({
       docMatches,
       schemaSummaries,
       tablePreviews,
+      readOnlyInsight,
     });
 
     let answer = buildFallbackAnswer({
@@ -646,17 +1059,20 @@ export function createAssistantService({
       docMatches,
       schemaSummaries,
       tablePreviews,
+      readOnlyInsight,
     });
 
-    try {
-      const llmAnswer = await callGeminiText({
-        prompt,
-        temperature: 0.1,
-        maxOutputTokens: 1400,
-      });
-      if (llmAnswer) answer = llmAnswer;
-    } catch {
-      // fallback local
+    if (!readOnlyInsight?.answerText) {
+      try {
+        const llmAnswer = await callGeminiText({
+          prompt,
+          temperature: 0.1,
+          maxOutputTokens: 1400,
+        });
+        if (llmAnswer) answer = llmAnswer;
+      } catch {
+        // fallback local
+      }
     }
 
     return {
@@ -669,12 +1085,14 @@ export function createAssistantService({
         docMatches,
         schemaSummaries,
         tablePreviews,
+        readOnlyInsight,
       }),
       sources: buildSources({
         codeMatches,
         docMatches,
         schemaSummaries,
         tablePreviews,
+        readOnlyInsight,
       }),
     };
   }

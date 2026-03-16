@@ -1986,7 +1986,7 @@ async function fetchOrderItemsByOrderIds(orderIds = []) {
   let orderColumn = await resolveOrderItemsOrderColumn();
   let result = await supabase
     .from("order_items")
-    .select("id, pedido_id, order_id, produto_id, product_id, quantidade, quantity")
+    .select("*")
     .in(orderColumn, orderIds);
 
   if (result.error && orderColumn === "pedido_id" && isMissingColumnInSchemaCache(result.error, "pedido_id")) {
@@ -1994,7 +1994,7 @@ async function fetchOrderItemsByOrderIds(orderIds = []) {
     orderColumn = "order_id";
     result = await supabase
       .from("order_items")
-      .select("id, pedido_id, order_id, produto_id, product_id, quantidade, quantity")
+      .select("*")
       .in(orderColumn, orderIds);
   }
 

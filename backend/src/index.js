@@ -26,6 +26,7 @@ app.use(
 const PORT = Number(process.env.PORT || 3001);
 const KG_TO_LB = 2.2046226218;
 const MAX_B64_BYTES = Number(process.env.MAX_INVOICE_UPLOAD_BYTES || 15 * 1024 * 1024);
+const PERF_LOGS_ENABLED = /^(1|true|yes|on)$/i.test(String(process.env.PERF_LOGS || "").trim());
 
 const STATUS = {
   RECEBIDO: 0,
@@ -49,6 +50,26 @@ function createHttpError(status, message, detail = null) {
   error.status = status;
   error.detail = detail;
   return error;
+}
+
+function logPerf(label, startedAt, meta = {}) {
+  if (!PERF_LOGS_ENABLED) return;
+  const elapsed = Date.now() - startedAt;
+  const payload = Object.keys(meta || {}).length ? ` ${JSON.stringify(meta)}` : "";
+  console.log(`[perf] ${label} ${elapsed}ms${payload}`);
+}
+
+async function measureStep(label, task, metaBuilder = null) {
+  const startedAt = Date.now();
+  try {
+    const result = await task();
+    const meta = typeof metaBuilder === "function" ? metaBuilder(result) : (metaBuilder || {});
+    logPerf(label, startedAt, meta);
+    return result;
+  } catch (error) {
+    logPerf(label, startedAt, { error: error?.message || String(error) });
+    throw error;
+  }
 }
 
 async function requireAssistantAdmin(req) {
@@ -1869,7 +1890,312 @@ function normalizeSortDirection(value) {
   return String(value || "").trim().toLowerCase() === "desc" ? "desc" : "asc";
 }
 
+function escapeAdminSearchTerm(value) {
+  return String(value || "")
+    .replace(/[%_,]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function buildAdminSearchPattern(value) {
+  const sanitized = escapeAdminSearchTerm(value);
+  return sanitized ? `%${sanitized}%` : "";
+}
+
+function extractOrderSearchId(value) {
+  const raw = String(value || "").trim().toUpperCase();
+  if (!raw) return null;
+  const stripped = raw.startsWith("IMP") ? raw.slice(3) : raw;
+  const parsed = Number.parseInt(stripped.replace(/[^\d]/g, ""), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return parsed;
+}
+
+function isMissingFunctionError(error, functionName) {
+  const message = String(error?.message || "");
+  return message.includes(`Could not find the function public.${functionName}`) ||
+    message.includes(`function public.${functionName}`) ||
+    message.includes(`Could not choose the best candidate function between: public.${functionName}`) ||
+    message.includes("PGRST202");
+}
+
+let cachedOrdersClientColumn = null;
+let cachedOrderItemsOrderColumn = null;
+
+async function resolveOrdersClientColumn() {
+  if (cachedOrdersClientColumn) return cachedOrdersClientColumn;
+
+  const byCliente = await supabase.from("orders").select("cliente_id").limit(1);
+  if (!byCliente.error) {
+    cachedOrdersClientColumn = "cliente_id";
+    return cachedOrdersClientColumn;
+  }
+
+  if (!isMissingColumnInSchemaCache(byCliente.error, "cliente_id")) {
+    cachedOrdersClientColumn = "cliente_id";
+    return cachedOrdersClientColumn;
+  }
+
+  const byClient = await supabase.from("orders").select("client_id").limit(1);
+  if (!byClient.error) {
+    cachedOrdersClientColumn = "client_id";
+    return cachedOrdersClientColumn;
+  }
+
+  cachedOrdersClientColumn = "cliente_id";
+  return cachedOrdersClientColumn;
+}
+
+async function resolveOrderItemsOrderColumn() {
+  if (cachedOrderItemsOrderColumn) return cachedOrderItemsOrderColumn;
+
+  const byPedido = await supabase.from("order_items").select("pedido_id").limit(1);
+  if (!byPedido.error) {
+    cachedOrderItemsOrderColumn = "pedido_id";
+    return cachedOrderItemsOrderColumn;
+  }
+
+  if (!isMissingColumnInSchemaCache(byPedido.error, "pedido_id")) {
+    cachedOrderItemsOrderColumn = "pedido_id";
+    return cachedOrderItemsOrderColumn;
+  }
+
+  const byOrder = await supabase.from("order_items").select("order_id").limit(1);
+  if (!byOrder.error) {
+    cachedOrderItemsOrderColumn = "order_id";
+    return cachedOrderItemsOrderColumn;
+  }
+
+  cachedOrderItemsOrderColumn = "pedido_id";
+  return cachedOrderItemsOrderColumn;
+}
+
+async function fetchOrderItemsByOrderIds(orderIds = []) {
+  if (!orderIds.length) return [];
+
+  let orderColumn = await resolveOrderItemsOrderColumn();
+  let result = await supabase
+    .from("order_items")
+    .select("id, pedido_id, order_id, produto_id, product_id, quantidade, quantity")
+    .in(orderColumn, orderIds);
+
+  if (result.error && orderColumn === "pedido_id" && isMissingColumnInSchemaCache(result.error, "pedido_id")) {
+    cachedOrderItemsOrderColumn = "order_id";
+    orderColumn = "order_id";
+    result = await supabase
+      .from("order_items")
+      .select("id, pedido_id, order_id, produto_id, product_id, quantidade, quantity")
+      .in(orderColumn, orderIds);
+  }
+
+  if (result.error) {
+    throw createHttpError(500, "Erro ao carregar itens dos pedidos.", result.error.message);
+  }
+
+  return result.data || [];
+}
+
+function applyClientAdminFilters(query, { search = "", segment = "all", withOrders = false } = {}) {
+  const pattern = buildAdminSearchPattern(search);
+  let next = query;
+
+  if (pattern) {
+    next = next.or(`nome.ilike.${pattern},email.ilike.${pattern},telefone.ilike.${pattern},documento.ilike.${pattern}`);
+  }
+
+  if (segment === "vip") {
+    next = next.eq("vip", true);
+  } else if (segment === "non_vip") {
+    next = next.eq("vip", false);
+  }
+
+  if (withOrders) {
+    next = next.gt("order_count", 0);
+  }
+
+  return next;
+}
+
+function normalizeClientAdminRow(row) {
+  return {
+    ...row,
+    order_count: Number(row?.order_count || 0),
+    address: row?.address || "-",
+  };
+}
+
+function applyOrdersAdminFilters(query, {
+  start,
+  end,
+  status = "",
+  city = "",
+  search = "",
+  onlyOpen = false,
+  includeCity = true,
+} = {}) {
+  let next = query;
+
+  if (start) next = next.gte("data_pedido", start);
+  if (end) next = next.lte("data_pedido", end);
+
+  if (status !== "" && status !== null && status !== undefined) {
+    next = next.eq("status", Number(status));
+  }
+
+  if (onlyOpen) {
+    next = next.lt("status", STATUS.CONCLUIDO);
+  }
+
+  if (includeCity && city) {
+    next = next.eq("city", city);
+  }
+
+  const pattern = buildAdminSearchPattern(search);
+  if (pattern) {
+    const filters = [
+      `client_name.ilike.${pattern}`,
+      `phone.ilike.${pattern}`,
+      `explicit_code.ilike.${pattern}`,
+    ];
+    const numericOrderId = extractOrderSearchId(search);
+    if (numericOrderId) {
+      filters.push(`id.eq.${numericOrderId}`);
+    }
+    next = next.or(filters.join(","));
+  }
+
+  return next;
+}
+
+async function buildClientsAdminSummaryFallback({ matchingClients = 0 } = {}) {
+  const [totalClientsResult, totalOrdersResult, totalVipsResult] = await Promise.all([
+    supabase.from("clients").select("id", { count: "exact", head: true }),
+    supabase.from("orders").select("id", { count: "exact", head: true }),
+    supabase.from("clients").select("id", { count: "exact", head: true }).eq("vip", true),
+  ]);
+
+  return {
+    totalClients: Number(totalClientsResult.count || 0),
+    totalVips: totalVipsResult.error ? 0 : Number(totalVipsResult.count || 0),
+    totalOrders: Number(totalOrdersResult.count || 0),
+    matchingClients: Number(matchingClients || 0),
+  };
+}
+
 async function buildClientsAdminPayload({
+  search = "",
+  segment = "all",
+  withOrders = false,
+  page = 1,
+  pageSize = 10,
+  sortField = "nome",
+  sortDir = "asc",
+} = {}) {
+  const safePageSize = Math.max(1, Math.min(5000, Number(pageSize || 10)));
+  const safePage = Math.max(1, Number(page || 1));
+  const startIndex = (safePage - 1) * safePageSize;
+  const sortColumnMap = {
+    nome: "nome",
+    email: "email",
+    vip: "vip",
+    pedidos: "order_count",
+  };
+  const sortColumn = sortColumnMap[sortField] || "nome";
+  const ascending = sortDir !== "desc";
+
+  try {
+    const pageResult = await measureStep(
+      "clients_admin.page",
+      () => {
+        let query = supabase
+          .from("admin_client_order_counts")
+          .select("id, nome, email, telefone, documento, vip, vip_observacao, order_count, address", { count: "exact" });
+
+        query = applyClientAdminFilters(query, { search, segment, withOrders });
+        query = query.order(sortColumn, { ascending }).order("id", { ascending: true }).range(startIndex, startIndex + safePageSize - 1);
+        return query;
+      },
+      (result) => ({ rows: result.data?.length || 0, count: Number(result.count || 0) }),
+    );
+
+    if (pageResult.error) {
+      if (isMissingRelationError(pageResult.error, "admin_client_order_counts")) {
+        return buildClientsAdminPayloadLegacy({ search, segment, withOrders, page, pageSize, sortField, sortDir });
+      }
+      throw createHttpError(500, "Erro ao carregar clientes.", pageResult.error.message);
+    }
+
+    const totalItems = Number(pageResult.count || 0);
+    const rows = (pageResult.data || []).map(normalizeClientAdminRow);
+
+    let allRows = rows;
+    if (safePageSize >= 5000 && totalItems > rows.length) {
+      const allRowsResult = await measureStep(
+        "clients_admin.all_rows",
+        () => {
+          let query = supabase
+            .from("admin_client_order_counts")
+            .select("id, nome, email, telefone, documento, vip, vip_observacao, order_count, address");
+
+          query = applyClientAdminFilters(query, { search, segment, withOrders });
+          query = query.order(sortColumn, { ascending }).order("id", { ascending: true });
+          return query;
+        },
+        (result) => ({ rows: result.data?.length || 0 }),
+      );
+
+      if (allRowsResult.error) {
+        throw createHttpError(500, "Erro ao carregar lista completa de clientes.", allRowsResult.error.message);
+      }
+
+      allRows = (allRowsResult.data || []).map(normalizeClientAdminRow);
+    }
+
+    let summary = null;
+    const summaryResult = await measureStep(
+      "clients_admin.summary_rpc",
+      () => supabase.rpc("rpc_admin_clients_summary", {
+        search_text: search || null,
+        segment_filter: segment,
+        with_orders_filter: Boolean(withOrders),
+      }),
+      (result) => ({ rows: Array.isArray(result.data) ? result.data.length : (result.data ? 1 : 0) }),
+    );
+
+    if (summaryResult.error) {
+      if (!isMissingFunctionError(summaryResult.error, "rpc_admin_clients_summary")) {
+        throw createHttpError(500, "Erro ao carregar resumo de clientes.", summaryResult.error.message);
+      }
+      summary = await buildClientsAdminSummaryFallback({ matchingClients: totalItems });
+    } else {
+      const summaryRow = Array.isArray(summaryResult.data) ? summaryResult.data[0] : summaryResult.data;
+      summary = {
+        totalClients: Number(summaryRow?.total_clients || 0),
+        totalVips: Number(summaryRow?.total_vips || 0),
+        totalOrders: Number(summaryRow?.total_orders || 0),
+        matchingClients: Number(summaryRow?.matching_clients || totalItems),
+      };
+    }
+
+    return {
+      rows,
+      allRows,
+      summary,
+      pageInfo: {
+        page: safePage,
+        pageSize: safePageSize,
+        totalItems,
+        totalPages: Math.max(1, Math.ceil(totalItems / safePageSize)),
+        hasNextPage: startIndex + safePageSize < totalItems,
+      },
+    };
+  } catch (error) {
+    if (error?.status) throw error;
+    throw createHttpError(500, "Erro ao carregar clientes.", error?.message || null);
+  }
+}
+
+async function buildClientsAdminPayloadLegacy({
   search = "",
   segment = "all",
   withOrders = false,
@@ -1958,7 +2284,7 @@ async function buildClientsAdminPayload({
   };
 }
 
-async function buildOrdersAdminPayload({
+async function buildOrdersAdminPayloadLegacy({
   start,
   end,
   status = "",
@@ -2098,7 +2424,172 @@ async function buildOrdersAdminPayload({
   };
 }
 
-async function buildFinanceOverviewPayload(query) {
+async function buildOrdersAdminPayload({
+  start,
+  end,
+  status = "",
+  city = "",
+  search = "",
+  onlyOpen = false,
+  page = 1,
+  pageSize = 10,
+} = {}) {
+  const safePageSize = Math.max(1, Math.min(100, Number(pageSize || 10)));
+  const safePage = Math.max(1, Number(page || 1));
+  const startIndex = (safePage - 1) * safePageSize;
+
+  try {
+    const pageResult = await measureStep(
+      "orders_admin.page",
+      () => {
+        let query = supabase
+          .from("admin_orders_enriched")
+          .select("id, data_pedido, status, value, explicit_code, client_name, phone, city, full_address", { count: "exact" });
+
+        query = applyOrdersAdminFilters(query, { start, end, status, city, search, onlyOpen });
+        query = query.order("data_pedido", { ascending: false }).order("id", { ascending: false }).range(startIndex, startIndex + safePageSize - 1);
+        return query;
+      },
+      (result) => ({ rows: result.data?.length || 0, count: Number(result.count || 0) }),
+    );
+
+    if (pageResult.error) {
+      if (isMissingRelationError(pageResult.error, "admin_orders_enriched")) {
+        return buildOrdersAdminPayloadLegacy({ start, end, status, city, search, onlyOpen, page, pageSize });
+      }
+      throw createHttpError(500, "Erro ao carregar pedidos.", pageResult.error.message);
+    }
+
+    const totalCount = Number(pageResult.count || 0);
+    const pageRows = pageResult.data || [];
+    const orderIds = pageRows.map((row) => Number(row.id)).filter((id) => Number.isFinite(id) && id > 0);
+    const items = await measureStep(
+      "orders_admin.items",
+      () => fetchOrderItemsByOrderIds(orderIds),
+      (result) => ({ rows: result.length || 0 }),
+    );
+
+    const productIds = Array.from(new Set(
+      items
+        .map((item) => Number(item.produto_id || item.product_id))
+        .filter((id) => Number.isFinite(id) && id > 0),
+    ));
+
+    const productsResult = productIds.length
+      ? await measureStep(
+        "orders_admin.products",
+        () => supabase.from("products").select("id, nome").in("id", productIds),
+        (result) => ({ rows: result.data?.length || 0 }),
+      )
+      : { data: [], error: null };
+
+    if (productsResult.error) {
+      throw createHttpError(500, "Erro ao carregar produtos dos pedidos.", productsResult.error.message);
+    }
+
+    const orderItemsColumn = await resolveOrderItemsOrderColumn();
+    const productsMap = new Map((productsResult.data || []).map((product) => [Number(product.id), product.nome]));
+    const itemsByOrderId = new Map();
+    for (const item of items || []) {
+      const key = Number(item[orderItemsColumn] || item.pedido_id || item.order_id);
+      const current = itemsByOrderId.get(key) || [];
+      current.push(item);
+      itemsByOrderId.set(key, current);
+    }
+
+    const rows = pageRows.map((row) => {
+      const orderItems = itemsByOrderId.get(Number(row.id)) || [];
+      const products = orderItems.map((item) => {
+        const productId = Number(item.produto_id || item.product_id || 0);
+        const quantity = item.quantidade ?? item.quantity ?? 0;
+        const name = productsMap.get(productId) || `Produto ${productId || "?"}`;
+        return {
+          productId,
+          name,
+          quantity: Number(quantity || 0),
+          label: `${name} (${formatQuantity(quantity)}x)`,
+        };
+      });
+
+      return {
+        id: row.id,
+        code: resolveOrderCode({ id: row.id, code: row.explicit_code }),
+        clientName: row.client_name || "Cliente",
+        phone: row.phone || "-",
+        city: row.city || "-",
+        fullAddress: row.full_address || "-",
+        value: Number(row.value || 0),
+        status: Number(row.status || 0),
+        data_pedido: row.data_pedido || null,
+        products,
+        productsPreview: products.map((item) => item.label).join(", "),
+      };
+    });
+
+    const [openCountResult, concludedCountResult, totalValueResult, citiesResult] = await Promise.all([
+      measureStep("orders_admin.summary_open", () => {
+        let query = supabase.from("admin_orders_enriched").select("id", { count: "exact", head: true });
+        query = applyOrdersAdminFilters(query, { start, end, status, city, search, onlyOpen });
+        query = query.lt("status", STATUS.CONCLUIDO);
+        return query;
+      }, (result) => ({ count: Number(result.count || 0) })),
+      measureStep("orders_admin.summary_concluded", () => {
+        let query = supabase.from("admin_orders_enriched").select("id", { count: "exact", head: true });
+        query = applyOrdersAdminFilters(query, { start, end, status, city, search, onlyOpen });
+        query = query.eq("status", STATUS.CONCLUIDO);
+        return query;
+      }, (result) => ({ count: Number(result.count || 0) })),
+      measureStep("orders_admin.summary_total_value", () => {
+        let query = supabase.from("admin_orders_enriched").select("value");
+        query = applyOrdersAdminFilters(query, { start, end, status, city, search, onlyOpen });
+        return query;
+      }, (result) => ({ rows: result.data?.length || 0 })),
+      measureStep("orders_admin.cities", () => {
+        let query = supabase.from("admin_orders_enriched").select("city");
+        query = applyOrdersAdminFilters(query, { start, end, status, city, search, onlyOpen, includeCity: false });
+        return query;
+      }, (result) => ({ rows: result.data?.length || 0 })),
+    ]);
+
+    if (openCountResult.error || concludedCountResult.error || totalValueResult.error || citiesResult.error) {
+      throw createHttpError(
+        500,
+        "Erro ao montar resumo de pedidos.",
+        openCountResult.error?.message || concludedCountResult.error?.message || totalValueResult.error?.message || citiesResult.error?.message,
+      );
+    }
+
+    const totalValue = roundQty((totalValueResult.data || []).reduce((acc, row) => acc + parseNumber(row.value, 0), 0), 2);
+    const cities = Array.from(new Set(
+      (citiesResult.data || [])
+        .map((row) => String(row.city || "").trim())
+        .filter((value) => value && value !== "-"),
+    )).sort((a, b) => a.localeCompare(b, "pt-BR"));
+
+    return {
+      rows,
+      summary: {
+        totalCount,
+        openCount: Number(openCountResult.count || 0),
+        concludedCount: Number(concludedCountResult.count || 0),
+        totalValue,
+      },
+      cities,
+      pageInfo: {
+        page: safePage,
+        pageSize: safePageSize,
+        totalItems: totalCount,
+        totalPages: Math.max(1, Math.ceil(totalCount / safePageSize)),
+        hasNextPage: startIndex + safePageSize < totalCount,
+      },
+    };
+  } catch (error) {
+    if (error?.status) throw error;
+    throw createHttpError(500, "Erro ao carregar pedidos.", error?.message || null);
+  }
+}
+
+async function buildFinanceOverviewPayloadLegacy(query) {
   const range = resolveRangeFromQuery(query);
   const [{ data: expenses, error: expensesError }, { data: payments, error: paymentsError }] = await Promise.all([
     supabase
@@ -2155,6 +2646,41 @@ async function buildFinanceOverviewPayload(query) {
     totalOutflow: roundQty(expensesTotal + payrollTotal, 2),
     expensesByCategory: Object.entries(expensesByCategory).map(([category, total]) => ({ category, total })),
     payrollByEmployee: Object.entries(payrollByEmployee).map(([employee_name, total]) => ({ employee_name, total })),
+  };
+}
+
+async function buildFinanceOverviewPayload(query) {
+  const range = resolveRangeFromQuery(query);
+
+  const rpcResult = await measureStep(
+    "finance_overview.rpc",
+    () => supabase.rpc("rpc_admin_finance_overview", {
+      start_date: range.start,
+      end_date: range.end,
+    }),
+    (result) => ({ hasData: Boolean(result.data) }),
+  );
+
+  if (rpcResult.error) {
+    if (!isMissingFunctionError(rpcResult.error, "rpc_admin_finance_overview")) {
+      throw createHttpError(500, "Erro ao carregar consolidado financeiro.", rpcResult.error.message);
+    }
+    return buildFinanceOverviewPayloadLegacy(query);
+  }
+
+  const payload = Array.isArray(rpcResult.data) ? rpcResult.data[0] : rpcResult.data;
+  if (!payload || typeof payload !== "object") {
+    return buildFinanceOverviewPayloadLegacy(query);
+  }
+
+  return {
+    ok: true,
+    range,
+    expensesTotal: Number(payload.expensesTotal || 0),
+    payrollTotal: Number(payload.payrollTotal || 0),
+    totalOutflow: Number(payload.totalOutflow || 0),
+    expensesByCategory: Array.isArray(payload.expensesByCategory) ? payload.expensesByCategory : [],
+    payrollByEmployee: Array.isArray(payload.payrollByEmployee) ? payload.payrollByEmployee : [],
   };
 }
 
@@ -2621,7 +3147,7 @@ async function insertOrderWithSchemaFallback(orderPayload) {
   throw createHttpError(500, "Erro ao criar pedido.", "Nao foi possivel compatibilizar colunas opcionais de orders.");
 }
 
-async function buildOperationalReport(rangeQuery = {}) {
+async function buildOperationalReportLegacy(rangeQuery = {}) {
   const range = resolveRangeFromQuery(rangeQuery);
 
   const [
@@ -2755,6 +3281,62 @@ async function buildOperationalReport(rangeQuery = {}) {
       ...payment,
       employee_name: employeeMap.get(Number(payment.employee_id))?.name || null,
     })),
+  };
+}
+
+async function buildOperationalReport(rangeQuery = {}) {
+  const range = resolveRangeFromQuery(rangeQuery);
+
+  const rpcResult = await measureStep(
+    "operational_report.rpc",
+    () => supabase.rpc("rpc_admin_operational_summary", {
+      start_date: range.start,
+      end_date: range.end,
+    }),
+    (result) => ({ hasData: Boolean(result.data) }),
+  );
+
+  if (rpcResult.error) {
+    if (!isMissingFunctionError(rpcResult.error, "rpc_admin_operational_summary")) {
+      throw createHttpError(500, "Erro ao montar relatorios operacionais.", rpcResult.error.message);
+    }
+    return buildOperationalReportLegacy(rangeQuery);
+  }
+
+  const payload = Array.isArray(rpcResult.data) ? rpcResult.data[0] : rpcResult.data;
+  if (!payload || typeof payload !== "object") {
+    return buildOperationalReportLegacy(rangeQuery);
+  }
+
+  const stockAlerts = await measureStep(
+    "operational_report.stock_alerts",
+    () => getLowStockAlerts(),
+    (result) => ({ current: result?.current?.length || 0 }),
+  );
+
+  return {
+    range,
+    summary: {
+      delivery_sales_total: Number(payload.summary?.delivery_sales_total || 0),
+      delivery_sales_count: Number(payload.summary?.delivery_sales_count || 0),
+      store_sales_total: Number(payload.summary?.store_sales_total || 0),
+      total_sales: Number(payload.summary?.total_sales || 0),
+      expenses_total: Number(payload.summary?.expenses_total || 0),
+      payroll_total: Number(payload.summary?.payroll_total || 0),
+      orders_count: Number(payload.summary?.orders_count || 0),
+      store_sales_count: Number(payload.summary?.store_sales_count || 0),
+      low_stock_products: stockAlerts.current.length,
+      active_employees: Number(payload.summary?.active_employees || 0),
+    },
+    timeline: Array.isArray(payload.timeline) ? payload.timeline : [],
+    sales_by_payment: Array.isArray(payload.sales_by_payment) ? payload.sales_by_payment : [],
+    orders_by_status: Array.isArray(payload.orders_by_status) ? payload.orders_by_status : [],
+    expenses_by_category: Array.isArray(payload.expenses_by_category) ? payload.expenses_by_category : [],
+    payroll_by_employee: Array.isArray(payload.payroll_by_employee) ? payload.payroll_by_employee : [],
+    stock_alerts: stockAlerts.current,
+    recent_expenses: Array.isArray(payload.recent_expenses) ? payload.recent_expenses : [],
+    recent_store_sales: Array.isArray(payload.recent_store_sales) ? payload.recent_store_sales : [],
+    recent_employee_payments: Array.isArray(payload.recent_employee_payments) ? payload.recent_employee_payments : [],
   };
 }
 
@@ -3986,6 +4568,7 @@ app.post("/api/employee-payments", async (req, res) => {
 });
 
 app.get("/api/orders/admin", async (req, res) => {
+  const startedAt = Date.now();
   try {
     const range = resolveRangeFromQuery(req.query);
     const payload = await buildOrdersAdminPayload({
@@ -3999,8 +4582,13 @@ app.get("/api/orders/admin", async (req, res) => {
       pageSize: Number(req.query?.pageSize || 10),
     });
 
+    logPerf("route.orders_admin", startedAt, {
+      page: payload?.pageInfo?.page || 1,
+      totalItems: payload?.pageInfo?.totalItems || 0,
+    });
     return res.json({ ok: true, range, ...payload });
   } catch (error) {
+    logPerf("route.orders_admin", startedAt, { error: error?.message || "unknown" });
     return res.status(error?.status || 500).json({
       error: error?.message || "Erro interno ao carregar pedidos administrativos.",
       detail: error?.detail || null,
@@ -4009,6 +4597,7 @@ app.get("/api/orders/admin", async (req, res) => {
 });
 
 app.get("/api/clients/admin", async (req, res) => {
+  const startedAt = Date.now();
   try {
     const payload = await buildClientsAdminPayload({
       search: String(req.query?.search || "").trim(),
@@ -4020,8 +4609,13 @@ app.get("/api/clients/admin", async (req, res) => {
       sortDir: normalizeSortDirection(req.query?.sortDir),
     });
 
+    logPerf("route.clients_admin", startedAt, {
+      page: payload?.pageInfo?.page || 1,
+      totalItems: payload?.pageInfo?.totalItems || 0,
+    });
     return res.json({ ok: true, ...payload });
   } catch (error) {
+    logPerf("route.clients_admin", startedAt, { error: error?.message || "unknown" });
     return res.status(error?.status || 500).json({
       error: error?.message || "Erro interno ao carregar clientes administrativos.",
       detail: error?.detail || null,
@@ -4180,10 +4774,16 @@ app.post("/api/client-campaigns/send", async (req, res) => {
 });
 
 app.get("/api/finance/overview", async (req, res) => {
+  const startedAt = Date.now();
   try {
     const payload = await buildFinanceOverviewPayload(req.query);
+    logPerf("route.finance_overview", startedAt, {
+      expensesTotal: payload?.expensesTotal || 0,
+      payrollTotal: payload?.payrollTotal || 0,
+    });
     return res.json(payload);
   } catch (error) {
+    logPerf("route.finance_overview", startedAt, { error: error?.message || "unknown" });
     return res.status(error?.status || 500).json({
       error: error?.message || "Erro interno ao carregar consolidado financeiro.",
       detail: error?.detail || null,
@@ -4192,10 +4792,16 @@ app.get("/api/finance/overview", async (req, res) => {
 });
 
 app.get("/api/reports/operational", async (req, res) => {
+  const startedAt = Date.now();
   try {
     const report = await buildOperationalReport(req.query);
+    logPerf("route.operational_report", startedAt, {
+      timeline: report?.timeline?.length || 0,
+      totalSales: report?.summary?.total_sales || 0,
+    });
     return res.json({ ok: true, report });
   } catch (error) {
+    logPerf("route.operational_report", startedAt, { error: error?.message || "unknown" });
     return res.status(error?.status || 500).json({
       error: error?.message || "Erro interno ao montar relatorios.",
       detail: error?.detail || null,

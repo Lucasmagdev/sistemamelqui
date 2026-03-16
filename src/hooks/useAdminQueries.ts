@@ -31,6 +31,24 @@ const DEFAULT_QUERY_OPTIONS = {
   placeholderData: keepPreviousData,
 };
 
+const HISTORY_QUERY_OPTIONS = {
+  staleTime: 30_000,
+  refetchOnWindowFocus: false,
+  placeholderData: keepPreviousData,
+};
+
+const STATICISH_QUERY_OPTIONS = {
+  staleTime: 2 * 60_000,
+  refetchOnWindowFocus: false,
+  placeholderData: keepPreviousData,
+};
+
+const STOCK_QUERY_OPTIONS = {
+  staleTime: 5 * 60_000,
+  refetchOnWindowFocus: false,
+  placeholderData: keepPreviousData,
+};
+
 const buildQueryString = (params: Record<string, unknown>) => {
   const searchParams = new URLSearchParams();
 
@@ -91,7 +109,7 @@ export function useStockProductsQuery() {
   return useQuery({
     queryKey: adminQueryKeys.stockProducts(),
     queryFn: () => backendRequest("/api/stock/balance"),
-    ...DEFAULT_QUERY_OPTIONS,
+    ...STOCK_QUERY_OPTIONS,
   });
 }
 
@@ -101,7 +119,7 @@ export function useStoreSalesHistoryQuery(range: DateRange, enabled: boolean) {
     queryFn: () =>
       backendRequest(`/api/store-sales${buildQueryString(range)}`),
     enabled,
-    ...DEFAULT_QUERY_OPTIONS,
+    ...HISTORY_QUERY_OPTIONS,
   });
 }
 
@@ -120,7 +138,7 @@ export function useExpensesHistoryQuery(range: DateRange, enabled: boolean) {
     queryFn: () =>
       backendRequest(`/api/expenses${buildQueryString(range)}`),
     enabled,
-    ...DEFAULT_QUERY_OPTIONS,
+    ...HISTORY_QUERY_OPTIONS,
   });
 }
 
@@ -128,7 +146,7 @@ export function useEmployeesQuery() {
   return useQuery({
     queryKey: adminQueryKeys.employees(),
     queryFn: () => backendRequest("/api/employees"),
-    ...DEFAULT_QUERY_OPTIONS,
+    ...STATICISH_QUERY_OPTIONS,
   });
 }
 
@@ -147,6 +165,6 @@ export function useEmployeePaymentsHistoryQuery(range: DateRange, enabled: boole
     queryFn: () =>
       backendRequest(`/api/employee-payments${buildQueryString(range)}`),
     enabled,
-    ...DEFAULT_QUERY_OPTIONS,
+    ...HISTORY_QUERY_OPTIONS,
   });
 }

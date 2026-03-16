@@ -1346,7 +1346,10 @@ async function applyStoreSaleStockExit(storeSaleId, saleItems, reason = "store_s
 function isMissingRelationError(error, relationName) {
   const message = String(error?.message || "");
   return message.includes(`Could not find the table 'public.${relationName}'`) ||
-    message.includes(`relation \"${relationName}\" does not exist`);
+    message.includes(`Could not find the '${relationName}' relation`) ||
+    message.includes(`relation \"${relationName}\" does not exist`) ||
+    message.includes(`relation \"public.${relationName}\" does not exist`) ||
+    (message.includes("schema cache") && message.includes(relationName));
 }
 
 async function ensureInvoiceStockMovements(invoiceId) {
@@ -1919,6 +1922,13 @@ function isMissingFunctionError(error, functionName) {
     message.includes("PGRST202");
 }
 
+function shouldFallbackOrdersOptimizedPath(error) {
+  const message = String(error?.message || error?.detail || "");
+  return message.includes("admin_orders_enriched") ||
+    message.includes("order_items") ||
+    message.includes("schema cache");
+}
+
 let cachedOrdersClientColumn = null;
 let cachedOrderItemsOrderColumn = null;
 
@@ -2311,30 +2321,22 @@ async function buildOrdersAdminPayloadLegacy({
   const clientIds = Array.from(new Set((orders || []).map((order) => getOrderClientId(order)).filter(Boolean)));
   const orderIds = Array.from(new Set((orders || []).map((order) => Number(order.id)).filter(Boolean)));
 
-  const [{ data: clients, error: clientsError }, { data: items, error: itemsError }] = await Promise.all([
+  const [{ data: clients, error: clientsError }, items] = await Promise.all([
     clientIds.length
       ? supabase
           .from("clients")
           .select("id, nome, telefone, cidade, endereco_rua, endereco_numero, endereco_complemento, cep, estado")
           .in("id", clientIds)
       : Promise.resolve({ data: [], error: null }),
-    orderIds.length
-      ? supabase
-          .from("order_items")
-          .select("pedido_id, produto_id, quantidade")
-          .in("pedido_id", orderIds)
-      : Promise.resolve({ data: [], error: null }),
+    fetchOrderItemsByOrderIds(orderIds),
   ]);
 
   if (clientsError) {
     throw createHttpError(500, "Erro ao carregar clientes dos pedidos.", clientsError.message);
   }
 
-  if (itemsError) {
-    throw createHttpError(500, "Erro ao carregar itens dos pedidos.", itemsError.message);
-  }
-
-  const productIds = Array.from(new Set((items || []).map((item) => Number(item.produto_id)).filter(Boolean)));
+  const orderItemsColumn = await resolveOrderItemsOrderColumn();
+  const productIds = Array.from(new Set((items || []).map((item) => Number(item.produto_id || item.product_id)).filter(Boolean)));
   const { data: products, error: productsError } = productIds.length
     ? await supabase.from("products").select("id, nome").in("id", productIds)
     : { data: [], error: null };
@@ -2348,7 +2350,7 @@ async function buildOrdersAdminPayloadLegacy({
   const itemsByOrderId = new Map();
 
   for (const item of items || []) {
-    const key = Number(item.pedido_id);
+    const key = Number(item[orderItemsColumn] || item.pedido_id || item.order_id);
     const current = itemsByOrderId.get(key) || [];
     current.push(item);
     itemsByOrderId.set(key, current);
@@ -2358,10 +2360,10 @@ async function buildOrdersAdminPayloadLegacy({
     const client = clientsMap.get(String(getOrderClientId(order) || ""));
     const orderItems = itemsByOrderId.get(Number(order.id)) || [];
     const productsSummary = orderItems.map((item) => ({
-      productId: item.produto_id,
-      name: productsMap.get(Number(item.produto_id)) || `Produto ${item.produto_id}`,
-      quantity: Number(item.quantidade || 0),
-      label: `${productsMap.get(Number(item.produto_id)) || `Produto ${item.produto_id}`} (${formatQuantity(item.quantidade)}x)`,
+      productId: item.produto_id || item.product_id,
+      name: productsMap.get(Number(item.produto_id || item.product_id)) || `Produto ${item.produto_id || item.product_id}`,
+      quantity: Number((item.quantidade ?? item.quantity) || 0),
+      label: `${productsMap.get(Number(item.produto_id || item.product_id)) || `Produto ${item.produto_id || item.product_id}`} (${formatQuantity((item.quantidade ?? item.quantity) || 0)}x)`,
     }));
 
     return {
@@ -2454,7 +2456,7 @@ async function buildOrdersAdminPayload({
     );
 
     if (pageResult.error) {
-      if (isMissingRelationError(pageResult.error, "admin_orders_enriched")) {
+      if (isMissingRelationError(pageResult.error, "admin_orders_enriched") || shouldFallbackOrdersOptimizedPath(pageResult.error)) {
         return buildOrdersAdminPayloadLegacy({ start, end, status, city, search, onlyOpen, page, pageSize });
       }
       throw createHttpError(500, "Erro ao carregar pedidos.", pageResult.error.message);
@@ -2552,6 +2554,10 @@ async function buildOrdersAdminPayload({
     ]);
 
     if (openCountResult.error || concludedCountResult.error || totalValueResult.error || citiesResult.error) {
+      const fallbackError = openCountResult.error || concludedCountResult.error || totalValueResult.error || citiesResult.error;
+      if (shouldFallbackOrdersOptimizedPath(fallbackError)) {
+        return buildOrdersAdminPayloadLegacy({ start, end, status, city, search, onlyOpen, page, pageSize });
+      }
       throw createHttpError(
         500,
         "Erro ao montar resumo de pedidos.",
@@ -2584,6 +2590,9 @@ async function buildOrdersAdminPayload({
       },
     };
   } catch (error) {
+    if (shouldFallbackOrdersOptimizedPath(error)) {
+      return buildOrdersAdminPayloadLegacy({ start, end, status, city, search, onlyOpen, page, pageSize });
+    }
     if (error?.status) throw error;
     throw createHttpError(500, "Erro ao carregar pedidos.", error?.message || null);
   }

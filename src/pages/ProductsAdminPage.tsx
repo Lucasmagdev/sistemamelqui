@@ -1,560 +1,557 @@
-import React, { useState, useEffect } from "react";
-import { supabase } from "../lib/supabaseClient";
+import React, { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
+import { AlertTriangle, Boxes, Pencil, Plus, RefreshCw, Search, Tag, X } from "lucide-react";
 
-const normalizeProductKey = (value: any) =>
-  String(value || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
+import { supabase } from "@/lib/supabaseClient";
 
-const getMissingProductIssues = (prod: any): string[] => {
+type Product = {
+  id: number;
+  nome: string;
+  nome_en: string | null;
+  descricao: string | null;
+  descricao_en: string | null;
+  categoria: string | null;
+  categoria_en: string | null;
+  preco: number | string;
+  unidade: string | null;
+  foto_url: string | null;
+};
+
+type ProductFormState = {
+  id?: number | null;
+  nome: string;
+  nome_en: string;
+  descricao: string;
+  descricao_en: string;
+  categoria: string;
+  categoria_en: string;
+  preco: string;
+  unidade: string;
+  foto: File | null;
+  foto_url?: string;
+};
+
+const emptyForm = (): ProductFormState => ({
+  id: null,
+  nome: "",
+  nome_en: "",
+  descricao: "",
+  descricao_en: "",
+  categoria: "",
+  categoria_en: "",
+  preco: "",
+  unidade: "LB",
+  foto: null,
+  foto_url: "",
+});
+
+const normalizeProductKey = (value: unknown) =>
+  String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+
+const getMissingProductIssues = (product: Partial<Product>) => {
   const issues: string[] = [];
-  const nome = String(prod?.nome || "").trim();
-  const categoria = String(prod?.categoria || "").trim();
-  const unidade = String(prod?.unidade || "").trim();
-  const descricaoPt = String(prod?.descricao || "").trim();
-  const descricaoEn = String(prod?.descricao_en || "").trim();
-  const precoNum = Number(prod?.preco);
-
-  if (!nome) issues.push("sem nome");
-  if (!categoria) issues.push("sem categoria");
-  if (!unidade) issues.push("sem unidade");
-  if (!Number.isFinite(precoNum) || precoNum <= 0) issues.push("sem preco valido");
-  if (!descricaoPt && !descricaoEn) issues.push("sem descricao");
-
+  if (!String(product?.nome || "").trim()) issues.push("sem nome");
+  if (!String(product?.categoria || "").trim()) issues.push("sem categoria");
+  if (!String(product?.unidade || "").trim()) issues.push("sem unidade");
+  if (!(Number(product?.preco) > 0)) issues.push("sem preco valido");
+  if (!String(product?.descricao || "").trim() && !String(product?.descricao_en || "").trim()) issues.push("sem descricao");
   return issues;
 };
 
+const money = (value: number | string | null | undefined) =>
+  Number(value || 0).toLocaleString("en-US", { style: "currency", currency: "USD" });
+
+const inputClass = "h-11 rounded-xl border border-amber-400/50 bg-zinc-900 text-white placeholder:text-zinc-500 focus-visible:ring-amber-400";
+const textareaClass = "min-h-[110px] w-full rounded-xl border border-amber-400/50 bg-zinc-900 px-3 py-2 text-sm text-white placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-amber-400";
+const selectClass = "flex h-11 w-full rounded-xl border border-amber-400/50 bg-zinc-900 px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-amber-400";
+
+function ProductModal({
+  open,
+  title,
+  subtitle,
+  form,
+  previewUrl,
+  loading,
+  submitLabel,
+  onClose,
+  onText,
+  onFile,
+  onSubmit,
+}: {
+  open: boolean;
+  title: string;
+  subtitle: string;
+  form: ProductFormState;
+  previewUrl: string | null;
+  loading: boolean;
+  submitLabel: string;
+  onClose: () => void;
+  onText: (field: keyof ProductFormState, value: string) => void;
+  onFile: (file: File | null) => void;
+  onSubmit: (event: React.FormEvent) => void;
+}) {
+  useEffect(() => {
+    if (!open || typeof document === "undefined") return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [open]);
+
+  if (!open || typeof document === "undefined") return null;
+
+  return createPortal((
+    <div
+      className="fixed inset-0 z-[120] overflow-y-auto bg-black/80 p-2 backdrop-blur-sm sm:p-6"
+      role="dialog"
+      aria-modal="true"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div className="mx-auto flex min-h-full items-center justify-center">
+        <div className="flex w-full max-w-5xl flex-col overflow-hidden rounded-[28px] border border-amber-400/30 bg-[#121212] shadow-2xl max-sm:min-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-3rem)]">
+        <div className="flex items-start justify-between gap-4 border-b border-white/10 px-4 py-4 sm:px-6">
+          <div>
+            <h2 className="text-xl font-bold text-white sm:text-2xl">{title}</h2>
+            <p className="mt-1 text-sm text-zinc-400">{subtitle}</p>
+          </div>
+          <Button variant="ghost" className="text-zinc-300 hover:text-white" onClick={onClose} type="button">
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+
+        <form onSubmit={onSubmit} className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6">
+          <div className="grid gap-6 lg:grid-cols-[minmax(0,1.2fr)_320px]">
+            <div className="space-y-5">
+              <div className="rounded-3xl border border-white/8 bg-zinc-950/40 p-4 sm:p-5">
+                <h3 className="text-base font-semibold text-white">Dados principais</h3>
+                <div className="mt-4 grid gap-4 md:grid-cols-2">
+                  <div className="space-y-2 md:col-span-2">
+                    <label className="text-sm font-medium text-amber-200">Nome do produto</label>
+                    <Input value={form.nome} onChange={(e) => onText("nome", e.target.value)} required className={inputClass} />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-amber-200">Nome em ingles</label>
+                    <Input value={form.nome_en} onChange={(e) => onText("nome_en", e.target.value)} className={inputClass} />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-amber-200">Preco</label>
+                    <Input type="number" step="0.01" min="0" value={form.preco} onChange={(e) => onText("preco", e.target.value)} required className={inputClass} />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-amber-200">Categoria</label>
+                    <Input value={form.categoria} onChange={(e) => onText("categoria", e.target.value)} required className={inputClass} />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-amber-200">Categoria em ingles</label>
+                    <Input value={form.categoria_en} onChange={(e) => onText("categoria_en", e.target.value)} className={inputClass} />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-amber-200">Unidade</label>
+                    <select value={form.unidade} onChange={(e) => onText("unidade", e.target.value)} className={selectClass}>
+                      <option value="LB">LB</option>
+                      <option value="KG">KG</option>
+                      <option value="UN">UN</option>
+                    </select>
+                  </div>
+                  <div className="rounded-2xl border border-amber-400/20 bg-amber-400/5 p-4">
+                    <p className="text-xs font-semibold uppercase tracking-[0.24em] text-amber-300/70">Resumo</p>
+                    <p className="mt-2 text-lg font-semibold text-white">{form.nome || "Produto sem nome"}</p>
+                    <div className="mt-3 flex flex-wrap gap-2 text-xs text-zinc-300">
+                      <span className="rounded-full border border-white/10 px-3 py-1">{form.categoria || "Sem categoria"}</span>
+                      <span className="rounded-full border border-white/10 px-3 py-1">{form.unidade || "Sem unidade"}</span>
+                      <span className="rounded-full border border-white/10 px-3 py-1">{money(form.preco)}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-3xl border border-white/8 bg-zinc-950/40 p-4 sm:p-5">
+                <h3 className="text-base font-semibold text-white">Descricao do catalogo</h3>
+                <div className="mt-4 grid gap-4 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-amber-200">Descricao</label>
+                    <textarea value={form.descricao} onChange={(e) => onText("descricao", e.target.value)} className={textareaClass} />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-amber-200">Descricao em ingles</label>
+                    <textarea value={form.descricao_en} onChange={(e) => onText("descricao_en", e.target.value)} className={textareaClass} />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-5">
+              <div className="rounded-3xl border border-white/8 bg-zinc-950/40 p-4 sm:p-5">
+                <h3 className="text-base font-semibold text-white">Imagem</h3>
+                <div className="mt-4 flex min-h-[240px] items-center justify-center rounded-3xl border border-dashed border-amber-400/35 bg-zinc-900 p-4">
+                  {previewUrl ? (
+                    <img src={previewUrl} alt="Preview do produto" className="max-h-[220px] w-full rounded-2xl object-cover" />
+                  ) : (
+                    <div className="text-center text-sm text-zinc-500">Nenhuma imagem selecionada</div>
+                  )}
+                </div>
+                <div className="mt-4 space-y-2">
+                  <label className="text-sm font-medium text-amber-200">Arquivo</label>
+                  <Input type="file" accept="image/*" onChange={(e) => onFile(e.target.files?.[0] || null)} className={cn(inputClass, "cursor-pointer file:mr-3 file:rounded-md file:border-0 file:bg-transparent file:text-sm file:text-zinc-300")} />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-6 flex flex-col gap-3 border-t border-white/10 pt-4 sm:flex-row sm:justify-end">
+            <Button variant="outline" className="border-white/15 bg-transparent text-white hover:bg-white/5" onClick={onClose} type="button">
+              Cancelar
+            </Button>
+            <Button className="bg-amber-400 text-black hover:bg-amber-300" type="submit" disabled={loading}>
+              {loading ? "Salvando..." : submitLabel}
+            </Button>
+          </div>
+        </form>
+      </div>
+      </div>
+    </div>
+  ), document.body);
+}
+
 const ProductsAdminPage: React.FC = () => {
-    // ...existing code...
-  const [form, setForm] = useState({
-    nome: "",
-    descricao: "",
-    nome_en: "",
-    descricao_en: "",
-    preco: "",
-    categoria: "",
-    categoria_en: "",
-    foto: null as File | null,
-  });
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [editProduct, setEditProduct] = useState<any | null>(null);
-  const [editForm, setEditForm] = useState({
-    nome: '',
-    nome_en: '',
-    descricao: '',
-    descricao_en: '',
-    categoria: '',
-    categoria_en: '',
-    preco: '',
-    foto: null as File | null,
-    foto_url: '',
-    id: null,
-  });
-  const [editPreviewUrl, setEditPreviewUrl] = useState<string | null>(null);
-    // Função para abrir modal de edição
-    const handleEditClick = (prod: any) => {
-      setEditProduct(prod);
-      setEditForm({
-        nome: prod.nome,
-        nome_en: prod.nome_en || '',
-        descricao: prod.descricao || '',
-        descricao_en: prod.descricao_en || '',
-        categoria: prod.categoria || '',
-        categoria_en: prod.categoria_en || '',
-        preco: prod.preco,
-        foto: null,
-        foto_url: prod.foto_url || '',
-        id: prod.id,
-      });
-      setEditPreviewUrl(prod.foto_url || null);
-    };
-
-    // Função para lidar com mudanças no formulário de edição
-    const handleEditFormChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-      const { name, value, type } = e.target;
-      if (type === "file") {
-        const file = (e.target as HTMLInputElement).files?.[0] || null;
-        setEditForm({ ...editForm, foto: file });
-        if (file) {
-          setEditPreviewUrl(URL.createObjectURL(file));
-        } else {
-          setEditPreviewUrl(editForm.foto_url || null);
-        }
-      } else {
-        setEditForm({ ...editForm, [name]: value });
-      }
-    };
-
-    // Função para salvar edição
-    const handleEditSubmit = async (e: React.FormEvent) => {
-      e.preventDefault();
-      setLoading(true);
-      setMessage("");
-      try {
-        let fotoUrl = editForm.foto_url;
-        if (editForm.foto) {
-          const fileExt = editForm.foto.name.split('.').pop();
-          const safeNome = editForm.nome.replace(/[^a-zA-Z0-9\-]/g, '').toLowerCase();
-          const fileName = `${Date.now()}-${safeNome}.${fileExt}`;
-          const { data: uploadData, error: uploadError } = await supabase.storage
-            .from('produtos')
-            .upload(fileName, editForm.foto, { contentType: editForm.foto.type });
-          if (uploadError) {
-            setMessage(`Erro ao fazer upload da imagem: ${uploadError.message}`);
-            setLoading(false);
-            return;
-          }
-          const { data: publicUrlData, error: urlError } = supabase.storage
-            .from('produtos')
-            .getPublicUrl(fileName);
-          if (urlError) {
-            setMessage(`Erro ao gerar URL pública: ${urlError.message}`);
-            setLoading(false);
-            return;
-          }
-          fotoUrl = publicUrlData?.publicUrl || '';
-        }
-        const { error: updateError } = await supabase
-          .from("products")
-          .update({
-            nome: editForm.nome,
-            nome_en: editForm.nome_en.trim() || null,
-            descricao: editForm.descricao.trim() || null,
-            descricao_en: editForm.descricao_en.trim() || null,
-            categoria: editForm.categoria.trim() || null,
-            categoria_en: editForm.categoria_en.trim() || null,
-            preco: parseFloat(editForm.preco),
-            foto_url: fotoUrl,
-          })
-          .eq("id", editForm.id);
-        if (updateError) {
-          setMessage(`Erro ao atualizar produto: ${updateError.message}`);
-          setLoading(false);
-          return;
-        }
-        setMessage("Produto atualizado com sucesso!");
-        setEditProduct(null);
-        setEditForm({
-          nome: '',
-          nome_en: '',
-          descricao: '',
-          descricao_en: '',
-          categoria: '',
-          categoria_en: '',
-          preco: '',
-          foto: null,
-          foto_url: '',
-          id: null,
-        });
-        setEditPreviewUrl(null);
-        // Atualizar lista de produtos
-        const { data } = await supabase
-          .from("products")
-          .select("id, nome, descricao, nome_en, descricao_en, categoria, categoria_en, preco, unidade, foto_url");
-        if (data) setProducts(data);
-      } catch (err: any) {
-        setMessage("Erro inesperado: " + err.message);
-      } finally {
-        setLoading(false);
-      }
-    };
-  const [showForm, setShowForm] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState("");
-  const [products, setProducts] = useState<any[]>([]);
+  const [products, setProducts] = useState<Product[]>([]);
   const [fetching, setFetching] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [feedback, setFeedback] = useState<string>("");
   const [filterNome, setFilterNome] = useState("");
   const [filterCategoria, setFilterCategoria] = useState("");
   const [filterUnidade, setFilterUnidade] = useState("");
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [editProduct, setEditProduct] = useState<Product | null>(null);
+  const [createForm, setCreateForm] = useState<ProductFormState>(emptyForm);
+  const [editForm, setEditForm] = useState<ProductFormState>(emptyForm);
+  const [createPreviewUrl, setCreatePreviewUrl] = useState<string | null>(null);
+  const [editPreviewUrl, setEditPreviewUrl] = useState<string | null>(null);
 
-    const duplicateGroupsMap = products.reduce((acc, prod) => {
-      const key = normalizeProductKey(prod?.nome);
-      if (!key) return acc;
-      if (!acc[key]) acc[key] = [];
-      acc[key].push(prod);
-      return acc;
-    }, {} as Record<string, any[]>);
-
-    const duplicateGroups = Object.values(duplicateGroupsMap).filter((group) => group.length > 1);
-    const duplicateIds = new Set(duplicateGroups.flat().map((prod) => Number(prod.id)));
-
-    const incompleteProducts = products
-      .map((prod) => ({ prod, issues: getMissingProductIssues(prod) }))
-      .filter((item) => item.issues.length > 0);
-
-    // Filtragem dos produtos
-    const filteredProducts = products.filter((prod) => {
-      const nomeMatch = filterNome === "" || prod.nome.toLowerCase().includes(filterNome.toLowerCase());
-      const categoriaMatch = filterCategoria === "" || prod.categoria?.toLowerCase().includes(filterCategoria.toLowerCase());
-      const unidadeMatch = filterUnidade === "" || prod.unidade?.toLowerCase().includes(filterUnidade.toLowerCase());
-      return nomeMatch && categoriaMatch && unidadeMatch;
-    });
-  // Buscar produtos cadastrados
-  useEffect(() => {
-    const fetchProducts = async () => {
-      setFetching(true);
-      const { data, error } = await supabase
-        .from("products")
-        .select("id, nome, descricao, nome_en, descricao_en, categoria, categoria_en, preco, unidade, foto_url");
-      if (!error && data) setProducts(data);
-      setFetching(false);
-    };
-    fetchProducts();
-  }, []);
-
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    const { name, value, type } = e.target;
-    if (type === "file") {
-      const file = (e.target as HTMLInputElement).files?.[0] || null;
-      setForm({ ...form, foto: file });
-      if (file) {
-        setPreviewUrl(URL.createObjectURL(file));
-      } else {
-        setPreviewUrl(null);
-      }
+  const refreshProducts = async () => {
+    setFetching(true);
+    const { data, error } = await supabase.from("products").select("id, nome, descricao, nome_en, descricao_en, categoria, categoria_en, preco, unidade, foto_url").order("id", { ascending: false });
+    if (error) {
+      setFeedback(`Erro ao carregar produtos: ${error.message}`);
     } else {
-      setForm({ ...form, [name]: value });
+      setProducts((data || []) as Product[]);
     }
+    setFetching(false);
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  useEffect(() => {
+    void refreshProducts();
+  }, []);
+
+  const duplicateGroups = useMemo(() => {
+    const groups = products.reduce((acc, product) => {
+      const key = normalizeProductKey(product.nome);
+      if (!key) return acc;
+      if (!acc[key]) acc[key] = [];
+      acc[key].push(product);
+      return acc;
+    }, {} as Record<string, Product[]>);
+    return Object.values(groups).filter((group) => group.length > 1);
+  }, [products]);
+
+  const duplicateIds = useMemo(() => new Set(duplicateGroups.flat().map((product) => Number(product.id))), [duplicateGroups]);
+  const incompleteProducts = useMemo(() => products.map((product) => ({ product, issues: getMissingProductIssues(product) })).filter((item) => item.issues.length > 0), [products]);
+  const filteredProducts = useMemo(() => products.filter((product) => {
+    const nomeMatch = !filterNome || String(product.nome || "").toLowerCase().includes(filterNome.toLowerCase());
+    const categoriaMatch = !filterCategoria || String(product.categoria || "").toLowerCase().includes(filterCategoria.toLowerCase());
+    const unidadeMatch = !filterUnidade || String(product.unidade || "").toLowerCase().includes(filterUnidade.toLowerCase());
+    return nomeMatch && categoriaMatch && unidadeMatch;
+  }), [filterCategoria, filterNome, filterUnidade, products]);
+
+  const setCreateText = (field: keyof ProductFormState, value: string) => setCreateForm((current) => ({ ...current, [field]: value }));
+  const setEditText = (field: keyof ProductFormState, value: string) => setEditForm((current) => ({ ...current, [field]: value }));
+
+  const setCreateFile = (file: File | null) => {
+    setCreateForm((current) => ({ ...current, foto: file }));
+    setCreatePreviewUrl(file ? URL.createObjectURL(file) : null);
+  };
+
+  const setEditFile = (file: File | null) => {
+    setEditForm((current) => ({ ...current, foto: file }));
+    setEditPreviewUrl(file ? URL.createObjectURL(file) : (editForm.foto_url || null));
+  };
+
+  const uploadProductImage = async (file: File, productName: string) => {
+    const fileExt = file.name.split(".").pop();
+    const safeName = productName.replace(/[^a-zA-Z0-9-]/g, "").toLowerCase() || "produto";
+    const fileName = `${Date.now()}-${safeName}.${fileExt}`;
+    const { error } = await supabase.storage.from("produtos").upload(fileName, file, { contentType: file.type });
+    if (error) throw new Error(error.message);
+    return supabase.storage.from("produtos").getPublicUrl(fileName).data.publicUrl || null;
+  };
+
+  const handleCreateSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
     setLoading(true);
-    setMessage("");
+    setFeedback("");
     try {
-      let fotoUrl = null;
-      if (form.foto) {
-        // Upload da imagem para o bucket 'produtos'
-        const fileExt = form.foto.name.split('.').pop();
-        // Nome seguro: apenas letras, números e hífen
-        const safeNome = form.nome.replace(/[^a-zA-Z0-9\-]/g, '').toLowerCase();
-        const fileName = `${Date.now()}-${safeNome}.${fileExt}`;
-        const { data: uploadData, error: uploadError } = await supabase.storage
-          .from('produtos')
-          .upload(fileName, form.foto, { contentType: form.foto.type });
-        if (uploadError) {
-          setMessage(`Erro ao fazer upload da imagem: ${uploadError.message}`);
-          setLoading(false);
-          return;
-        }
-        // Obter URL pública
-        const { data: publicUrlData, error: urlError } = supabase.storage
-          .from('produtos')
-          .getPublicUrl(fileName);
-        if (urlError) {
-          setMessage(`Erro ao gerar URL pública: ${urlError.message}`);
-          setLoading(false);
-          return;
-        }
-        fotoUrl = publicUrlData?.publicUrl || null;
-        // Testar URL manualmente
-        if (!fotoUrl) {
-          setMessage('URL da imagem não gerada. Verifique o bucket.');
-          setLoading(false);
-          return;
-        }
-      }
-      // Salvar dados do produto com foto_url
-      const { error: insertError } = await supabase
-        .from("products")
-        .insert([
-          {
-            nome: form.nome,
-            descricao: form.descricao,
-            nome_en: form.nome_en.trim() || null,
-            descricao_en: form.descricao_en.trim() || null,
-            preco: parseFloat(form.preco),
-            categoria: form.categoria,
-            categoria_en: form.categoria_en.trim() || null,
-            foto_url: fotoUrl,
-            // estoque removido
-          },
-        ]);
-      if (insertError) {
-        setMessage(`Erro ao cadastrar produto: ${insertError.message}`);
-        setLoading(false);
-        return;
-      }
-      setMessage("Produto cadastrado com sucesso!");
-      setForm({
-        nome: "",
-        descricao: "",
-        nome_en: "",
-        descricao_en: "",
-        preco: "",
-        categoria: "",
-        categoria_en: "",
-        foto: null,
-      });
-      setPreviewUrl(null);
-      setShowForm(false);
-      // Atualizar lista de produtos
-      const { data } = await supabase
-        .from("products")
-        .select("id, nome, descricao, nome_en, descricao_en, categoria, categoria_en, preco, unidade, foto_url");
-      if (data) setProducts(data);
-    } catch (err: any) {
-      setMessage("Erro inesperado: " + err.message);
+      const photoUrl = createForm.foto ? await uploadProductImage(createForm.foto, createForm.nome) : null;
+      const { error } = await supabase.from("products").insert([{ nome: createForm.nome.trim(), nome_en: createForm.nome_en.trim() || null, descricao: createForm.descricao.trim() || null, descricao_en: createForm.descricao_en.trim() || null, categoria: createForm.categoria.trim() || null, categoria_en: createForm.categoria_en.trim() || null, preco: parseFloat(createForm.preco), unidade: createForm.unidade || "LB", foto_url: photoUrl }]);
+      if (error) throw new Error(error.message);
+      setShowCreateModal(false);
+      setCreateForm(emptyForm());
+      setCreatePreviewUrl(null);
+      setFeedback("Produto cadastrado com sucesso.");
+      await refreshProducts();
+    } catch (error: any) {
+      setFeedback(`Erro ao cadastrar produto: ${error.message}`);
     } finally {
       setLoading(false);
     }
   };
 
-  // O return JSX deve estar apenas no final do componente
-      // O return JSX deve estar apenas no final do componente
-      return (
-        <div className="p-4">
-          <h2 className="text-xl md:text-2xl font-bold mb-4 text-gold">Administração de Produtos</h2>
+  const handleEditSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setLoading(true);
+    setFeedback("");
+    try {
+      let photoUrl = editForm.foto_url || null;
+      if (editForm.foto) photoUrl = await uploadProductImage(editForm.foto, editForm.nome);
+      const { error } = await supabase.from("products").update({ nome: editForm.nome.trim(), nome_en: editForm.nome_en.trim() || null, descricao: editForm.descricao.trim() || null, descricao_en: editForm.descricao_en.trim() || null, categoria: editForm.categoria.trim() || null, categoria_en: editForm.categoria_en.trim() || null, preco: parseFloat(editForm.preco), unidade: editForm.unidade || "LB", foto_url: photoUrl }).eq("id", editForm.id);
+      if (error) throw new Error(error.message);
+      setEditProduct(null);
+      setEditPreviewUrl(null);
+      setEditForm(emptyForm());
+      setFeedback("Produto atualizado com sucesso.");
+      await refreshProducts();
+    } catch (error: any) {
+      setFeedback(`Erro ao atualizar produto: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
 
-          {/* Botão único para abrir o formulário */}
-          <button
-            className="bg-gold text-black font-bold py-3 px-6 rounded-lg shadow-lg mb-6 hover:bg-gold-dark transition text-lg"
-            onClick={() => setShowForm(true)}
-          >
-            CADASTRAR PRODUTO
-          </button>
+  const openEditModal = (product: Product) => {
+    setEditProduct(product);
+    setEditForm({ id: product.id, nome: product.nome || "", nome_en: product.nome_en || "", descricao: product.descricao || "", descricao_en: product.descricao_en || "", categoria: product.categoria || "", categoria_en: product.categoria_en || "", preco: String(product.preco || ""), unidade: product.unidade || "LB", foto: null, foto_url: product.foto_url || "" });
+    setEditPreviewUrl(product.foto_url || null);
+  };
 
-          {/* Modal do formulário inspirado no layout da imagem (sem imagem) */}
-          {showForm && (
-            <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-60 z-50">
-              <div
-                className="bg-[#181818] border border-gold rounded-2xl shadow-2xl p-4 sm:p-8 relative w-full max-w-[500px] flex flex-col gap-6"
-                style={{ boxShadow: '0 0 30px #FFD700' }}
-              >
-                <button
-                  className="absolute top-4 right-4 text-gold text-xl font-bold bg-transparent border-none cursor-pointer"
-                  onClick={() => setShowForm(false)}
-                >×</button>
-                <div className="flex flex-col items-center gap-2 mb-4">
-                  <span className="font-bold text-gold text-lg">Imperial Tec Solution</span>
-                </div>
-                <form onSubmit={handleSubmit} className="flex flex-col gap-4" encType="multipart/form-data">
-                  <div className="flex flex-col sm:flex-row gap-4">
-                    <div className="flex flex-col gap-2 flex-1">
-                      <label className="text-gold font-semibold text-sm">Nome do Produto</label>
-                      <input name="nome" type="text" value={form.nome} onChange={handleChange} required className="bg-[#222] border border-gold rounded px-3 py-2 text-white w-full" />
-                      <label className="text-gold font-semibold text-sm">Nome do Produto (EN - opcional)</label>
-                      <input name="nome_en" type="text" value={form.nome_en} onChange={handleChange} className="bg-[#222] border border-gold rounded px-3 py-2 text-white w-full" />
-                      <label className="text-gold font-semibold text-sm">Categoria</label>
-                      <input name="categoria" type="text" value={form.categoria} onChange={handleChange} required className="bg-[#222] border border-gold rounded px-3 py-2 text-white w-full" />
-                      <label className="text-gold font-semibold text-sm">Categoria (EN - opcional)</label>
-                      <input name="categoria_en" type="text" value={form.categoria_en} onChange={handleChange} className="bg-[#222] border border-gold rounded px-3 py-2 text-white w-full" />
-                      <label className="text-gold font-semibold text-sm">Descrição</label>
-                      <textarea name="descricao" value={form.descricao} onChange={handleChange} required className="bg-[#222] border border-gold rounded px-3 py-2 text-white w-full" />
-                      <label className="text-gold font-semibold text-sm">Descricao (EN - opcional)</label>
-                      <textarea name="descricao_en" value={form.descricao_en} onChange={handleChange} className="bg-[#222] border border-gold rounded px-3 py-2 text-white w-full" />
-                    </div>
-                    <div className="flex flex-col gap-2 flex-1">
-                      <label className="text-gold font-semibold text-sm">Imagem do Produto</label>
-                      <input name="foto" type="file" accept="image/*" onChange={handleChange} className="bg-[#222] border border-gold rounded px-3 py-2 text-white w-full" />
-                      {previewUrl && (
-                        <div className="mt-2 flex justify-center">
-                          <img src={previewUrl} alt="Preview" className="h-24 w-24 object-cover rounded border border-gold" />
-                        </div>
-                      )}
-                    </div>
-                    <div className="flex flex-col gap-2 flex-1">
-                      <label className="text-gold font-semibold text-sm">Unidade de Medida</label>
-                      <div className="flex gap-2 mb-2">
-                        <button type="button" className="bg-gold text-black rounded px-3 py-1 font-bold">LB</button>
-                        <button type="button" className="bg-[#222] text-gold border border-gold rounded px-3 py-1 font-bold">KG</button>
-                      </div>
-                      <label className="text-gold font-semibold text-sm">Preço de Venda</label>
-                      <input name="preco" type="number" step="0.01" value={form.preco} onChange={handleChange} required className="bg-[#222] border border-gold rounded px-3 py-2 text-white w-full" />
-                      <label className="text-gold font-semibold text-sm">Custo</label>
-                      <input name="custo" type="number" step="0.01" className="bg-[#222] border border-gold rounded px-3 py-2 text-white w-full" />
-                      {/* Campo estoque removido */}
-                    </div>
-                  </div>
-                  <div className="flex gap-4 mt-4">
-                    <button type="submit" disabled={loading} className="bg-gold text-black font-bold py-2 px-4 rounded hover:bg-gold-dark transition flex-1 text-lg w-full sm:w-auto">{loading ? "Salvando..." : "CADASTRAR PRODUTO"}</button>
-                    <button type="button" className="bg-[#222] border border-gold text-gold font-bold py-2 px-4 rounded flex-1 text-lg w-full sm:w-auto" onClick={() => setShowForm(false)}>Cancelar</button>
-                  </div>
-                  {message && <div className="text-sm text-red-500 mt-2">{message}</div>}
-                </form>
-              </div>
-            </div>
-          )}
+  const totalCategories = new Set(products.map((product) => String(product.categoria || "").trim()).filter(Boolean)).size;
 
-          <div className="flex gap-2 mb-4">
-            <input
-              type="text"
-              placeholder="Filtrar por nome"
-              value={filterNome}
-              onChange={e => setFilterNome(e.target.value)}
-              className="border border-sidebar-border rounded px-3 py-2 bg-sidebar-foreground text-sidebar-primary placeholder-gold-dark focus:ring-gold focus:border-gold"
-            />
-            <input
-              type="text"
-              placeholder="Filtrar por categoria"
-              value={filterCategoria}
-              onChange={e => setFilterCategoria(e.target.value)}
-              className="border border-sidebar-border rounded px-3 py-2 bg-sidebar-foreground text-sidebar-primary placeholder-gold-dark focus:ring-gold focus-border-gold"
-            />
-            <input
-              type="text"
-              placeholder="Filtrar por unidade"
-              value={filterUnidade}
-              onChange={e => setFilterUnidade(e.target.value)}
-              className="border border-sidebar-border rounded px-3 py-2 bg-sidebar-foreground text-sidebar-primary placeholder-gold-dark focus:ring-gold focus-border-gold"
-            />
-          </div>
-          {(duplicateGroups.length > 0 || incompleteProducts.length > 0) && (
-            <div className="mb-4 grid gap-3 md:grid-cols-2">
-              <div className="rounded-lg border border-amber-500/60 bg-amber-500/10 p-3">
-                <p className="text-sm font-bold text-amber-300">
-                  Alerta de duplicidade: {duplicateGroups.length} grupos / {duplicateIds.size} produtos
-                </p>
-                {duplicateGroups.length > 0 ? (
-                  <ul className="mt-2 space-y-1 text-xs text-amber-100">
-                    {duplicateGroups.slice(0, 6).map((group, index) => (
-                      <li key={`dup-${index}`}>
-                        Nome "{group[0]?.nome}" em IDs {group.map((item) => item.id).join(", ")}
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="mt-2 text-xs text-amber-100">Nenhuma duplicidade detectada.</p>
-                )}
-              </div>
-              <div className="rounded-lg border border-red-500/60 bg-red-500/10 p-3">
-                <p className="text-sm font-bold text-red-300">
-                  Alerta de cadastro incompleto: {incompleteProducts.length} produtos
-                </p>
-                {incompleteProducts.length > 0 ? (
-                  <ul className="mt-2 space-y-1 text-xs text-red-100">
-                    {incompleteProducts.slice(0, 6).map(({ prod, issues }) => (
-                      <li key={`inc-${prod.id}`}>
-                        {prod.nome || `ID ${prod.id}`}: {issues.join(", ")}
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="mt-2 text-xs text-red-100">Nenhum produto incompleto.</p>
-                )}
-              </div>
-            </div>
-          )}
-          {fetching ? (
-            <div>Carregando produtos...</div>
-          ) : (
-            <div className="w-full overflow-x-auto">
-              <div className="rounded-xl border border-gold-dark bg-black shadow-lg p-1 min-w-[320px]">
-                <table className="min-w-full text-xs md:text-sm text-left text-white">
-                  <thead>
-                    <tr>
-                      <th className="px-1 py-1 text-gold text-xs md:text-lg">Foto</th>
-                      <th className="px-1 py-1 text-gold text-xs md:text-lg">Nome</th>
-                      <th className="px-1 py-1 text-gold text-xs md:text-lg">Descrição</th>
-                      <th className="px-1 py-1 text-gold text-xs md:text-lg">Categoria</th>
-                      <th className="px-1 py-1 text-gold text-xs md:text-lg">Preço</th>
-                      <th className="px-1 py-1 text-gold text-xs md:text-lg">Unidade</th>
-                      <th className="px-1 py-1 text-gold text-xs md:text-lg">Alertas</th>
-                      <th className="px-1 py-1 text-gold text-xs md:text-lg">Ações</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredProducts.length === 0 ? (
-                      <tr>
-                        <td colSpan={8} className="px-1 py-4 text-center text-muted">Nenhum produto encontrado.</td>
-                      </tr>
-                    ) : (
-                      filteredProducts.map((prod) => {
-                        const rowIssues = getMissingProductIssues(prod);
-                        const isDuplicate = duplicateIds.has(Number(prod.id));
-                        const hasIssues = rowIssues.length > 0;
-                        return (
-                        <tr
-                          key={prod.id}
-                          className={`border-b border-gold-dark last:border-none hover:bg-gold-light/10 transition ${
-                            isDuplicate ? "bg-amber-500/10" : hasIssues ? "bg-red-500/10" : ""
-                          }`}
-                        >
-                          <td className="px-1 py-1 text-center">
-                            {prod.foto_url ? (
-                              <img src={prod.foto_url} alt={prod.nome} className="h-6 w-6 md:h-12 md:w-12 object-cover rounded border border-gold-dark mx-auto" />
-                            ) : (
-                              <span className="text-muted">-</span>
-                            )}
-                          </td>
-                          <td className="px-1 py-1 font-bold text-white text-xs md:text-base">{prod.nome}</td>
-                          <td className="px-1 py-1 text-white/80">{prod.descricao || '-'}</td>
-                          <td className="px-1 py-1 text-white/80">{prod.categoria || '-'}</td>
-                          <td className="px-1 py-1 text-gold-dark">R$ {prod.preco}</td>
-                          <td className="px-1 py-1 text-white/80">{prod.unidade || '-'}</td>
-                          <td className="px-1 py-1">
-                            <div className="flex flex-wrap gap-1">
-                              {isDuplicate ? (
-                                <span className="rounded border border-amber-500/70 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-200">Duplicado</span>
-                              ) : null}
-                              {rowIssues.map((issue) => (
-                                <span key={`issue-${prod.id}-${issue}`} className="rounded border border-red-500/70 bg-red-500/10 px-2 py-0.5 text-[10px] text-red-200">
-                                  {issue}
-                                </span>
-                              ))}
-                              {!isDuplicate && rowIssues.length === 0 ? (
-                                <span className="rounded border border-emerald-500/70 bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-200">OK</span>
-                              ) : null}
-                            </div>
-                          </td>
-                          <td className="px-1 py-1">
-                            <button className="bg-gold text-black rounded px-2 py-1 text-xs font-bold hover:bg-gold-dark" onClick={() => handleEditClick(prod)}>
-                              Editar
-                            </button>
-                          </td>
-                              {/* Modal de edição de produto */}
-                              {editProduct && (
-                                <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-60 z-50">
-                                  <div className="bg-[#181818] border border-gold rounded-2xl shadow-2xl p-4 sm:p-8 relative w-full max-w-[400px] flex flex-col gap-6">
-                                    <button
-                                      className="absolute top-4 right-4 text-gold text-xl font-bold bg-transparent border-none cursor-pointer"
-                                      onClick={() => setEditProduct(null)}
-                                    >×</button>
-                                    <form onSubmit={handleEditSubmit} className="flex flex-col gap-4" encType="multipart/form-data">
-                                      <label className="text-gold font-semibold text-sm">Nome do Produto</label>
-                                      <input name="nome" type="text" value={editForm.nome} onChange={handleEditFormChange} required className="bg-[#222] border border-gold rounded px-3 py-2 text-white w-full" />
-                                      <label className="text-gold font-semibold text-sm">Nome do Produto (EN - opcional)</label>
-                                      <input name="nome_en" type="text" value={editForm.nome_en} onChange={handleEditFormChange} className="bg-[#222] border border-gold rounded px-3 py-2 text-white w-full" />
-                                      <label className="text-gold font-semibold text-sm">Categoria</label>
-                                      <input name="categoria" type="text" value={editForm.categoria} onChange={handleEditFormChange} className="bg-[#222] border border-gold rounded px-3 py-2 text-white w-full" />
-                                      <label className="text-gold font-semibold text-sm">Categoria (EN - opcional)</label>
-                                      <input name="categoria_en" type="text" value={editForm.categoria_en} onChange={handleEditFormChange} className="bg-[#222] border border-gold rounded px-3 py-2 text-white w-full" />
-                                      <label className="text-gold font-semibold text-sm">Descricao</label>
-                                      <textarea name="descricao" value={editForm.descricao} onChange={handleEditFormChange} className="bg-[#222] border border-gold rounded px-3 py-2 text-white w-full" />
-                                      <label className="text-gold font-semibold text-sm">Descricao (EN - opcional)</label>
-                                      <textarea name="descricao_en" value={editForm.descricao_en} onChange={handleEditFormChange} className="bg-[#222] border border-gold rounded px-3 py-2 text-white w-full" />
-                                      <label className="text-gold font-semibold text-sm">Preço de Venda</label>
-                                      <input name="preco" type="number" step="0.01" value={editForm.preco} onChange={handleEditFormChange} required className="bg-[#222] border border-gold rounded px-3 py-2 text-white w-full" />
-                                      <label className="text-gold font-semibold text-sm">Imagem do Produto</label>
-                                      <input name="foto" type="file" accept="image/*" onChange={handleEditFormChange} className="bg-[#222] border border-gold rounded px-3 py-2 text-white w-full" />
-                                      {editPreviewUrl && (
-                                        <div className="mt-2 flex justify-center">
-                                          <img src={editPreviewUrl} alt="Preview" className="h-24 w-24 object-cover rounded border border-gold" />
-                                        </div>
-                                      )}
-                                      <div className="flex gap-4 mt-4">
-                                        <button type="submit" disabled={loading} className="bg-gold text-black font-bold py-2 px-4 rounded hover:bg-gold-dark transition flex-1 text-lg w-full sm:w-auto">{loading ? "Salvando..." : "SALVAR ALTERAÇÕES"}</button>
-                                        <button type="button" className="bg-[#222] border border-gold text-gold font-bold py-2 px-4 rounded flex-1 text-lg w-full sm:w-auto" onClick={() => setEditProduct(null)}>Cancelar</button>
-                                      </div>
-                                      {message && <div className="text-sm text-red-500 mt-2">{message}</div>}
-                                    </form>
-                                  </div>
-                                </div>
-                              )}
-                        </tr>
-                      )})
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.28em] text-amber-300/80">Catalogo admin</p>
+          <h1 className="mt-2 text-3xl font-black text-white sm:text-4xl">Produtos</h1>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">Melhorei a area de novo produto e editar para ficar larga, clara e usavel no celular e no desktop.</p>
         </div>
-      );
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <Button variant="outline" className="border-white/15 bg-transparent text-white hover:bg-white/5" onClick={() => void refreshProducts()}>
+            <RefreshCw className="mr-2 h-4 w-4" />
+            Atualizar
+          </Button>
+          <Button className="bg-amber-400 text-black hover:bg-amber-300" onClick={() => setShowCreateModal(true)}>
+            <Plus className="mr-2 h-4 w-4" />
+            Novo produto
+          </Button>
+        </div>
+      </div>
+
+      {feedback ? <div className="rounded-2xl border border-amber-400/25 bg-amber-400/10 px-4 py-3 text-sm text-amber-50">{feedback}</div> : null}
+
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        {[
+          { label: "Produtos", value: products.length, icon: Boxes },
+          { label: "Categorias", value: totalCategories, icon: Tag },
+          { label: "Duplicados", value: duplicateIds.size, icon: AlertTriangle },
+          { label: "Incompletos", value: incompleteProducts.length, icon: AlertTriangle },
+        ].map((item) => {
+          const Icon = item.icon;
+          return (
+            <Card key={item.label} className="border-white/10 bg-zinc-950/60">
+              <CardContent className="flex items-center justify-between p-5">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.24em] text-zinc-500">{item.label}</p>
+                  <p className="mt-3 text-3xl font-black text-white">{item.value}</p>
+                </div>
+                <div className="rounded-2xl border border-white/10 bg-white/5 p-3 text-amber-300">
+                  <Icon className="h-5 w-5" />
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })}
+      </div>
+
+      <Card className="border-white/10 bg-zinc-950/60">
+        <CardHeader className="pb-4">
+          <CardTitle className="text-xl text-white">Filtros</CardTitle>
+          <CardDescription>Busque rapido antes de editar.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-3 lg:grid-cols-[1.2fr_repeat(2,minmax(0,1fr))_auto]">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+              <Input value={filterNome} onChange={(e) => setFilterNome(e.target.value)} placeholder="Buscar por nome" className={cn(inputClass, "pl-10")} />
+            </div>
+            <Input value={filterCategoria} onChange={(e) => setFilterCategoria(e.target.value)} placeholder="Categoria" className={inputClass} />
+            <Input value={filterUnidade} onChange={(e) => setFilterUnidade(e.target.value)} placeholder="Unidade" className={inputClass} />
+            <Button variant="outline" className="border-white/15 bg-transparent text-white hover:bg-white/5" onClick={() => { setFilterNome(""); setFilterCategoria(""); setFilterUnidade(""); }}>
+              Limpar
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {(duplicateGroups.length > 0 || incompleteProducts.length > 0) ? (
+        <div className="grid gap-4 xl:grid-cols-2">
+          <Card className="border-amber-500/30 bg-amber-500/10">
+            <CardHeader><CardTitle className="text-lg text-amber-100">Duplicidade</CardTitle></CardHeader>
+            <CardContent className="space-y-2 text-sm text-amber-50">
+              {duplicateGroups.slice(0, 6).map((group, index) => <div key={index}>{group[0]?.nome}: IDs {group.map((item) => item.id).join(", ")}</div>)}
+            </CardContent>
+          </Card>
+          <Card className="border-red-500/30 bg-red-500/10">
+            <CardHeader><CardTitle className="text-lg text-red-100">Cadastro incompleto</CardTitle></CardHeader>
+            <CardContent className="space-y-2 text-sm text-red-50">
+              {incompleteProducts.slice(0, 6).map(({ product, issues }) => <div key={product.id}>{product.nome || `ID ${product.id}`}: {issues.join(", ")}</div>)}
+            </CardContent>
+          </Card>
+        </div>
+      ) : null}
+
+      {fetching ? (
+        <Card className="border-white/10 bg-zinc-950/60 p-8 text-center text-zinc-400">Carregando produtos...</Card>
+      ) : filteredProducts.length === 0 ? (
+        <Card className="border-white/10 bg-zinc-950/60 p-8 text-center text-zinc-400">Nenhum produto encontrado.</Card>
+      ) : (
+        <>
+          <div className="grid gap-3 md:hidden">
+            {filteredProducts.map((product) => {
+              const issues = getMissingProductIssues(product);
+              const isDuplicate = duplicateIds.has(Number(product.id));
+              return (
+                <Card key={`mobile-${product.id}`} className="border-white/10 bg-zinc-950/60">
+                  <CardContent className="p-4">
+                    <div className="flex items-start gap-3">
+                      <div className="h-20 w-20 overflow-hidden rounded-2xl border border-white/10 bg-white/5">
+                        {product.foto_url ? <img src={product.foto_url} alt={product.nome} className="h-full w-full object-cover" /> : <div className="flex h-full items-center justify-center text-xs text-zinc-500">Sem foto</div>}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="text-base font-semibold text-white">{product.nome}</p>
+                            <p className="text-sm text-zinc-400">{product.categoria || "Sem categoria"}</p>
+                          </div>
+                          <Button size="sm" className="bg-amber-400 text-black hover:bg-amber-300" onClick={() => openEditModal(product)}>
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                          <span className="rounded-full border border-white/10 px-2.5 py-1 text-zinc-200">{money(product.preco)}</span>
+                          <span className="rounded-full border border-white/10 px-2.5 py-1 text-zinc-200">{product.unidade || "-"}</span>
+                          {isDuplicate ? <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-amber-200">Duplicado</span> : null}
+                          {issues.map((issue) => <span key={`${product.id}-${issue}`} className="rounded-full border border-red-500/40 bg-red-500/10 px-2.5 py-1 text-red-200">{issue}</span>)}
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+
+          <Card className="hidden overflow-hidden border-white/10 bg-zinc-950/60 md:block">
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead className="bg-white/5 text-left text-xs uppercase tracking-[0.24em] text-zinc-500">
+                  <tr>
+                    <th className="px-4 py-4">Foto</th>
+                    <th className="px-4 py-4">Nome</th>
+                    <th className="px-4 py-4">Categoria</th>
+                    <th className="px-4 py-4">Descricao</th>
+                    <th className="px-4 py-4">Preco</th>
+                    <th className="px-4 py-4">Unidade</th>
+                    <th className="px-4 py-4">Status</th>
+                    <th className="px-4 py-4 text-right">Acao</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredProducts.map((product) => {
+                    const issues = getMissingProductIssues(product);
+                    const isDuplicate = duplicateIds.has(Number(product.id));
+                    return (
+                      <tr key={product.id} className="border-t border-white/8 align-top">
+                        <td className="px-4 py-4">{product.foto_url ? <img src={product.foto_url} alt={product.nome} className="h-14 w-14 rounded-2xl object-cover" /> : <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-white/10 text-[11px] text-zinc-500">Sem foto</div>}</td>
+                        <td className="px-4 py-4"><div className="font-semibold text-white">{product.nome}</div><div className="text-xs text-zinc-500">{product.nome_en || "-"}</div></td>
+                        <td className="px-4 py-4"><div className="text-white">{product.categoria || "-"}</div><div className="text-xs text-zinc-500">{product.categoria_en || "-"}</div></td>
+                        <td className="max-w-[280px] px-4 py-4 text-zinc-300"><div className="line-clamp-3">{product.descricao || product.descricao_en || "-"}</div></td>
+                        <td className="px-4 py-4 font-semibold text-amber-300">{money(product.preco)}</td>
+                        <td className="px-4 py-4 text-zinc-300">{product.unidade || "-"}</td>
+                        <td className="px-4 py-4">
+                          <div className="flex flex-wrap gap-2">
+                            {isDuplicate ? <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-[11px] text-amber-200">Duplicado</span> : null}
+                            {issues.map((issue) => <span key={`${product.id}-${issue}`} className="rounded-full border border-red-500/40 bg-red-500/10 px-2.5 py-1 text-[11px] text-red-200">{issue}</span>)}
+                            {!isDuplicate && issues.length === 0 ? <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-[11px] text-emerald-200">OK</span> : null}
+                          </div>
+                        </td>
+                        <td className="px-4 py-4 text-right">
+                          <Button size="sm" className="bg-amber-400 text-black hover:bg-amber-300" onClick={() => openEditModal(product)}>
+                            <Pencil className="mr-2 h-4 w-4" />
+                            Editar
+                          </Button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        </>
+      )}
+
+      <ProductModal
+        open={showCreateModal}
+        title="Cadastrar novo produto"
+        subtitle="Formulario mais largo e organizado para cadastro rapido."
+        form={createForm}
+        previewUrl={createPreviewUrl}
+        loading={loading}
+        submitLabel="Cadastrar produto"
+        onClose={() => {
+          setShowCreateModal(false);
+          setCreateForm(emptyForm());
+          setCreatePreviewUrl(null);
+        }}
+        onText={setCreateText}
+        onFile={setCreateFile}
+        onSubmit={handleCreateSubmit}
+      />
+
+      <ProductModal
+        open={Boolean(editProduct)}
+        title="Editar produto"
+        subtitle="Edite textos, categoria, unidade, preco e imagem sem aperto."
+        form={editForm}
+        previewUrl={editPreviewUrl}
+        loading={loading}
+        submitLabel="Salvar alteracoes"
+        onClose={() => {
+          setEditProduct(null);
+          setEditForm(emptyForm());
+          setEditPreviewUrl(null);
+        }}
+        onText={setEditText}
+        onFile={setEditFile}
+        onSubmit={handleEditSubmit}
+      />
+    </div>
+  );
 };
 
 export default ProductsAdminPage;
-

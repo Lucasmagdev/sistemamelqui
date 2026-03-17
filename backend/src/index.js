@@ -1772,6 +1772,18 @@ function resolveRangeFromQuery(query) {
   };
 }
 
+function resolveCurrentMonthRange() {
+  const now = new Date();
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 0, 0, 0, 0));
+  const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0, 23, 59, 59, 999));
+  return {
+    start: start.toISOString(),
+    end: end.toISOString(),
+    startDate: start.toISOString().slice(0, 10),
+    endDate: end.toISOString().slice(0, 10),
+  };
+}
+
 function toDayKey(value) {
   return new Date(value).toISOString().slice(0, 10);
 }
@@ -4383,6 +4395,103 @@ app.post("/api/expenses", async (req, res) => {
       error: error?.message || "Erro interno ao registrar despesa.",
       detail: error?.detail || null,
     });
+  }
+});
+
+app.get("/api/employees/dashboard", async (req, res) => {
+  try {
+    const monthRange = resolveCurrentMonthRange();
+    const [{ data: employees, error: employeesError }, { data: payments, error: paymentsError }] = await Promise.all([
+      supabase.from("employees").select("*").order("name", { ascending: true }),
+      supabase
+        .from("employee_payments")
+        .select("id, employee_id, amount, paid_at, attachment_url")
+        .gte("paid_at", monthRange.start)
+        .lte("paid_at", monthRange.end),
+    ]);
+
+    if (employeesError || paymentsError) {
+      return res.status(500).json({
+        error: "Erro ao carregar painel de funcionarios.",
+        detail: employeesError?.message || paymentsError?.message || null,
+      });
+    }
+
+    const paymentMap = new Map();
+    let paymentsTotal = 0;
+    let paymentsCount = 0;
+
+    for (const payment of payments || []) {
+      const employeeId = Number(payment.employee_id);
+      const amount = roundQty(parseNumber(payment.amount, 0), 2);
+      const current = paymentMap.get(employeeId) || {
+        month_total: 0,
+        month_count: 0,
+        last_payment_at: null,
+      };
+      current.month_total = roundQty(current.month_total + amount, 2);
+      current.month_count += 1;
+      if (!current.last_payment_at || new Date(payment.paid_at).getTime() > new Date(current.last_payment_at).getTime()) {
+        current.last_payment_at = payment.paid_at;
+      }
+      paymentMap.set(employeeId, current);
+      paymentsTotal = roundQty(paymentsTotal + amount, 2);
+      paymentsCount += 1;
+    }
+
+    const cards = (employees || [])
+      .map((employee) => {
+        const stats = paymentMap.get(Number(employee.id)) || {
+          month_total: 0,
+          month_count: 0,
+          last_payment_at: null,
+        };
+        return {
+          employee_id: Number(employee.id),
+          employee_name: employee.name || `Funcionario ${employee.id}`,
+          active: employee.active !== false,
+          role_title: employee.role_title || null,
+          contact: employee.phone || employee.email || null,
+          phone: employee.phone || null,
+          email: employee.email || null,
+          month_total: roundQty(stats.month_total, 2),
+          month_count: Number(stats.month_count || 0),
+          last_payment_at: stats.last_payment_at || null,
+        };
+      })
+      .sort((a, b) => {
+        if (a.active !== b.active) return a.active ? -1 : 1;
+        if (a.month_total !== b.month_total) return b.month_total - a.month_total;
+        return String(a.employee_name).localeCompare(String(b.employee_name));
+      });
+
+    const activeEmployees = cards.filter((employee) => employee.active).length;
+    const topEmployees = cards
+      .filter((employee) => employee.month_total > 0)
+      .slice()
+      .sort((a, b) => b.month_total - a.month_total)
+      .slice(0, 5)
+      .map((employee) => ({
+        employee_id: employee.employee_id,
+        employee_name: employee.employee_name,
+        month_total: employee.month_total,
+      }));
+
+    return res.json({
+      ok: true,
+      monthRange,
+      summary: {
+        team_count: cards.length,
+        active_count: activeEmployees,
+        payments_total: roundQty(paymentsTotal, 2),
+        payments_count: paymentsCount,
+        avg_per_active_employee: activeEmployees ? roundQty(paymentsTotal / activeEmployees, 2) : 0,
+      },
+      top_employees: topEmployees,
+      employees: cards,
+    });
+  } catch (error) {
+    return res.status(500).json({ error: error?.message || "Erro interno ao carregar painel de funcionarios." });
   }
 });
 

@@ -74,6 +74,7 @@ export const adminQueryKeys = {
   financeOverview: (range: DateRange) => ["admin", "finance-overview", range] as const,
   expensesHistory: (range: DateRange) => ["admin", "expenses-history", range] as const,
   employees: () => ["admin", "employees"] as const,
+  employeesDashboard: () => ["admin", "employees-dashboard"] as const,
   employeePaymentsSummary: (range: DateRange) => ["admin", "employee-payments-summary", range] as const,
   employeePaymentsHistory: (range: DateRange) => ["admin", "employee-payments-history", range] as const,
 };
@@ -147,6 +148,14 @@ export function useEmployeesQuery() {
     queryKey: adminQueryKeys.employees(),
     queryFn: () => backendRequest("/api/employees"),
     ...STATICISH_QUERY_OPTIONS,
+  });
+}
+
+export function useEmployeesDashboardQuery() {
+  return useQuery({
+    queryKey: adminQueryKeys.employeesDashboard(),
+    queryFn: () => backendRequest("/api/employees/dashboard"),
+    ...DEFAULT_QUERY_OPTIONS,
   });
 }
 

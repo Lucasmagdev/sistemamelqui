@@ -16,6 +16,18 @@ npm run dev
 
 Aplicacao em `http://localhost:8080`.
 
+Crie o arquivo `.env` local a partir de `.env.example`.
+
+## Backend local
+
+```sh
+cd backend
+npm install
+npm start
+```
+
+Configure o backend a partir de `backend/.env.example`.
+
 ## Scripts frontend
 
 - `npm run dev` inicia o servidor de desenvolvimento
@@ -38,4 +50,3 @@ O envio WhatsApp por mudanca de status agora acontece no backend (`backend/`), i
 
 Tutorial completo:
 - [TUTORIAL_ZAPI_BACKEND.md](./TUTORIAL_ZAPI_BACKEND.md)
-

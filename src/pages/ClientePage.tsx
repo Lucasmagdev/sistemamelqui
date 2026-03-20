@@ -1,24 +1,9 @@
 ﻿import {
-  Beef,
   BadgeCheck,
   CircleUserRound,
-  Clock3,
-  ChevronDown,
-  Grid2x2,
-  List,
-  LayoutGrid,
-  ListFilter,
-  MapPin,
-  Menu,
   Minus,
-  PackageCheck,
-  Plus,
-  Search,
   ShoppingCart,
-  Star,
   Trash2,
-  Truck,
-  LogOut,
   House,
   LogIn,
 } from 'lucide-react';
@@ -26,22 +11,42 @@ import { useEffect } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import { useTenant } from '@/contexts/TenantContext';
 import { Button } from '@/components/ui/button';
-import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { useI18n } from '@/contexts/I18nContext';
 import { backendRequest } from '@/lib/backendClient';
+import { useIsMobile } from '@/hooks/use-mobile';
+import {
+  Drawer,
+  DrawerContent,
+  DrawerDescription,
+  DrawerFooter,
+  DrawerHeader,
+  DrawerTitle,
+} from '@/components/ui/drawer';
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from '@/components/ui/sheet';
 import {
   extractPhoneDigits,
   formatPhoneForDisplay,
   isValidPhone,
   normalizePhoneInput,
 } from '@/lib/phone';
+import HomeHeader from '@/components/home/HomeHeader';
+import HomeHero from '@/components/home/HomeHero';
+import HomeCategoryBar from '@/components/home/HomeCategoryBar';
+import ProductGrid from '@/components/home/ProductGrid';
+import type { CategoryKey, HomeProduct, ModoVisualizacao } from '@/components/home/types';
 
-type CategoryKey = 'all' | 'offers' | 'bbq' | 'premium' | 'subscription' | 'contact';
 const menuCategorias: CategoryKey[] = ['all', 'offers', 'bbq', 'premium', 'subscription', 'contact'];
+const quickCategories: CategoryKey[] = ['all', 'offers', 'bbq', 'premium', 'subscription'];
 const categoryDbValueByKey: Record<Exclude<CategoryKey, 'all' | 'contact'>, string> = {
   offers: 'Ofertas da semana',
   bbq: 'Kit churrasco',
@@ -64,7 +69,6 @@ const toNormalizedPhone = (value: string) => {
   return `+${digits}`;
 };
 
-type ModoVisualizacao = 'grid' | 'compact' | 'list';
 type Ordenacao = 'menor-maior' | 'maior-menor';
 type TipoCorte = 'piece' | 'steak' | 'cubes' | 'ground' | 'other';
 type EntregaModo = 'entrega' | 'retirada';
@@ -141,6 +145,7 @@ export default function ClientePage() {
   };
   const { config } = useTenant();
   const { locale } = useI18n();
+  const isMobile = useIsMobile();
   const isEn = locale === 'en';
   const tr = (pt: string, en: string) => (isEn ? en : pt);
   const ui = {
@@ -152,6 +157,9 @@ export default function ClientePage() {
     repeatOrder: isEn ? 'Repeat last order' : 'Repetir ultimo pedido',
     showcase: isEn ? 'Weekly Showcase' : 'Vitrine da Semana',
     heroTitle: isEn ? 'Special cuts for your barbecue' : 'Cortes especiais para seu churrasco',
+    heroSubtitle: isEn
+      ? 'Choose premium cuts, customize the preparation, and complete your order in minutes with pickup or same-day delivery.'
+      : 'Escolha cortes premium, personalize o preparo e finalize seu pedido em minutos com retirada ou entrega no mesmo dia.',
     viewCart: isEn ? 'View Cart' : 'Ver Carrinho',
     finishOrder: isEn ? 'Finish Order' : 'Finalizar Pedido',
     emptyCart: isEn ? 'Your cart is empty.' : 'Seu carrinho esta vazio.',
@@ -238,6 +246,15 @@ export default function ClientePage() {
     subtotal: isEn ? 'Subtotal' : 'Subtotal',
     buyLabel: isEn ? 'Buy:' : 'Comprar:',
     menu: isEn ? 'Menu' : 'Menu',
+    cartSummary: isEn ? 'Cart summary' : 'Resumo do carrinho',
+    mobileFilters: isEn ? 'Catalog filters' : 'Filtros do catalogo',
+    closeFilters: isEn ? 'Close filters' : 'Fechar filtros',
+    productsShown: isEn ? 'Products shown' : 'Produtos exibidos',
+    visualMode: isEn ? 'Visual mode' : 'Modo de visualizacao',
+    clearFilters: isEn ? 'Clear filters' : 'Limpar filtros',
+    curatedSelection: isEn ? 'Curated premium selection' : 'Selecao premium e curada',
+    pickupReady: isEn ? 'Pickup or scheduled delivery' : 'Retirada ou entrega agendada',
+    signOut: isEn ? 'Sign out' : 'Sair',
   };
   const categoryLabel = (category: CategoryKey) =>
     ({
@@ -268,6 +285,7 @@ export default function ClientePage() {
   const [showCount, setShowCount] = useState(12);
   const [ordenacao, setOrdenacao] = useState<Ordenacao>('menor-maior');
   const [modoVisualizacao, setModoVisualizacao] = useState<ModoVisualizacao>('grid');
+  const [filtrosMobileAbertos, setFiltrosMobileAbertos] = useState(false);
   const [itensCarrinho, setItensCarrinho] = useState<ItemCarrinho[]>([]);
   const [carrinhoAberto, setCarrinhoAberto] = useState(false);
   const [checkoutAberto, setCheckoutAberto] = useState(false);
@@ -393,7 +411,7 @@ export default function ClientePage() {
     carregarUsuario();
   }, []);
 
-  const [produtosCatalogo, setProdutosCatalogo] = useState<any[]>([]);
+  const [produtosCatalogo, setProdutosCatalogo] = useState<HomeProduct[]>([]);
   useEffect(() => {
     async function fetchProdutos() {
       const { data, error } = await supabase
@@ -405,7 +423,7 @@ export default function ClientePage() {
         return;
       }
       // Adiciona campos extras para manter compatibilidade visual
-      const produtos = (data || []).map((produto: any) => {
+      const produtos: HomeProduct[] = (data || []).map((produto: any) => {
         const nomeLocalizado = isEn
           ? (produto.nome_en || produto.nome || '')
           : (produto.nome || produto.nome_en || '');
@@ -491,7 +509,7 @@ export default function ClientePage() {
     toast.success(`${nome} (${kg.toFixed(1)} LB - ${cutTypeLabel(tipoCorte)}) ${ui.addToCart.toLowerCase()}`);
   };
 
-  const abrirCompra = (produto: { id: string; nome: string; imagem: string; preco: number }) => {
+  const abrirCompra = (produto: { id: string; nome: string; imagem: string | null; preco: number }) => {
     setProdutoParaCompra(produto);
     setCompraLb('1');
     setCompraTipoCorte('piece');
@@ -539,6 +557,13 @@ export default function ClientePage() {
 
   const removerItem = (itemId: string) => {
     setItensCarrinho((estadoAtual) => estadoAtual.filter((item) => item.id !== itemId));
+  };
+
+  const limparFiltros = () => {
+    setMostrarApenasOfertas(false);
+    setOrdenacao('menor-maior');
+    setModoVisualizacao('grid');
+    setShowCount(12);
   };
 
   const validarEtapaAtual = () => {
@@ -673,203 +698,77 @@ export default function ClientePage() {
     }
   };
 
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+    setUsuarioLogado(false);
+    setEmailLogado('');
+    setNomeLogado('');
+    setPerfilCliente(null);
+    navigate('/login');
+  };
+
   return (
     <div className="min-h-screen bg-background p-0 pb-[calc(7.5rem+env(safe-area-inset-bottom))] md:p-2 md:pb-2 xl:p-3">
       <div className="w-full overflow-hidden border-y border-border bg-card md:rounded-2xl md:border">
-        <div className="flex items-center justify-between gap-3 border-b border-border bg-primary/15 px-4 py-2.5 text-xs text-primary md:px-6 md:text-sm">
-          <p className="font-medium">{ui.shopTitle}</p>
-          <div className="hidden items-center gap-4 md:flex">
-            <span className="inline-flex items-center gap-1"><Truck className="h-3.5 w-3.5" /> {ui.sameDay}</span>
-            <span className="inline-flex items-center gap-1"><Beef className="h-3.5 w-3.5" /> {ui.selectedCuts}</span>
-          </div>
-        </div>
+        <HomeHeader
+          companyName={config.nomeEmpresa}
+          logoUrl={config.logoUrl}
+          shopTitle={ui.shopTitle}
+          sameDayLabel={ui.sameDay}
+          selectedCutsLabel={ui.selectedCuts}
+          searchPlaceholder={ui.searchPlaceholder}
+          searchValue={busca}
+          openProfileLabel={ui.openProfile}
+          cartLabel={ui.cart}
+          menuLabel={ui.menu}
+          loginLabel={ui.doLogin}
+          signupLabel={ui.signUp}
+          repeatOrderLabel={ui.repeatOrder}
+          signOutLabel={ui.signOut}
+          isLoggedIn={usuarioLogado}
+          userName={nomeLogado}
+          cartCount={resumoCarrinho.totalItens}
+          menuOpen={menuAberto}
+          menuCategories={menuCategorias}
+          getCategoryLabel={categoryLabel}
+          onSearchChange={setBusca}
+          onToggleCart={() => setCarrinhoAberto((current) => !current)}
+          onToggleMenu={() => setMenuAberto((current) => !current)}
+          onRepeatOrder={repetirUltimoPedido}
+          onSignOut={handleSignOut}
+          onSelectMenuCategory={(category) => {
+            selecionarCategoria(category);
+            setMenuAberto(false);
+          }}
+        />
 
-        <header className="border-b border-border bg-card/95">
-          <div className="flex flex-wrap items-center gap-4 px-4 py-3 md:px-6 md:py-4">
-            <div className="flex w-full items-center justify-between text-primary md:w-auto">
-              <div className="flex items-center gap-3">
-                <img
-                  src={config.logoUrl}
-                  alt={config.nomeEmpresa}
-                  className="h-12 w-12 rounded-md border border-border object-cover md:h-14 md:w-14"
-                />
-                <span className="text-lg font-semibold text-foreground md:text-xl">{config.nomeEmpresa}</span>
-              </div>
-              <div className="flex items-center gap-2 md:hidden">
-                <button
-                  type="button"
-                  onClick={() => setCarrinhoAberto((estadoAtual) => !estadoAtual)}
-                  className="relative rounded-full border border-border bg-background p-2.5 text-primary"
-                  aria-label={ui.cart}
-                >
-                  <ShoppingCart className="h-6 w-6" />
-                  <span className="absolute -right-1 -top-1 rounded-full bg-primary px-1.5 text-[10px] font-bold text-primary-foreground">
-                    {resumoCarrinho.totalItens}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setMenuAberto((estadoAtual) => !estadoAtual)}
-                  className="rounded-lg border border-border bg-background p-2.5 text-foreground"
-                  aria-label={ui.menu}
-                >
-                  <Menu className="h-6 w-6" />
-                </button>
-              </div>
-            </div>
-
-            <div className="order-3 w-full md:order-none md:mx-6 md:flex-1">
-              <div className="flex h-12 items-center rounded-full border border-border bg-background px-4 md:h-14 md:px-5">
-                <Search className="mr-2 h-5 w-5 text-muted-foreground" />
-                <input
-                  className="w-full bg-transparent text-base text-foreground outline-none placeholder:text-muted-foreground"
-                  placeholder={ui.searchPlaceholder}
-                  value={busca}
-                  onChange={(e) => setBusca(e.target.value)}
-                />
-              </div>
-            </div>
-
-            <div className="ml-auto flex w-full flex-col gap-2 md:w-auto md:flex-row md:items-center">
-              {usuarioLogado ? (
-                <>
-                  <Popover>
-                    <PopoverTrigger asChild>
-                      <button type="button" aria-label={ui.openProfile} className="flex w-full items-center justify-center gap-2 rounded-md border border-border bg-background px-4 py-2 transition hover:bg-accent focus:outline-none focus:ring-2 focus:ring-primary md:w-auto">
-                        <CircleUserRound className="h-5 w-5 text-primary" />
-                        <span className="font-semibold text-foreground text-sm md:text-base">
-                          {nomeLogado}
-                        </span>
-                      </button>
-                    </PopoverTrigger>
-                    <PopoverContent align="end" className="w-56 p-3">
-                      <div className="flex flex-col items-center gap-2">
-                        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary">
-                          <CircleUserRound className="h-6 w-6 text-primary-foreground" />
-                        </div>
-                        <div className="text-center">
-                          <p className="text-sm font-semibold text-foreground">{nomeLogado}</p>
-                        </div>
-                      </div>
-                      <div className="mt-4 flex flex-col gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={async () => {
-                            await supabase.auth.signOut();
-                            setUsuarioLogado(false);
-                            setEmailLogado('');
-                            setNomeLogado('');
-                            setPerfilCliente(null);
-                            navigate('/login');
-                          }}
-                          className="gap-2 w-full"
-                        >
-                          <LogOut className="h-4 w-4" />
-                          {isEn ? 'Sign out' : 'Sair'}
-                        </Button>
-                      </div>
-                    </PopoverContent>
-                  </Popover>
-                </>
-              ) : (
-                <div className="grid w-full grid-cols-2 gap-2 md:flex md:w-auto md:items-center">
-                  <Button asChild variant="outline" className="h-11 w-full gap-2 px-4 text-sm md:h-12 md:w-auto md:text-base">
-                    <Link to="/login">
-                      <CircleUserRound className="h-5 w-5" />
-                      {ui.doLogin}
-                    </Link>
-                  </Button>
-                  <Button asChild variant="ghost" className="h-11 w-full gap-2 px-4 text-sm md:h-12 md:w-auto md:text-base">
-                    <Link to="/cadastro">
-                      <Plus className="h-5 w-5" />
-                      {ui.signUp}
-                    </Link>
-                  </Button>
-                </div>
-              )}
-              <div className="hidden items-center justify-end gap-2 md:flex">
-                <button
-                  type="button"
-                  onClick={() => setCarrinhoAberto((estadoAtual) => !estadoAtual)}
-                  className="relative rounded-full border border-border bg-background p-2.5 text-primary md:p-3"
-                  aria-label={ui.cart}
-                >
-                  <ShoppingCart className="h-6 w-6" />
-                  <span className="absolute -right-1 -top-1 rounded-full bg-primary px-1.5 text-[10px] font-bold text-primary-foreground">
-                    {resumoCarrinho.totalItens}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setMenuAberto((estadoAtual) => !estadoAtual)}
-                  className="rounded-lg border border-border bg-background p-2.5 text-foreground md:p-3"
-                  aria-label={ui.menu}
-                >
-                  <Menu className="h-6 w-6" />
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {menuAberto ? (
-            <div className="border-t border-border bg-background px-4 py-3 md:px-6">
-              <div className="flex flex-wrap gap-2">
-                {menuCategorias.map((categoria) => (
-                  <button
-                    key={`menu-${categoria}`}
-                    type="button"
-                    onClick={() => {
-                      selecionarCategoria(categoria);
-                      setMenuAberto(false);
-                    }}
-                    className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:border-primary/40"
-                  >
-                    {categoryLabel(categoria)}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ) : null}
-
-          <div className="border-t border-border px-3 py-2 md:px-6">
-            <div className="flex flex-wrap gap-1.5">
-              {menuCategorias.map((categoria) => (
-                <button
-                  key={categoria}
-                  type="button"
-                  onClick={() => selecionarCategoria(categoria)}
-                  className={`rounded-md px-3 py-2 text-xs font-semibold uppercase tracking-wide md:text-sm ${
-                    categoria === categoriaAtiva
-                      ? 'gold-gradient-bg text-accent-foreground'
-                      : 'bg-muted text-muted-foreground'
-                  }`}
-                >
-                  {categoryLabel(categoria)}
-                </button>
-              ))}
-            </div>
-          </div>
-        </header>
+        <HomeCategoryBar
+          categories={quickCategories}
+          activeCategory={categoriaAtiva}
+          getCategoryLabel={categoryLabel}
+          onSelectCategory={selecionarCategoria}
+        />
 
         <main className="space-y-5 px-4 py-4 md:px-6 md:py-5">
-          <section className="rounded-xl border border-border bg-background p-4 md:p-5">
-            {usuarioLogado && (
-              <div className="mb-4 flex justify-end">
-                <Button onClick={repetirUltimoPedido} className="gold-gradient-bg text-accent-foreground font-semibold">{ui.repeatOrder}</Button>
-              </div>
-            )}
-            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-wider text-primary">{ui.showcase}</p>
-                <h1 className="mt-1 text-2xl font-bold text-foreground md:text-3xl">{ui.heroTitle}</h1>
-                
-              </div>
-              <Button type="button" onClick={() => setCarrinhoAberto(true)} className="w-full gold-gradient-bg text-accent-foreground font-semibold md:w-auto">
-                {ui.viewCart} ({precoFormatado(resumoCarrinho.totalValor)})
-              </Button>
-            </div>
-          </section>
+          <HomeHero
+            badgeLabel={ui.showcase}
+            title={ui.heroTitle}
+            subtitle={ui.heroSubtitle}
+            primaryCtaLabel={`${ui.viewCart} (${precoFormatado(resumoCarrinho.totalValor)})`}
+            secondaryCtaLabel={ui.repeatOrder}
+            cartLabel={ui.cartSummary}
+            cartItemsLabel={ui.cartItems}
+            selectedCutsLabel={ui.selectedCuts}
+            curatedLabel={ui.curatedSelection}
+            deliveryLabel={ui.sameDay}
+            pickupLabel={ui.pickupReady}
+            totalLabel={ui.total}
+            summary={resumoCarrinho}
+            isLoggedIn={usuarioLogado}
+            onPrimaryAction={() => setCarrinhoAberto(true)}
+            onSecondaryAction={repetirUltimoPedido}
+            formatPrice={(value) => precoFormatado(value)}
+          />
 
           {produtoParaCompra ? (
             <section id="form-compra-produto" className="rounded-xl border border-primary/35 bg-background p-4">
@@ -951,7 +850,7 @@ export default function ClientePage() {
             </section>
           ) : null}
 
-          {carrinhoAberto ? (
+          {!isMobile && carrinhoAberto ? (
             <section className="rounded-xl border border-primary/35 bg-background p-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-sm font-semibold text-foreground">{ui.cart} ({resumoCarrinho.totalItens} {ui.cartItems} • {resumoCarrinho.totalLb.toFixed(1)}kg)</p>
@@ -1147,120 +1046,36 @@ export default function ClientePage() {
             </section>
           ) : null}
 
-          <div className="flex flex-col gap-2 rounded-lg border border-border bg-background px-3 py-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between md:px-4">
-            <button
-              type="button"
-              onClick={() => setMostrarApenasOfertas((estadoAtual) => !estadoAtual)}
-              className={cn(
-                'inline-flex items-center gap-2 self-start rounded-md px-2 py-1 text-sm',
-                mostrarApenasOfertas ? 'bg-primary/15 text-primary' : 'text-foreground',
-              )}
-            >
-              <ListFilter className="h-4 w-4 text-primary" />
-              {mostrarApenasOfertas ? ui.onlyOffers : ui.filters}
-            </button>
-            <div className="max-w-full overflow-x-auto whitespace-nowrap text-sm text-muted-foreground">
-              Show:{' '}
-              {[9, 12, 18, 24].map((valor) => (
-                <button
-                  key={valor}
-                  type="button"
-                  onClick={() => setShowCount(valor)}
-                  className={cn('mx-1', showCount === valor ? 'font-semibold text-foreground' : 'hover:text-foreground')}
-                >
-                  {valor}
-                </button>
-              ))}
-            </div>
-            <div className="flex items-center gap-2 text-muted-foreground">
-              <button type="button" onClick={() => setModoVisualizacao('grid')} className={cn(modoVisualizacao === 'grid' ? 'text-primary' : 'hover:text-foreground')}>
-                <LayoutGrid className="h-4 w-4" />
-              </button>
-              <button type="button" onClick={() => setModoVisualizacao('compact')} className={cn(modoVisualizacao === 'compact' ? 'text-primary' : 'hover:text-foreground')}>
-                <Grid2x2 className="h-4 w-4" />
-              </button>
-              <button type="button" onClick={() => setModoVisualizacao('list')} className={cn(modoVisualizacao === 'list' ? 'text-primary' : 'hover:text-foreground')}>
-                <List className="h-4 w-4" />
-              </button>
-            </div>
-            <button
-              type="button"
-              onClick={() => setOrdenacao((ordemAtual) => (ordemAtual === 'menor-maior' ? 'maior-menor' : 'menor-maior'))}
-              className="inline-flex items-center gap-1 self-start text-sm text-muted-foreground hover:text-foreground sm:self-auto"
-            >
-              <span className="sm:hidden">{ordenacao === 'menor-maior' ? ui.lowerPrice : ui.higherPrice}</span>
-              <span className="hidden sm:inline">
-                {ui.orderByPrice}: <span className="text-foreground">{ordenacao === 'menor-maior' ? ui.lowToHigh : ui.highToLow}</span>
-              </span>
-              <ChevronDown className="h-4 w-4" />
-            </button>
-          </div>
-
-          <div className={cn(
-            modoVisualizacao === 'list'
-              ? 'grid grid-cols-1 gap-3'
-              : modoVisualizacao === 'compact'
-                ? 'grid grid-cols-1 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5'
-                : 'grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4',
-          )}>
-            {produtosFiltrados.map((produto) => (
-              <article key={produto.id} className="overflow-hidden rounded-xl border border-border bg-card card-elevated">
-                <div className={cn(
-                  'relative bg-[linear-gradient(160deg,hsl(var(--muted))_0%,hsl(var(--background))_65%,hsl(var(--muted))_100%)]',
-                  modoVisualizacao === 'compact' ? 'h-32 md:h-36' : 'h-44 md:h-52',
-                )}>
-                  <img
-                    src={produto.imagem || ''}
-                    alt={produto.nome}
-                    className={produto.imagem ? "h-full w-full object-cover" : "hidden"}
-                    loading="lazy"
-                  />
-                  <div className="absolute inset-0 bg-[linear-gradient(to_top,hsl(var(--background)/0.56),transparent_45%)]" />
-                  <span className="absolute left-3 top-3 rounded-full bg-primary px-2.5 py-1 text-[10px] font-bold text-primary-foreground">
-                    {produto.selo}
-                  </span>
-                </div>
-                <div className="space-y-3 p-4">
-                  <h3 className="line-clamp-2 text-lg font-semibold text-foreground">{produto.nome}</h3>
-                  {produto.destaque ? (
-                    <div className="flex items-center gap-1 text-primary">
-                      {Array.from({ length: 5 }).map((_, idx) => (
-                        <Star key={idx} className="h-3.5 w-3.5 fill-current" />
-                      ))}
-                    </div>
-                  ) : null}
-                  <div>
-                    <p className="text-xs text-muted-foreground line-through">de {precoFormatado(produto.precoAnterior)}</p>
-                    <p className="text-2xl font-bold text-primary md:text-3xl">{precoFormatado(produto.preco)}</p>
-                    <p className="text-xs text-muted-foreground">{ui.pricePerLb}</p>
-                  </div>
-
-                  <Button
-                    type="button"
-                    onClick={() => abrirCompra({ id: produto.id, nome: produto.nome, imagem: produto.imagem, preco: produto.preco })}
-                    className="w-full gold-gradient-bg text-accent-foreground"
-                  >
-                    {ui.buy}
-                  </Button>
-                </div>
-              </article>
-            ))}
-          </div>
-          {produtosFiltrados.length < produtosCatalogo.length && (
-            <div className="flex justify-center mt-6">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setShowCount((prev) => prev + 12)}
-                className="px-6 py-2 text-base font-semibold"
-              >
-                {ui.loadMore}
-              </Button>
-            </div>
-          )}
+          <ProductGrid
+            products={produtosFiltrados}
+            totalProducts={produtosCatalogo.length}
+            mode={modoVisualizacao}
+            showOnlyOffers={mostrarApenasOfertas}
+            showCount={showCount}
+            priceOrderLabel={ui.orderByPrice}
+            filtersLabel={ui.filters}
+            onlyOffersLabel={ui.onlyOffers}
+            lowerPriceLabel={ui.lowerPrice}
+            higherPriceLabel={ui.higherPrice}
+            lowToHighLabel={ui.lowToHigh}
+            highToLowLabel={ui.highToLow}
+            pricePerLbLabel={ui.pricePerLb}
+            loadMoreLabel={ui.loadMore}
+            buyLabel={ui.buy}
+            isAscending={ordenacao === 'menor-maior'}
+            isMobile={isMobile}
+            onOpenMobileFilters={() => setFiltrosMobileAbertos(true)}
+            onToggleOffers={() => setMostrarApenasOfertas((estadoAtual) => !estadoAtual)}
+            onToggleOrder={() => setOrdenacao((ordemAtual) => (ordemAtual === 'menor-maior' ? 'maior-menor' : 'menor-maior'))}
+            onChangeMode={setModoVisualizacao}
+            onChangeShowCount={setShowCount}
+            onLoadMore={() => setShowCount((prev) => prev + 12)}
+            onBuy={abrirCompra}
+            formatPrice={precoFormatado}
+          />
         </main>
 
-        <footer className="border-t border-border bg-muted/70 px-4 py-3 md:px-6">
+        <footer className="hidden border-t border-border bg-muted/70 px-4 py-3 md:block md:px-6">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <button type="button" onClick={() => setCarrinhoAberto(true)} className="rounded-lg gold-gradient-bg px-4 py-2.5 text-sm font-bold text-accent-foreground">
               {ui.viewCart.toUpperCase()} ({precoFormatado(resumoCarrinho.totalValor)})
@@ -1272,6 +1087,177 @@ export default function ClientePage() {
           </div>
         </footer>
       </div>
+
+      {isMobile ? (
+        <Drawer open={carrinhoAberto} onOpenChange={setCarrinhoAberto}>
+          <DrawerContent className="max-h-[85vh] rounded-t-[24px] border-border bg-card">
+            <DrawerHeader className="pb-2 text-left">
+              <DrawerTitle>{ui.cartSummary}</DrawerTitle>
+              <DrawerDescription>
+                {ui.cart} ({resumoCarrinho.totalItens} {ui.cartItems} • {resumoCarrinho.totalLb.toFixed(1)} LB)
+              </DrawerDescription>
+            </DrawerHeader>
+
+            <div className="overflow-y-auto px-4 pb-4">
+              {itensCarrinho.length ? (
+                <div className="space-y-2">
+                  {itensCarrinho.map((item) => (
+                    <div key={item.id} className="rounded-xl border border-border bg-background p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold text-foreground">{item.nome}</p>
+                          <p className="text-xs text-muted-foreground">{cutTypeLabel(item.tipoCorte)} • {precoFormatado(item.precoKg)}/LB</p>
+                          {item.observacoes ? <p className="mt-1 text-xs text-muted-foreground">Obs: {item.observacoes}</p> : null}
+                        </div>
+                        <button type="button" onClick={() => removerItem(item.id)} className="shrink-0 text-muted-foreground hover:text-destructive">
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+
+                      <div className="mt-3 flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-1">
+                          <button type="button" onClick={() => alterarKgItem(item.id, -0.1)} className="rounded-md border border-border p-1.5">
+                            <Minus className="h-3.5 w-3.5" />
+                          </button>
+                          <span className="min-w-16 text-center text-sm text-foreground">{item.kg.toFixed(1)} LB</span>
+                          <button type="button" onClick={() => alterarKgItem(item.id, 0.1)} className="rounded-md border border-border p-1.5">
+                            <Plus className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                        <p className="text-sm font-semibold text-primary">{precoFormatado(item.kg * item.precoKg)}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-xl border border-dashed border-border bg-background px-4 py-8 text-center text-sm text-muted-foreground">
+                  {ui.emptyCart}
+                </div>
+              )}
+            </div>
+
+            <DrawerFooter className="border-t border-border bg-card pb-[calc(1rem+env(safe-area-inset-bottom))]">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-muted-foreground">{ui.total}</span>
+                <span className="font-semibold text-primary">{precoFormatado(resumoCarrinho.totalValor)}</span>
+              </div>
+              <Button
+                type="button"
+                className="gold-gradient-bg text-accent-foreground"
+                onClick={() => {
+                  if (!itensCarrinho.length) {
+                    toast.error(ui.addCartToContinue);
+                    return;
+                  }
+                  setCarrinhoAberto(false);
+                  setCheckoutAberto(true);
+                }}
+              >
+                {ui.finishOrder}
+              </Button>
+            </DrawerFooter>
+          </DrawerContent>
+        </Drawer>
+      ) : null}
+
+      {isMobile ? (
+        <Sheet open={filtrosMobileAbertos} onOpenChange={setFiltrosMobileAbertos}>
+          <SheetContent side="right" className="w-[88vw] border-border bg-card px-4">
+            <SheetHeader className="mt-6 text-left">
+              <SheetTitle>{ui.mobileFilters}</SheetTitle>
+              <SheetDescription>{ui.filters}</SheetDescription>
+            </SheetHeader>
+
+            <div className="mt-6 space-y-6">
+              <section className="space-y-3">
+                <p className="text-sm font-semibold text-foreground">{ui.filters}</p>
+                <button
+                  type="button"
+                  onClick={() => setMostrarApenasOfertas((estadoAtual) => !estadoAtual)}
+                  className={cn(
+                    'inline-flex w-full items-center justify-center rounded-lg border px-3 py-2 text-sm',
+                    mostrarApenasOfertas ? 'border-primary bg-primary/10 text-primary' : 'border-border text-foreground',
+                  )}
+                >
+                  {mostrarApenasOfertas ? ui.onlyOffers : ui.filters}
+                </button>
+              </section>
+
+              <section className="space-y-3">
+                <p className="text-sm font-semibold text-foreground">{ui.orderByPrice}</p>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setOrdenacao('menor-maior')}
+                    className={cn('rounded-lg border px-3 py-2 text-sm', ordenacao === 'menor-maior' ? 'border-primary bg-primary/10 text-primary' : 'border-border text-foreground')}
+                  >
+                    {ui.lowToHigh}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setOrdenacao('maior-menor')}
+                    className={cn('rounded-lg border px-3 py-2 text-sm', ordenacao === 'maior-menor' ? 'border-primary bg-primary/10 text-primary' : 'border-border text-foreground')}
+                  >
+                    {ui.highToLow}
+                  </button>
+                </div>
+              </section>
+
+              <section className="space-y-3">
+                <p className="text-sm font-semibold text-foreground">{ui.productsShown}</p>
+                <div className="grid grid-cols-4 gap-2">
+                  {[9, 12, 18, 24].map((valor) => (
+                    <button
+                      key={valor}
+                      type="button"
+                      onClick={() => setShowCount(valor)}
+                      className={cn('rounded-lg border px-2 py-2 text-sm', showCount === valor ? 'border-primary bg-primary/10 text-primary' : 'border-border text-foreground')}
+                    >
+                      {valor}
+                    </button>
+                  ))}
+                </div>
+              </section>
+
+              <section className="space-y-3">
+                <p className="text-sm font-semibold text-foreground">{ui.visualMode}</p>
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setModoVisualizacao('grid')}
+                    className={cn('rounded-lg border px-3 py-2 text-sm', modoVisualizacao === 'grid' ? 'border-primary bg-primary/10 text-primary' : 'border-border text-foreground')}
+                  >
+                    Grid
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setModoVisualizacao('compact')}
+                    className={cn('rounded-lg border px-3 py-2 text-sm', modoVisualizacao === 'compact' ? 'border-primary bg-primary/10 text-primary' : 'border-border text-foreground')}
+                  >
+                    Compact
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setModoVisualizacao('list')}
+                    className={cn('rounded-lg border px-3 py-2 text-sm', modoVisualizacao === 'list' ? 'border-primary bg-primary/10 text-primary' : 'border-border text-foreground')}
+                  >
+                    List
+                  </button>
+                </div>
+              </section>
+
+              <div className="flex gap-2 pb-6">
+                <Button type="button" variant="outline" className="flex-1" onClick={limparFiltros}>
+                  {ui.clearFilters}
+                </Button>
+                <Button type="button" className="flex-1 gold-gradient-bg text-accent-foreground" onClick={() => setFiltrosMobileAbertos(false)}>
+                  {ui.closeFilters}
+                </Button>
+              </div>
+            </div>
+          </SheetContent>
+        </Sheet>
+      ) : null}
 
       <nav className="fixed bottom-[max(1rem,env(safe-area-inset-bottom))] left-1/2 z-40 w-[min(92vw,520px)] -translate-x-1/2 rounded-3xl border border-border/70 bg-card/95 p-2 shadow-2xl backdrop-blur md:hidden">
         <div className="grid grid-cols-3 gap-2">
@@ -1291,21 +1277,32 @@ export default function ClientePage() {
             onClick={() => setCarrinhoAberto(true)}
             className="flex flex-col items-center justify-center gap-1 rounded-2xl py-2 text-[11px] font-semibold text-primary"
           >
-            <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-md">
+            <span className="relative flex h-11 w-11 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-md">
               <ShoppingCart className="h-5 w-5" />
+              {resumoCarrinho.totalItens > 0 ? (
+                <span className="absolute -right-1 -top-1 rounded-full bg-background px-1.5 text-[10px] font-bold text-foreground">
+                  {resumoCarrinho.totalItens}
+                </span>
+              ) : null}
             </span>
             {ui.cart}
           </button>
 
           <button
             type="button"
-            onClick={() => navigate('/login')}
+            onClick={() => {
+              if (usuarioLogado) {
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+                return;
+              }
+              navigate('/login');
+            }}
             className="flex flex-col items-center justify-center gap-1 rounded-2xl py-2 text-[11px] font-medium text-foreground/80 transition hover:bg-muted"
           >
             <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-muted text-foreground">
-              <LogIn className="h-5 w-5" />
+              {usuarioLogado ? <CircleUserRound className="h-5 w-5" /> : <LogIn className="h-5 w-5" />}
             </span>
-            {ui.doLogin}
+            {usuarioLogado ? tr('Conta', 'Account') : ui.doLogin}
           </button>
         </div>
       </nav>

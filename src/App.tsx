@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -8,22 +9,23 @@ import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import { I18nProvider } from "@/contexts/I18nContext";
 import DashboardLayout from "@/components/DashboardLayout";
 import LoginPage from "@/pages/LoginPage";
-import DashboardPage from "@/pages/DashboardPage";
-import EstoquePage from "@/pages/EstoquePage";
-import CadastroLotePage from "@/pages/CadastroLotePage";
-import PedidosPage from "@/pages/PedidosPage";
-import NovoPedidoPage from "@/pages/NovoPedidoPage";
-import RelatoriosPage from "@/pages/RelatoriosPage";
-import ProductsAdminPage from "@/pages/ProductsAdminPage";
 import ClientePage from "@/pages/ClientePage";
 import NotFound from "@/pages/NotFound";
-import ClientesAdminPage from "@/pages/ClientesAdminPage";
 import CadastroPage from "@/pages/CadastroPage";
-import VendasPage from "@/pages/VendasPage";
-import FinanceiroPage from "@/pages/FinanceiroPage";
-import FuncionariosPage from "@/pages/FuncionariosPage";
-import AssistentePage from "@/pages/AssistentePage";
-import ConfiguracoesPage from "@/pages/ConfiguracoesPage";
+
+const DashboardPage = lazy(() => import("@/pages/DashboardPage"));
+const EstoquePage = lazy(() => import("@/pages/EstoquePage"));
+const CadastroLotePage = lazy(() => import("@/pages/CadastroLotePage"));
+const PedidosPage = lazy(() => import("@/pages/PedidosPage"));
+const NovoPedidoPage = lazy(() => import("@/pages/NovoPedidoPage"));
+const RelatoriosPage = lazy(() => import("@/pages/RelatoriosPage"));
+const ProductsAdminPage = lazy(() => import("@/pages/ProductsAdminPage"));
+const ClientesAdminPage = lazy(() => import("@/pages/ClientesAdminPage"));
+const VendasPage = lazy(() => import("@/pages/VendasPage"));
+const FinanceiroPage = lazy(() => import("@/pages/FinanceiroPage"));
+const FuncionariosPage = lazy(() => import("@/pages/FuncionariosPage"));
+const AssistentePage = lazy(() => import("@/pages/AssistentePage"));
+const ConfiguracoesPage = lazy(() => import("@/pages/ConfiguracoesPage"));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -43,6 +45,12 @@ const AdminRoute = () => {
   return role === "admin" ? <Outlet /> : <Navigate to="/login" replace />;
 };
 
+const RouteFallback = () => (
+  <div className="flex min-h-[40vh] items-center justify-center text-sm text-muted-foreground">
+    Carregando pagina...
+  </div>
+);
+
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <I18nProvider>
@@ -59,19 +67,19 @@ const App = () => (
 
                 <Route path="/admin" element={<AdminRoute />}>
                   <Route element={<DashboardLayout />}>
-                    <Route index element={<DashboardPage />} />
-                    <Route path="estoque" element={<EstoquePage />} />
-                    <Route path="lotes/novo" element={<CadastroLotePage />} />
-                    <Route path="pedidos" element={<PedidosPage />} />
-                    <Route path="pedidos/novo" element={<NovoPedidoPage />} />
-                    <Route path="clientes" element={<ClientesAdminPage />} />
-                    <Route path="produtos" element={<ProductsAdminPage />} />
-                    <Route path="vendas" element={<VendasPage />} />
-                    <Route path="financeiro" element={<FinanceiroPage />} />
-                    <Route path="funcionarios" element={<FuncionariosPage />} />
-                    <Route path="relatorios" element={<RelatoriosPage />} />
-                    <Route path="assistente" element={<AssistentePage />} />
-                    <Route path="configuracoes" element={<ConfiguracoesPage />} />
+                    <Route index element={<Suspense fallback={<RouteFallback />}><DashboardPage /></Suspense>} />
+                    <Route path="estoque" element={<Suspense fallback={<RouteFallback />}><EstoquePage /></Suspense>} />
+                    <Route path="lotes/novo" element={<Suspense fallback={<RouteFallback />}><CadastroLotePage /></Suspense>} />
+                    <Route path="pedidos" element={<Suspense fallback={<RouteFallback />}><PedidosPage /></Suspense>} />
+                    <Route path="pedidos/novo" element={<Suspense fallback={<RouteFallback />}><NovoPedidoPage /></Suspense>} />
+                    <Route path="clientes" element={<Suspense fallback={<RouteFallback />}><ClientesAdminPage /></Suspense>} />
+                    <Route path="produtos" element={<Suspense fallback={<RouteFallback />}><ProductsAdminPage /></Suspense>} />
+                    <Route path="vendas" element={<Suspense fallback={<RouteFallback />}><VendasPage /></Suspense>} />
+                    <Route path="financeiro" element={<Suspense fallback={<RouteFallback />}><FinanceiroPage /></Suspense>} />
+                    <Route path="funcionarios" element={<Suspense fallback={<RouteFallback />}><FuncionariosPage /></Suspense>} />
+                    <Route path="relatorios" element={<Suspense fallback={<RouteFallback />}><RelatoriosPage /></Suspense>} />
+                    <Route path="assistente" element={<Suspense fallback={<RouteFallback />}><AssistentePage /></Suspense>} />
+                    <Route path="configuracoes" element={<Suspense fallback={<RouteFallback />}><ConfiguracoesPage /></Suspense>} />
                   </Route>
                 </Route>
 

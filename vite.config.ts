@@ -17,4 +17,31 @@ export default defineConfig(() => ({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes("node_modules")) {
+            if (id.includes("@supabase")) return "supabase-vendor";
+            if (id.includes("recharts")) return "charts";
+            if (id.includes("jspdf")) return "pdf";
+            if (
+              id.includes("react") ||
+              id.includes("react-dom") ||
+              id.includes("react-router-dom") ||
+              id.includes("@tanstack/react-query")
+            ) {
+              return "react-vendor";
+            }
+          }
+
+          if (id.includes("/src/pages/") && !id.includes("/src/pages/ClientePage.tsx") && !id.includes("/src/pages/LoginPage.tsx") && !id.includes("/src/pages/CadastroPage.tsx") && !id.includes("/src/pages/NotFound.tsx")) {
+            return "admin-pages";
+          }
+
+          return undefined;
+        },
+      },
+    },
+  },
 }));

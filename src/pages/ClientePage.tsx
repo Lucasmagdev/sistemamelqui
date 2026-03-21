@@ -1203,7 +1203,7 @@ export default function ClientePage() {
                 ? 'grid grid-cols-1 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5'
                 : 'grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4',
           )}>
-            {produtosFiltrados.map((produto) => (
+            {produtosFiltrados.map((produto, index) => (
               <article key={produto.id} className="overflow-hidden rounded-xl border border-border bg-card card-elevated">
                 <div className={cn(
                   'relative bg-[linear-gradient(160deg,hsl(var(--muted))_0%,hsl(var(--background))_65%,hsl(var(--muted))_100%)]',
@@ -1213,7 +1213,11 @@ export default function ClientePage() {
                     src={produto.imagem || ''}
                     alt={produto.nome}
                     className={produto.imagem ? "h-full w-full object-cover" : "hidden"}
-                    loading="lazy"
+                    loading={index === 0 ? "eager" : "lazy"}
+                    fetchPriority={index === 0 ? "high" : "auto"}
+                    decoding="async"
+                    width={modoVisualizacao === 'compact' ? 320 : 420}
+                    height={modoVisualizacao === 'compact' ? 144 : 208}
                   />
                   <div className="absolute inset-0 bg-[linear-gradient(to_top,hsl(var(--background)/0.56),transparent_45%)]" />
                   <span className="absolute left-3 top-3 rounded-full bg-primary px-2.5 py-1 text-[10px] font-bold text-primary-foreground">

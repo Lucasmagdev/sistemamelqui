@@ -1,7 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, ChevronDown, ChevronUp, Download, Plus, Printer, Trash2 } from "lucide-react";
-import { jsPDF } from "jspdf";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -207,7 +206,16 @@ export default function VendasPage() {
   };
 
   const downloadReceiptPdf = async (sale: any) => {
-    const doc = new jsPDF({ unit: "pt", format: "a4" });
+    let jsPDFConstructor: any;
+    try {
+      const module = await import("jspdf");
+      jsPDFConstructor = module.jsPDF;
+    } catch {
+      toast.error("Nao foi possivel carregar o gerador de PDF.");
+      return;
+    }
+
+    const doc = new jsPDFConstructor({ unit: "pt", format: "a4" });
     const pageWidth = doc.internal.pageSize.getWidth();
     const pageHeight = doc.internal.pageSize.getHeight();
     const left = 42;

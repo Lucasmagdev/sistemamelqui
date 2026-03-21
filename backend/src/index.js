@@ -363,6 +363,11 @@ function parseJsonSafe(value, fallback = null) {
   }
 }
 
+function isValueTooLongError(error) {
+  const message = String(error?.message || "").toLowerCase();
+  return String(error?.code || "") === "22001" || message.includes("value too long for type character varying");
+}
+
 function normalizeTemplateText(value, fallback = "") {
   const text = String(value || "").replace(/\r\n/g, "\n").trim();
   return text || fallback;
@@ -442,6 +447,13 @@ async function saveZapiMessageTemplates(tenantId, templates) {
     if (existing.data?.[0]?.id) {
       const updateResult = await supabase.from("settings").update({ valor: payload.valor }).eq("id", existing.data[0].id);
       if (updateResult.error) {
+        if (isValueTooLongError(updateResult.error)) {
+          throw createHttpError(
+            500,
+            "Erro ao salvar configuracao da Z-API.",
+            "A coluna settings.valor ainda esta curta. Execute o SQL banco de dados/ajuste_settings_valor_text.sql",
+          );
+        }
         throw createHttpError(500, "Erro ao salvar configuracao da Z-API.", updateResult.error.message);
       }
       continue;
@@ -449,6 +461,13 @@ async function saveZapiMessageTemplates(tenantId, templates) {
 
     const insertResult = await supabase.from("settings").insert([payload]);
     if (insertResult.error) {
+      if (isValueTooLongError(insertResult.error)) {
+        throw createHttpError(
+          500,
+          "Erro ao criar configuracao da Z-API.",
+          "A coluna settings.valor ainda esta curta. Execute o SQL banco de dados/ajuste_settings_valor_text.sql",
+        );
+      }
       throw createHttpError(500, "Erro ao criar configuracao da Z-API.", insertResult.error.message);
     }
   }

@@ -35,10 +35,6 @@ export default defineConfig(() => ({
             }
           }
 
-          if (id.includes("/src/pages/") && !id.includes("/src/pages/ClientePage.tsx") && !id.includes("/src/pages/LoginPage.tsx") && !id.includes("/src/pages/CadastroPage.tsx") && !id.includes("/src/pages/NotFound.tsx")) {
-            return "admin-pages";
-          }
-
           return undefined;
         },
       },

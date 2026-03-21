@@ -36,7 +36,10 @@ const queryClient = new QueryClient({
 });
 
 const AdminRoute = () => {
-  const { role } = useAuth();
+  const { role, loading } = useAuth();
+  if (loading) {
+    return <div className="flex min-h-screen items-center justify-center bg-background text-sm text-muted-foreground">Carregando sessao...</div>;
+  }
   return role === "admin" ? <Outlet /> : <Navigate to="/login" replace />;
 };
 

@@ -42,6 +42,9 @@ export default function FuncionariosPage() {
   const [paidAt, setPaidAt] = useState(new Date().toISOString().slice(0, 16));
   const [paymentNotes, setPaymentNotes] = useState("");
   const [paymentFile, setPaymentFile] = useState<File | null>(null);
+  const [editingPaymentId, setEditingPaymentId] = useState<number | null>(null);
+  const [existingPaymentAttachmentUrl, setExistingPaymentAttachmentUrl] = useState<string | null>(null);
+  const [removePaymentAttachment, setRemovePaymentAttachment] = useState(false);
   const [historySearch, setHistorySearch] = useState("");
   const [historyEmployeeId, setHistoryEmployeeId] = useState("all");
   const [historyProofStatus, setHistoryProofStatus] = useState("all");
@@ -110,8 +113,8 @@ export default function FuncionariosPage() {
   const submitPaymentMutation = useMutation({
     mutationFn: async () => {
       const attachmentBase64 = paymentFile ? await readFileAsDataUrl(paymentFile) : null;
-      return backendRequest("/api/employee-payments", {
-        method: "POST",
+      return backendRequest(editingPaymentId ? `/api/employee-payments/${editingPaymentId}` : "/api/employee-payments", {
+        method: editingPaymentId ? "PATCH" : "POST",
         body: JSON.stringify({
           employeeId: paymentEmployeeId,
           weekReference,
@@ -121,6 +124,7 @@ export default function FuncionariosPage() {
           attachmentBase64,
           attachmentName: paymentFile?.name || null,
           attachmentMimeType: paymentFile?.type || null,
+          removeAttachment: removePaymentAttachment,
           createdBy: window.localStorage.getItem("imperial-flow-nome") || "admin",
         }),
       });
@@ -131,9 +135,12 @@ export default function FuncionariosPage() {
       setPaidAt(new Date().toISOString().slice(0, 16));
       setPaymentNotes("");
       setPaymentFile(null);
+      setEditingPaymentId(null);
+      setExistingPaymentAttachmentUrl(null);
+      setRemovePaymentAttachment(false);
       setPaymentAdvancedOpen(false);
       setPaymentFormOpen(false);
-      toast.success("Pagamento registrado");
+      toast.success(editingPaymentId ? "Pagamento atualizado" : "Pagamento registrado");
       queryClient.invalidateQueries({ queryKey: ["admin", "employees-dashboard"] });
       queryClient.invalidateQueries({ queryKey: ["admin", "employee-payments-summary"] });
       queryClient.invalidateQueries({ queryKey: ["admin", "employee-payments-history"] });
@@ -144,6 +151,57 @@ export default function FuncionariosPage() {
       toast.error(error.message || "Erro ao registrar pagamento");
     },
   });
+
+  const deletePaymentMutation = useMutation({
+    mutationFn: (paymentId: number) => backendRequest(`/api/employee-payments/${paymentId}`, { method: "DELETE" }),
+    onSuccess: () => {
+      toast.success("Pagamento excluido");
+      queryClient.invalidateQueries({ queryKey: ["admin", "employees-dashboard"] });
+      queryClient.invalidateQueries({ queryKey: ["admin", "employee-payments-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["admin", "employee-payments-history"] });
+      queryClient.invalidateQueries({ queryKey: ["admin", "finance-overview"] });
+      queryClient.invalidateQueries({ queryKey: ["admin", "operational-report"] });
+    },
+    onError: (error: any) => {
+      toast.error(error.message || "Erro ao excluir pagamento");
+    },
+  });
+
+  const openPaymentAttachment = async (paymentId: number) => {
+    try {
+      const response = await backendRequest<{ signedUrl: string }>(`/api/admin/attachments/employee-payment/${paymentId}`);
+      if (response?.signedUrl) window.open(response.signedUrl, "_blank", "noopener,noreferrer");
+    } catch (error: any) {
+      toast.error(error.message || "Erro ao abrir comprovante");
+    }
+  };
+
+  const startPaymentEdit = (payment: any) => {
+    setEditingPaymentId(Number(payment.id));
+    setPaymentEmployeeId(String(payment.employee_id));
+    setWeekReference(String(payment.week_reference || today).slice(0, 10));
+    setPaymentAmount(String(payment.amount || ""));
+    setPaidAt(payment.paid_at ? new Date(payment.paid_at).toISOString().slice(0, 16) : new Date().toISOString().slice(0, 16));
+    setPaymentNotes(payment.notes || "");
+    setPaymentFile(null);
+    setExistingPaymentAttachmentUrl(payment.attachment_url || null);
+    setRemovePaymentAttachment(false);
+    setPaymentAdvancedOpen(Boolean(payment.attachment_url || payment.notes));
+    setPaymentFormOpen(true);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const resetPaymentForm = () => {
+    setEditingPaymentId(null);
+    setWeekReference(today);
+    setPaymentAmount("");
+    setPaidAt(new Date().toISOString().slice(0, 16));
+    setPaymentNotes("");
+    setPaymentFile(null);
+    setExistingPaymentAttachmentUrl(null);
+    setRemovePaymentAttachment(false);
+    setPaymentAdvancedOpen(false);
+  };
 
   const toggleEmployeeMutation = useMutation({
     mutationFn: (employee: any) =>
@@ -234,10 +292,13 @@ export default function FuncionariosPage() {
         <Card className="p-5">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <h2 className="text-lg font-semibold text-foreground">Registrar pagamento</h2>
+              <h2 className="text-lg font-semibold text-foreground">{editingPaymentId ? `Editando pagamento #${editingPaymentId}` : "Registrar pagamento"}</h2>
               <p className="mt-1 text-sm text-muted-foreground">Esse registro entra automaticamente no total de saidas do mes.</p>
             </div>
-            <Button type="button" variant={paymentFormOpen ? "outline" : "default"} className={paymentFormOpen ? "" : "bg-primary text-primary-foreground hover:bg-primary/90"} onClick={() => setPaymentFormOpen((current) => !current)}>
+            <Button type="button" variant={paymentFormOpen ? "outline" : "default"} className={paymentFormOpen ? "" : "bg-primary text-primary-foreground hover:bg-primary/90"} onClick={() => {
+              if (paymentFormOpen && editingPaymentId) resetPaymentForm();
+              setPaymentFormOpen((current) => !current);
+            }}>
               {paymentFormOpen ? "Fechar" : "Lancar pagamento"}
             </Button>
           </div>
@@ -280,14 +341,32 @@ export default function FuncionariosPage() {
                         </button>
                       </div>
                     ) : null}
+                    {!paymentFile && existingPaymentAttachmentUrl && !removePaymentAttachment ? (
+                      <div className="flex items-center justify-between rounded-lg border border-border/70 bg-background/70 px-3 py-2 text-sm">
+                        <button type="button" className="text-primary underline" onClick={() => editingPaymentId && openPaymentAttachment(editingPaymentId)}>
+                          Abrir comprovante atual
+                        </button>
+                        <button type="button" className="text-xs text-muted-foreground hover:text-foreground" onClick={() => setRemovePaymentAttachment(true)}>
+                          Remover do registro
+                        </button>
+                      </div>
+                    ) : null}
+                    {!paymentFile && removePaymentAttachment ? (
+                      <div className="rounded-lg border border-dashed border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                        O comprovante atual sera removido ao salvar.
+                      </div>
+                    ) : null}
                     <textarea value={paymentNotes} onChange={(event) => setPaymentNotes(event.target.value)} className="min-h-[96px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm" placeholder="Observacoes opcionais" />
                   </div>
                 ) : null}
               </div>
 
-              <Button type="submit" className="w-full" disabled={submitPaymentMutation.isPending || employees.length === 0}>
-                {submitPaymentMutation.isPending ? "Salvando..." : "Registrar pagamento"}
-              </Button>
+              <div className="flex gap-2">
+                {editingPaymentId ? <Button type="button" variant="outline" className="w-full" onClick={resetPaymentForm}>Cancelar</Button> : null}
+                <Button type="submit" className="w-full" disabled={submitPaymentMutation.isPending || employees.length === 0}>
+                  {submitPaymentMutation.isPending ? "Salvando..." : editingPaymentId ? "Salvar alteracoes" : "Registrar pagamento"}
+                </Button>
+              </div>
             </form>
           ) : (
             <div className="mt-5 rounded-lg border border-dashed border-border/70 p-4 text-sm text-muted-foreground">
@@ -478,6 +557,7 @@ export default function FuncionariosPage() {
                           <th className="pb-3">Semana</th>
                           <th className="pb-3">Pago em</th>
                           <th className="pb-3">Comprovante</th>
+                          <th className="pb-3 text-right">Acoes</th>
                           <th className="pb-3 text-right">Valor</th>
                         </tr>
                       </thead>
@@ -492,12 +572,28 @@ export default function FuncionariosPage() {
                             <td className="py-3">{formatDate(payment.paid_at)}</td>
                             <td className="py-3">
                               {payment.attachment_url ? (
-                                <a href={payment.attachment_url} target="_blank" rel="noreferrer" className="text-primary underline">
+                                <button type="button" className="text-primary underline" onClick={() => openPaymentAttachment(Number(payment.id))}>
                                   Abrir
-                                </a>
+                                </button>
                               ) : (
                                 <span className="text-muted-foreground">-</span>
                               )}
+                            </td>
+                            <td className="py-3 text-right">
+                              <div className="flex justify-end gap-2">
+                                <Button type="button" variant="outline" size="sm" onClick={() => startPaymentEdit(payment)}>Editar</Button>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => {
+                                    if (window.confirm(`Excluir o pagamento #${payment.id}?`)) deletePaymentMutation.mutate(Number(payment.id));
+                                  }}
+                                  disabled={deletePaymentMutation.isPending}
+                                >
+                                  Excluir
+                                </Button>
+                              </div>
                             </td>
                             <td className="py-3 text-right font-semibold">{money(payment.amount)}</td>
                           </tr>

@@ -11,7 +11,7 @@ import { useI18n } from '@/contexts/I18nContext';
 
 export default function LoginPage() {
   const navigate = useNavigate();
-  const { loginAs } = useAuth();
+  const { refreshProfile } = useAuth();
   const { config } = useTenant();
   const { t } = useI18n();
   const [email, setEmail] = useState('');
@@ -42,9 +42,7 @@ export default function LoginPage() {
         setLoading(false);
         return;
       }
-      window.localStorage.setItem('imperial-flow-nome', userData.nome || t('common.user'));
-      window.localStorage.setItem('imperial-flow-email', email.trim().toLowerCase());
-      loginAs(userData.tipo === 'admin' ? 'admin' : 'cliente');
+      await refreshProfile();
       navigate(userData.tipo === 'admin' ? '/admin' : '/');
     } catch (_err) {
       toast.error(t('auth.loginError'));

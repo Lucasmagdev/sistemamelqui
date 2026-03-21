@@ -176,6 +176,11 @@ function normalizePhone(rawPhone) {
   return `${countryCode}${digits}`;
 }
 
+function isLikelyPhoneDigits(rawValue) {
+  const digits = String(rawValue || "").replace(/\D/g, "");
+  return digits.length >= 10 && digits.length <= 15;
+}
+
 function normalizeLocale(value) {
   const raw = String(value || "").toLowerCase().trim();
   if (raw.startsWith("en")) return "en";
@@ -539,6 +544,10 @@ async function insertStockMovementSafe(payload, duplicateScope = "movement") {
   throw createHttpError(500, "Erro ao registrar movimentacao de estoque.", result.error?.message || null);
 }
 
+function isUniqueViolation(error) {
+  return String(error?.message || "").toLowerCase().includes("duplicate") || String(error?.code || "") === "23505";
+}
+
 async function deleteStockMovementById(movementId) {
   if (!movementId) return;
   const { error } = await supabase.from("stock_movements").delete().eq("id", movementId);
@@ -674,6 +683,142 @@ function extractMessageIdentifier(payload, keys) {
     if (valid && String(cursor).trim()) return String(cursor).trim();
   }
   return null;
+}
+
+function extractStorePhoneCandidates(payload, path = "", depth = 0, collector = []) {
+  if (payload === null || payload === undefined || depth > 6) return collector;
+
+  if (typeof payload === "string" || typeof payload === "number") {
+    const raw = String(payload).trim();
+    if (!raw) return collector;
+
+    const digits = raw.replace(/\D/g, "");
+    const pathLabel = path || "root";
+    const normalizedPath = pathLabel.toLowerCase();
+    const hasPhoneHint = /(phone|number|mobile|cell|contact|owner|jid|wid|serialized|me|device|instance|connected|account|session)/i.test(pathLabel);
+
+    if (isLikelyPhoneDigits(digits) && (hasPhoneHint || /@c\.us|@s\.whatsapp\.net/i.test(raw))) {
+      let score = 0;
+      if (/(^|\.)(phone|number|mobile|cell)$/.test(normalizedPath)) score += 8;
+      if (/(connected|instance|device|me|account|owner|session)/.test(normalizedPath)) score += 5;
+      if (/(jid|wid|serialized)/.test(normalizedPath)) score += 4;
+      if (/^root$/.test(normalizedPath)) score -= 3;
+      if (digits.length >= 12 && digits.length <= 13) score += 3;
+      if (digits.length >= 14) score += 1;
+
+      collector.push({
+        path: pathLabel,
+        raw,
+        digits,
+        normalized: normalizePhone(digits),
+        score,
+      });
+    }
+
+    return collector;
+  }
+
+  if (Array.isArray(payload)) {
+    payload.forEach((item, index) => {
+      extractStorePhoneCandidates(item, `${path}[${index}]`, depth + 1, collector);
+    });
+    return collector;
+  }
+
+  if (typeof payload === "object") {
+    for (const [key, value] of Object.entries(payload)) {
+      const nextPath = path ? `${path}.${key}` : key;
+      extractStorePhoneCandidates(value, nextPath, depth + 1, collector);
+    }
+  }
+
+  return collector;
+}
+
+function extractStorePhoneFromPayload(payload) {
+  const explicitCandidate = extractMessageIdentifier(payload, [
+    "phone",
+    "number",
+    "connectedPhone",
+    "connectedNumber",
+    "mobile",
+    "cellphone",
+    "device.phone",
+    "device.number",
+    "device.mobile",
+    "me.phone",
+    "me.number",
+    "me.mobile",
+    "me.id",
+    "me.jid",
+    "me.wid",
+    "me._serialized",
+    "instance.phone",
+    "instance.number",
+    "instance.mobile",
+    "instance.owner",
+    "instance.ownerPhone",
+    "instance.ownerNumber",
+    "instance.jid",
+    "instance.wid",
+    "data.phone",
+    "data.number",
+    "data.mobile",
+    "data.me.phone",
+    "data.me.number",
+    "data.me.id",
+    "data.me.jid",
+    "data.connected.phone",
+    "data.connected.number",
+    "connected.phone",
+    "connected.number",
+    "connected.jid",
+    "connected.wid",
+    "account.phone",
+    "account.number",
+    "session.phone",
+    "session.number",
+    "owner.phone",
+    "owner.number",
+    "wid.user",
+    "jid.user",
+    "id.user",
+    "id._serialized",
+  ]);
+
+  const explicitNormalized = normalizePhone(explicitCandidate);
+  if (explicitNormalized && isLikelyPhoneDigits(explicitNormalized)) {
+    return {
+      phone: explicitNormalized,
+      path: "explicit",
+      raw: explicitCandidate,
+      confidence: "high",
+      candidates: [],
+    };
+  }
+
+  const candidates = extractStorePhoneCandidates(payload)
+    .filter((candidate) => isLikelyPhoneDigits(candidate.normalized))
+    .sort((left, right) => right.score - left.score || right.normalized.length - left.normalized.length);
+
+  if (!candidates.length) {
+    return {
+      phone: "",
+      path: null,
+      raw: null,
+      confidence: "none",
+      candidates: [],
+    };
+  }
+
+  const winner = candidates[0];
+  return {
+    phone: winner.normalized,
+    path: winner.path,
+    raw: winner.raw,
+    confidence: winner.score >= 10 ? "high" : winner.score >= 6 ? "medium" : "low",
+    candidates: candidates.slice(0, 5),
+  };
 }
 
 function extractWebhookMessageMeta(payload) {
@@ -1559,6 +1704,144 @@ async function applyStoreSaleStockExit(storeSaleId, saleItems, reason = "store_s
   };
 }
 
+async function revertStoreSaleStockExit(storeSaleId, reason = "store_sale_reversed") {
+  const sourceId = `store_sale:${storeSaleId}`;
+  const { data: exits, error: exitsError } = await supabase
+    .from("stock_movements")
+    .select("id, produto_id, batch_id, qty, unit")
+    .eq("source_type", "manual")
+    .eq("source_id", sourceId)
+    .eq("tipo", "exit");
+
+  if (exitsError) throw createHttpError(500, "Erro ao buscar movimentacoes da venda presencial.", exitsError.message);
+  if (!(exits || []).length) return { applied: false, reason: "no_exit_to_reverse", changedProducts: [] };
+
+  const changedProducts = new Set();
+
+  for (const movement of exits) {
+    if (movement.batch_id) {
+      const { data: batch, error: batchError } = await supabase
+        .from("batches")
+        .select("id, quantidade_disponivel, unidade")
+        .eq("id", movement.batch_id)
+        .single();
+
+      if (batchError || !batch) {
+        throw createHttpError(500, "Erro ao localizar lote para estorno da venda presencial.", batchError?.message || null);
+      }
+
+      const movementUnit = normalizeStockUnit(movement.unit, "LB");
+      const batchUnit = normalizeStockUnit(batch.unidade || movementUnit, movementUnit);
+      const restoredQty = roundQty(parseNumber(batch.quantidade_disponivel, 0) + convertQuantity(parseNumber(movement.qty, 0), movementUnit, batchUnit), 3);
+
+      await updateBatchQuantityExpected({
+        batchId: movement.batch_id,
+        expectedQty: parseNumber(batch.quantidade_disponivel, 0),
+        nextQty: restoredQty,
+        notFoundMessage: "Lote nao encontrado para estorno da venda presencial.",
+        conflictMessage: "Saldo do lote mudou durante o estorno da venda presencial. Recarregue e tente novamente.",
+        genericMessage: "Erro ao atualizar saldo do lote ao estornar a venda presencial.",
+      });
+    }
+
+    changedProducts.add(Number(movement.produto_id));
+  }
+
+  const { error: deleteError } = await supabase
+    .from("stock_movements")
+    .delete()
+    .eq("source_type", "manual")
+    .eq("source_id", sourceId)
+    .eq("tipo", "exit");
+
+  if (deleteError) {
+    throw createHttpError(500, "Erro ao remover movimentacoes antigas da venda presencial.", deleteError.message);
+  }
+
+  const reversalRows = (exits || []).map((movement) => ({
+    tipo: "reversal",
+    produto_id: movement.produto_id,
+    batch_id: movement.batch_id,
+    qty: movement.qty,
+    unit: normalizeStockUnit(movement.unit, "LB"),
+    source_type: "manual",
+    source_id: `${sourceId}:reversal:${Date.now()}`,
+    metadata: { reason, reversed_from_movement_id: movement.id, origin: "store_sale" },
+  }));
+
+  if (reversalRows.length) {
+    const { error: reversalError } = await supabase.from("stock_movements").insert(reversalRows);
+    if (reversalError && !isUniqueViolation(reversalError)) {
+      throw createHttpError(500, "Erro ao registrar estorno da venda presencial.", reversalError.message);
+    }
+  }
+
+  await syncLowStockAlerts(Array.from(changedProducts));
+  return {
+    applied: true,
+    reason: reason || "store_sale_reversed",
+    changedProducts: Array.from(changedProducts),
+  };
+}
+
+async function loadSaleWithItems(storeSaleId) {
+  const { data: sale, error: saleError } = await supabase
+    .from("store_sales")
+    .select("*")
+    .eq("id", storeSaleId)
+    .single();
+
+  if (saleError || !sale) {
+    throw createHttpError(404, "Venda presencial nao encontrada.", saleError?.message || null);
+  }
+
+  const { data: items, error: itemsError } = await supabase
+    .from("store_sale_items")
+    .select("*")
+    .eq("store_sale_id", storeSaleId)
+    .order("id", { ascending: true });
+
+  if (itemsError) {
+    throw createHttpError(500, "Erro ao carregar itens da venda presencial.", itemsError.message);
+  }
+
+  return { sale, items: items || [] };
+}
+
+async function resolveAttachmentSource(entityType, entityId) {
+  if (entityType === "expense") {
+    const { data, error } = await supabase
+      .from("expenses")
+      .select("id, attachment_bucket, attachment_path")
+      .eq("id", entityId)
+      .single();
+    if (error || !data) throw createHttpError(404, "Despesa nao encontrada para anexos.", error?.message || null);
+    return { bucket: data.attachment_bucket, path: data.attachment_path };
+  }
+
+  if (entityType === "employee-payment") {
+    const { data, error } = await supabase
+      .from("employee_payments")
+      .select("id, attachment_bucket, attachment_path")
+      .eq("id", entityId)
+      .single();
+    if (error || !data) throw createHttpError(404, "Pagamento nao encontrado para anexos.", error?.message || null);
+    return { bucket: data.attachment_bucket, path: data.attachment_path };
+  }
+
+  if (entityType === "invoice-import") {
+    const { data, error } = await supabase
+      .from("invoice_imports")
+      .select("id, file_bucket, file_path")
+      .eq("id", entityId)
+      .single();
+    if (error || !data) throw createHttpError(404, "Importacao de nota nao encontrada.", error?.message || null);
+    return { bucket: data.file_bucket, path: data.file_path };
+  }
+
+  throw createHttpError(400, "Tipo de anexo administrativo nao suportado.");
+}
+
 function isMissingRelationError(error, relationName) {
   const message = String(error?.message || "");
   return message.includes(`Could not find the table 'public.${relationName}'`) ||
@@ -1812,6 +2095,19 @@ async function uploadBase64FileToStorage({
   };
 }
 
+async function createSignedStorageUrl(bucket, filePath, expiresIn = 60 * 10) {
+  if (!bucket || !filePath) {
+    throw createHttpError(400, "Bucket e caminho do arquivo sao obrigatorios para gerar link seguro.");
+  }
+
+  const { data, error } = await supabase.storage.from(bucket).createSignedUrl(filePath, expiresIn);
+  if (error) {
+    throw createHttpError(500, "Falha ao gerar link assinado do anexo.", error.message);
+  }
+
+  return data?.signedUrl || null;
+}
+
 async function insertWhatsAppMessageLog(entry) {
   const payload = {
     order_id: entry.orderId || null,
@@ -1917,6 +2213,7 @@ async function discoverStorePhoneFromZApi() {
   const instanceToken = process.env.ZAPI_INSTANCE_TOKEN;
   const clientToken = process.env.ZAPI_CLIENT_TOKEN;
   const baseUrl = process.env.ZAPI_BASE_URL || "https://api.z-api.io";
+  const configuredStorePhone = normalizePhone(process.env.ZAPI_STORE_PHONE || process.env.STORE_NOTIFICATION_PHONE || "");
 
   if (!instanceId || !instanceToken) {
     return { ok: false, reason: "missing-zapi-config" };
@@ -1932,38 +2229,58 @@ async function discoverStorePhoneFromZApi() {
     `${baseUrl}/instances/${instanceId}/token/${instanceToken}/details`,
   ];
 
+  const diagnostics = [];
+
   for (const endpoint of candidateEndpoints) {
     try {
       const response = await fetch(endpoint, { method: "GET", headers });
       const result = await readApiResponse(response);
+      diagnostics.push({
+        endpoint,
+        status: response.status,
+        ok: response.ok,
+        hasError: Boolean(result.data?.error),
+      });
+
       if (!response.ok || result.data?.error) continue;
 
-      const phoneCandidate = extractMessageIdentifier(result.data, [
-        "phone",
-        "number",
-        "connectedPhone",
-        "connectedNumber",
-        "device.phone",
-        "device.number",
-        "me.phone",
-        "me.number",
-        "instance.phone",
-        "instance.number",
-        "data.phone",
-        "data.number",
-        "connected.phone",
-      ]);
-
-      const normalized = normalizePhone(phoneCandidate);
-      if (normalized) {
-        return { ok: true, phone: normalized, source: endpoint };
+      const extracted = extractStorePhoneFromPayload(result.data);
+      if (extracted.phone) {
+        return {
+          ok: true,
+          phone: extracted.phone,
+          source: endpoint,
+          sourcePath: extracted.path,
+          confidence: extracted.confidence,
+          diagnostics,
+        };
       }
     } catch {
-      // tenta proximo endpoint
+      diagnostics.push({
+        endpoint,
+        status: null,
+        ok: false,
+        hasError: true,
+      });
     }
   }
 
-  return { ok: false, reason: "store-phone-discovery-failed" };
+  if (configuredStorePhone) {
+    return {
+      ok: true,
+      phone: configuredStorePhone,
+      source: "env:ZAPI_STORE_PHONE",
+      sourcePath: "env",
+      confidence: "fallback",
+      diagnostics,
+    };
+  }
+
+  return {
+    ok: false,
+    reason: "store-phone-discovery-failed",
+    diagnostics,
+  };
 }
 
 function normalizeDateInput(value, fallback = null) {
@@ -3607,6 +3924,28 @@ app.get("/api/admin/zapi-message-templates", async (req, res) => {
   }
 });
 
+app.get("/api/admin/zapi-instance-phone", async (req, res) => {
+  try {
+    await requireAssistantAdmin(req);
+    const discovery = await discoverStorePhoneFromZApi();
+
+    return res.json({
+      ok: Boolean(discovery.ok),
+      phone: discovery.phone || null,
+      source: discovery.source || null,
+      sourcePath: discovery.sourcePath || null,
+      confidence: discovery.confidence || null,
+      reason: discovery.reason || null,
+      diagnostics: Array.isArray(discovery.diagnostics) ? discovery.diagnostics : [],
+    });
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro ao validar numero da instancia Z-API.",
+      detail: error?.detail || null,
+    });
+  }
+});
+
 app.patch("/api/admin/zapi-message-templates", async (req, res) => {
   try {
     const actor = await requireAssistantAdmin(req);
@@ -3697,6 +4036,7 @@ app.use("/api/zapi", createZapiRouter({
 
 app.get("/api/store-sales", async (req, res) => {
   try {
+    await requireAssistantAdmin(req);
     const range = resolveRangeFromQuery(req.query);
     const { data, error } = await supabase
       .from("store_sales")
@@ -3752,6 +4092,7 @@ app.get("/api/store-sales", async (req, res) => {
 
 app.get("/api/store-sales/summary", async (req, res) => {
   try {
+    await requireAssistantAdmin(req);
     const range = resolveRangeFromQuery(req.query);
     const { data, error } = await supabase
       .from("store_sales")
@@ -3789,6 +4130,7 @@ app.get("/api/store-sales/summary", async (req, res) => {
 
 app.post("/api/store-sales", async (req, res) => {
   try {
+    const actor = await requireAssistantAdmin(req);
     const rawItems = Array.isArray(req.body?.items) ? req.body.items : [];
     if (!rawItems.length) {
       return res.status(400).json({ error: "Informe ao menos um produto na venda presencial." });
@@ -3823,7 +4165,7 @@ app.post("/api/store-sales", async (req, res) => {
       total_amount: totalAmount,
       payment_method: String(req.body?.paymentMethod || "").trim() || "nao_informado",
       notes: req.body?.notes || null,
-      created_by: req.body?.createdBy || null,
+      created_by: req.body?.createdBy || actor.name || null,
     };
 
     const { data, error } = await supabase.from("store_sales").insert([payload]).select("*").single();
@@ -3879,8 +4221,118 @@ app.post("/api/store-sales", async (req, res) => {
   }
 });
 
+app.patch("/api/store-sales/:id", async (req, res) => {
+  try {
+    const actor = await requireAssistantAdmin(req);
+    const saleId = Number(req.params.id);
+    if (!saleId) {
+      return res.status(400).json({ error: "ID de venda invalido." });
+    }
+
+    const current = await loadSaleWithItems(saleId);
+    const rawItems = Array.isArray(req.body?.items) ? req.body.items : [];
+    if (!rawItems.length) {
+      return res.status(400).json({ error: "Informe ao menos um produto na venda presencial." });
+    }
+
+    const items = rawItems.map((item, index) => {
+      const productId = Number(item?.productId || item?.product_id);
+      const quantity = parseLooseNumber(item?.quantity, NaN);
+      const unitPrice = parseLooseNumber(item?.unitPrice || item?.unit_price || item?.price, NaN);
+      const unit = normalizeStockUnit(item?.unit || "UN", "UN");
+      if (!productId || !Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(unitPrice) || unitPrice < 0) {
+        throw createHttpError(400, `Item ${index + 1} invalido na venda presencial.`);
+      }
+      return {
+        product_id: productId,
+        quantity: roundQty(quantity, 3),
+        unit,
+        unit_price: roundQty(unitPrice, 2),
+        total_price: roundQty(quantity * unitPrice, 2),
+      };
+    });
+
+    await revertStoreSaleStockExit(saleId, "store_sale_updated");
+    await buildStoreSaleStockPlan(items);
+
+    const payload = {
+      sale_datetime: normalizeDateInput(req.body?.saleDatetime || current.sale.sale_datetime, current.sale.sale_datetime),
+      total_amount: roundQty(items.reduce((acc, item) => acc + parseNumber(item.total_price, 0), 0), 2),
+      payment_method: String(req.body?.paymentMethod || current.sale.payment_method || "").trim() || "nao_informado",
+      notes: req.body?.notes ?? current.sale.notes ?? null,
+      created_by: req.body?.createdBy || current.sale.created_by || actor.name || null,
+    };
+
+    const { data: updatedSale, error: saleError } = await supabase
+      .from("store_sales")
+      .update(payload)
+      .eq("id", saleId)
+      .select("*")
+      .single();
+
+    if (saleError || !updatedSale) {
+      throw createHttpError(500, "Erro ao atualizar venda presencial.", saleError?.message || null);
+    }
+
+    const { error: deleteItemsError } = await supabase.from("store_sale_items").delete().eq("store_sale_id", saleId);
+    if (deleteItemsError) {
+      throw createHttpError(500, "Erro ao substituir itens da venda presencial.", deleteItemsError.message);
+    }
+
+    const itemRows = items.map((item) => ({
+      store_sale_id: saleId,
+      product_id: item.product_id,
+      quantity: item.quantity,
+      unit: item.unit,
+      unit_price: item.unit_price,
+      total_price: item.total_price,
+    }));
+
+    const { data: insertedItems, error: insertItemsError } = await supabase.from("store_sale_items").insert(itemRows).select("*");
+    if (insertItemsError) {
+      throw createHttpError(500, "Erro ao recriar itens da venda presencial.", insertItemsError.message);
+    }
+
+    await applyStoreSaleStockExit(saleId, insertedItems || [], "store_sale_updated");
+
+    const updated = { ...updatedSale, items: insertedItems || [] };
+    return res.json({ ok: true, sale: updated });
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro interno ao atualizar venda presencial.",
+      detail: error?.detail || null,
+    });
+  }
+});
+
+app.delete("/api/store-sales/:id", async (req, res) => {
+  try {
+    const actor = await requireAssistantAdmin(req);
+    const saleId = Number(req.params.id);
+    if (!saleId) {
+      return res.status(400).json({ error: "ID de venda invalido." });
+    }
+
+    const current = await loadSaleWithItems(saleId);
+    await revertStoreSaleStockExit(saleId, "store_sale_deleted");
+    await supabase.from("store_sale_items").delete().eq("store_sale_id", saleId);
+    const { error } = await supabase.from("store_sales").delete().eq("id", saleId);
+    if (error) {
+      throw createHttpError(500, "Erro ao excluir venda presencial.", error.message);
+    }
+
+    return res.json({ ok: true });
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro interno ao excluir venda presencial.",
+      detail: error?.detail || null,
+    });
+  }
+});
+
 app.get("/api/expenses", async (req, res) => {
   try {
+    await requireAssistantAdmin(req);
     const range = resolveRangeFromQuery(req.query);
     let query = supabase
       .from("expenses")
@@ -3909,6 +4361,7 @@ app.get("/api/expenses", async (req, res) => {
 
 app.get("/api/expenses/summary", async (req, res) => {
   try {
+    await requireAssistantAdmin(req);
     const range = resolveRangeFromQuery(req.query);
     const { data, error } = await supabase
       .from("expenses")
@@ -3939,6 +4392,7 @@ app.get("/api/expenses/summary", async (req, res) => {
 
 app.post("/api/expenses", async (req, res) => {
   try {
+    const actor = await requireAssistantAdmin(req);
     const amount = parseLooseNumber(req.body?.amount, NaN);
     if (!Number.isFinite(amount) || amount < 0) {
       return res.status(400).json({ error: "amount invalido." });
@@ -3966,7 +4420,7 @@ app.post("/api/expenses", async (req, res) => {
       attachment_bucket: attachment.bucket,
       attachment_path: attachment.filePath,
       attachment_url: attachment.fileUrl,
-      created_by: req.body?.createdBy || null,
+      created_by: req.body?.createdBy || actor.name || null,
     };
 
     if (!payload.description || !payload.competency_date) {
@@ -3987,8 +4441,83 @@ app.post("/api/expenses", async (req, res) => {
   }
 });
 
+app.patch("/api/expenses/:id", async (req, res) => {
+  try {
+    const actor = await requireAssistantAdmin(req);
+    const expenseId = Number(req.params.id);
+    const { data: current, error: currentError } = await supabase.from("expenses").select("*").eq("id", expenseId).single();
+    if (currentError || !current) {
+      throw createHttpError(404, "Despesa nao encontrada.", currentError?.message || null);
+    }
+
+    const payload = {
+      description: String(req.body?.description || current.description || "").trim(),
+      category: String(req.body?.category || current.category || "outras").trim() || "outras",
+      amount: roundQty(parseLooseNumber(req.body?.amount ?? current.amount, current.amount), 2),
+      competency_date: String(req.body?.competencyDate || current.competency_date || "").slice(0, 10),
+      posted_at: normalizeDateInput(req.body?.postedAt || current.posted_at, current.posted_at),
+      notes: req.body?.notes ?? current.notes ?? null,
+      created_by: req.body?.createdBy || current.created_by || actor.name || null,
+    };
+
+    if (req.body?.attachmentBase64) {
+      const attachment = await uploadBase64FileToStorage({
+        bucket: process.env.SUPABASE_FINANCE_BUCKET || process.env.SUPABASE_INVOICE_BUCKET || "invoice-imports",
+        fileName: req.body?.attachmentName || "despesa.jpg",
+        fileBase64: req.body.attachmentBase64,
+        folderPrefix: "finance",
+        defaultFileName: "despesa.jpg",
+        contentType: req.body?.attachmentMimeType || null,
+      });
+      payload.attachment_bucket = attachment.bucket;
+      payload.attachment_path = attachment.filePath;
+      payload.attachment_url = attachment.fileUrl;
+    } else if (req.body?.removeAttachment === true) {
+      payload.attachment_bucket = null;
+      payload.attachment_path = null;
+      payload.attachment_url = null;
+    }
+
+    const { data: updated, error } = await supabase.from("expenses").update(payload).eq("id", expenseId).select("*").single();
+    if (error || !updated) {
+      throw createHttpError(500, "Erro ao atualizar despesa.", error?.message || null);
+    }
+
+    return res.json({ ok: true, expense: updated });
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro interno ao atualizar despesa.",
+      detail: error?.detail || null,
+    });
+  }
+});
+
+app.delete("/api/expenses/:id", async (req, res) => {
+  try {
+    const actor = await requireAssistantAdmin(req);
+    const expenseId = Number(req.params.id);
+    const { data: current, error: currentError } = await supabase.from("expenses").select("*").eq("id", expenseId).single();
+    if (currentError || !current) {
+      throw createHttpError(404, "Despesa nao encontrada.", currentError?.message || null);
+    }
+
+    const { error } = await supabase.from("expenses").delete().eq("id", expenseId);
+    if (error) {
+      throw createHttpError(500, "Erro ao excluir despesa.", error.message);
+    }
+
+    return res.json({ ok: true });
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro interno ao excluir despesa.",
+      detail: error?.detail || null,
+    });
+  }
+});
+
 app.get("/api/employees/dashboard", async (req, res) => {
   try {
+    await requireAssistantAdmin(req);
     const monthRange = resolveCurrentMonthRange();
     const [{ data: employees, error: employeesError }, { data: payments, error: paymentsError }] = await Promise.all([
       supabase.from("employees").select("*").order("name", { ascending: true }),
@@ -4086,6 +4615,7 @@ app.get("/api/employees/dashboard", async (req, res) => {
 
 app.get("/api/employees", async (req, res) => {
   try {
+    await requireAssistantAdmin(req);
     let query = supabase.from("employees").select("*").order("name", { ascending: true });
     if (String(req.query?.active || "").trim() === "true") query = query.eq("active", true);
     if (String(req.query?.active || "").trim() === "false") query = query.eq("active", false);
@@ -4105,6 +4635,7 @@ app.get("/api/employees", async (req, res) => {
 
 app.post("/api/employees", async (req, res) => {
   try {
+    await requireAssistantAdmin(req);
     const payload = {
       name: String(req.body?.name || "").trim(),
       phone: req.body?.phone || null,
@@ -4132,6 +4663,7 @@ app.post("/api/employees", async (req, res) => {
 
 app.patch("/api/employees/:id", async (req, res) => {
   try {
+    await requireAssistantAdmin(req);
     const payload = {};
     if (Object.prototype.hasOwnProperty.call(req.body || {}, "name")) payload.name = String(req.body.name || "").trim();
     if (Object.prototype.hasOwnProperty.call(req.body || {}, "phone")) payload.phone = req.body.phone || null;
@@ -4154,6 +4686,7 @@ app.patch("/api/employees/:id", async (req, res) => {
 
 app.get("/api/employee-payments", async (req, res) => {
   try {
+    await requireAssistantAdmin(req);
     const range = resolveRangeFromQuery(req.query);
     let query = supabase
       .from("employee_payments")
@@ -4192,6 +4725,7 @@ app.get("/api/employee-payments", async (req, res) => {
 
 app.get("/api/employee-payments/summary", async (req, res) => {
   try {
+    await requireAssistantAdmin(req);
     const range = resolveRangeFromQuery(req.query);
     const { data, error } = await supabase
       .from("employee_payments")
@@ -4227,6 +4761,7 @@ app.get("/api/employee-payments/summary", async (req, res) => {
 
 app.post("/api/employee-payments", async (req, res) => {
   try {
+    const actor = await requireAssistantAdmin(req);
     const amount = parseLooseNumber(req.body?.amount, NaN);
     if (!Number.isFinite(amount) || amount < 0) {
       return res.status(400).json({ error: "amount invalido." });
@@ -4257,7 +4792,7 @@ app.post("/api/employee-payments", async (req, res) => {
       attachment_bucket: attachment.bucket,
       attachment_path: attachment.filePath,
       attachment_url: attachment.fileUrl,
-      created_by: req.body?.createdBy || null,
+      created_by: req.body?.createdBy || actor.name || null,
     };
 
     const { data, error } = await supabase.from("employee_payments").insert([payload]).select("*").single();
@@ -4274,9 +4809,107 @@ app.post("/api/employee-payments", async (req, res) => {
   }
 });
 
+app.patch("/api/employee-payments/:id", async (req, res) => {
+  try {
+    const actor = await requireAssistantAdmin(req);
+    const paymentId = Number(req.params.id);
+    const { data: current, error: currentError } = await supabase.from("employee_payments").select("*").eq("id", paymentId).single();
+    if (currentError || !current) {
+      throw createHttpError(404, "Pagamento nao encontrado.", currentError?.message || null);
+    }
+
+    const payload = {
+      employee_id: Number(req.body?.employeeId || current.employee_id),
+      week_reference: String(req.body?.weekReference || current.week_reference || "").slice(0, 10),
+      amount: roundQty(parseLooseNumber(req.body?.amount ?? current.amount, current.amount), 2),
+      paid_at: normalizeDateInput(req.body?.paidAt || current.paid_at, current.paid_at),
+      notes: req.body?.notes ?? current.notes ?? null,
+      created_by: req.body?.createdBy || current.created_by || actor.name || null,
+    };
+
+    if (req.body?.attachmentBase64) {
+      const attachment = await uploadBase64FileToStorage({
+        bucket: process.env.SUPABASE_PAYROLL_BUCKET || process.env.SUPABASE_INVOICE_BUCKET || "invoice-imports",
+        fileName: req.body?.attachmentName || "pagamento.jpg",
+        fileBase64: req.body.attachmentBase64,
+        folderPrefix: "payroll",
+        defaultFileName: "pagamento.jpg",
+        contentType: req.body?.attachmentMimeType || null,
+      });
+      payload.attachment_bucket = attachment.bucket;
+      payload.attachment_path = attachment.filePath;
+      payload.attachment_url = attachment.fileUrl;
+    } else if (req.body?.removeAttachment === true) {
+      payload.attachment_bucket = null;
+      payload.attachment_path = null;
+      payload.attachment_url = null;
+    }
+
+    const { data: updated, error } = await supabase.from("employee_payments").update(payload).eq("id", paymentId).select("*").single();
+    if (error || !updated) {
+      throw createHttpError(500, "Erro ao atualizar pagamento.", error?.message || null);
+    }
+
+    return res.json({ ok: true, payment: updated });
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro interno ao atualizar pagamento.",
+      detail: error?.detail || null,
+    });
+  }
+});
+
+app.delete("/api/employee-payments/:id", async (req, res) => {
+  try {
+    const actor = await requireAssistantAdmin(req);
+    const paymentId = Number(req.params.id);
+    const { data: current, error: currentError } = await supabase.from("employee_payments").select("*").eq("id", paymentId).single();
+    if (currentError || !current) {
+      throw createHttpError(404, "Pagamento nao encontrado.", currentError?.message || null);
+    }
+
+    const { error } = await supabase.from("employee_payments").delete().eq("id", paymentId);
+    if (error) {
+      throw createHttpError(500, "Erro ao excluir pagamento.", error.message);
+    }
+
+    return res.json({ ok: true });
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro interno ao excluir pagamento.",
+      detail: error?.detail || null,
+    });
+  }
+});
+
+app.get("/api/admin/attachments/:entityType/:id", async (req, res) => {
+  try {
+    await requireAssistantAdmin(req);
+    const entityType = String(req.params.entityType || "").trim();
+    const entityId = Number(req.params.id);
+    if (!entityId) {
+      return res.status(400).json({ error: "ID invalido para gerar link do anexo." });
+    }
+
+    const source = await resolveAttachmentSource(entityType, entityId);
+    if (!source.bucket || !source.path) {
+      return res.status(404).json({ error: "Nenhum anexo encontrado para este registro." });
+    }
+
+    const signedUrl = await createSignedStorageUrl(source.bucket, source.path);
+    return res.json({ ok: true, signedUrl, bucket: source.bucket, path: source.path });
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro ao gerar link seguro do anexo.",
+      detail: error?.detail || null,
+    });
+  }
+});
+
 app.get("/api/clients/admin", async (req, res) => {
   const startedAt = Date.now();
   try {
+    await requireAssistantAdmin(req);
     const payload = await buildClientsAdminPayload({
       search: String(req.query?.search || "").trim(),
       segment: normalizeClientSegment(req.query?.segment),
@@ -4454,6 +5087,7 @@ app.post("/api/client-campaigns/send", async (req, res) => {
 app.get("/api/finance/overview", async (req, res) => {
   const startedAt = Date.now();
   try {
+    await requireAssistantAdmin(req);
     const payload = await buildFinanceOverviewPayload(req.query);
     logPerf("route.finance_overview", startedAt, {
       expensesTotal: payload?.expensesTotal || 0,
@@ -4472,6 +5106,7 @@ app.get("/api/finance/overview", async (req, res) => {
 app.get("/api/reports/operational", async (req, res) => {
   const startedAt = Date.now();
   try {
+    await requireAssistantAdmin(req);
     const report = await buildOperationalReport(req.query);
     logPerf("route.operational_report", startedAt, {
       timeline: report?.timeline?.length || 0,
@@ -4489,6 +5124,7 @@ app.get("/api/reports/operational", async (req, res) => {
 
 app.get("/api/reports/operational.csv", async (req, res) => {
   try {
+    await requireAssistantAdmin(req);
     const report = await buildOperationalReport(req.query);
     const rows = [
       buildCsvRow(["tipo", "chave", "valor"]),

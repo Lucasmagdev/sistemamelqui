@@ -29,6 +29,9 @@ export default function FinanceiroPage() {
   const [postedAt, setPostedAt] = useState(new Date().toISOString().slice(0, 16));
   const [notes, setNotes] = useState("");
   const [file, setFile] = useState<File | null>(null);
+  const [editingExpenseId, setEditingExpenseId] = useState<number | null>(null);
+  const [existingAttachmentUrl, setExistingAttachmentUrl] = useState<string | null>(null);
+  const [removeExistingAttachment, setRemoveExistingAttachment] = useState(false);
   const [historySearch, setHistorySearch] = useState("");
   const [historyCategory, setHistoryCategory] = useState("todas");
 
@@ -61,8 +64,8 @@ export default function FinanceiroPage() {
   const submitExpenseMutation = useMutation({
     mutationFn: async () => {
       const attachmentBase64 = file ? await readFileAsDataUrl(file) : null;
-      return backendRequest("/api/expenses", {
-        method: "POST",
+      return backendRequest(editingExpenseId ? `/api/expenses/${editingExpenseId}` : "/api/expenses", {
+        method: editingExpenseId ? "PATCH" : "POST",
         body: JSON.stringify({
           description,
           category,
@@ -73,6 +76,7 @@ export default function FinanceiroPage() {
           attachmentBase64,
           attachmentName: file?.name || null,
           attachmentMimeType: file?.type || null,
+          removeAttachment: removeExistingAttachment,
           createdBy: window.localStorage.getItem("imperial-flow-nome") || "admin",
         }),
       });
@@ -85,8 +89,11 @@ export default function FinanceiroPage() {
       setPostedAt(new Date().toISOString().slice(0, 16));
       setNotes("");
       setFile(null);
+      setEditingExpenseId(null);
+      setExistingAttachmentUrl(null);
+      setRemoveExistingAttachment(false);
       setAdvancedOpen(false);
-      toast.success("Despesa registrada");
+      toast.success(editingExpenseId ? "Despesa atualizada" : "Despesa registrada");
       queryClient.invalidateQueries({ queryKey: ["admin", "finance-overview"] });
       queryClient.invalidateQueries({ queryKey: ["admin", "expenses-history"] });
       queryClient.invalidateQueries({ queryKey: ["admin", "operational-report"] });
@@ -95,6 +102,57 @@ export default function FinanceiroPage() {
       toast.error(error.message || "Erro ao registrar despesa");
     },
   });
+
+  const deleteExpenseMutation = useMutation({
+    mutationFn: (expenseId: number) => backendRequest(`/api/expenses/${expenseId}`, { method: "DELETE" }),
+    onSuccess: () => {
+      toast.success("Despesa excluida");
+      queryClient.invalidateQueries({ queryKey: ["admin", "finance-overview"] });
+      queryClient.invalidateQueries({ queryKey: ["admin", "expenses-history"] });
+      queryClient.invalidateQueries({ queryKey: ["admin", "operational-report"] });
+    },
+    onError: (error: any) => {
+      toast.error(error.message || "Erro ao excluir despesa");
+    },
+  });
+
+  const openExpenseAttachment = async (expenseId: number) => {
+    try {
+      const response = await backendRequest<{ signedUrl: string }>(`/api/admin/attachments/expense/${expenseId}`);
+      if (response?.signedUrl) window.open(response.signedUrl, "_blank", "noopener,noreferrer");
+    } catch (error: any) {
+      toast.error(error.message || "Erro ao abrir comprovante");
+    }
+  };
+
+  const startExpenseEdit = (expense: any) => {
+    setEditingExpenseId(Number(expense.id));
+    setDescription(expense.description || "");
+    setCategory(expense.category || "outras");
+    setAmount(String(expense.amount || ""));
+    setCompetencyDate(String(expense.competency_date || today).slice(0, 10));
+    setPostedAt(expense.posted_at ? new Date(expense.posted_at).toISOString().slice(0, 16) : new Date().toISOString().slice(0, 16));
+    setNotes(expense.notes || "");
+    setFile(null);
+    setExistingAttachmentUrl(expense.attachment_url || null);
+    setRemoveExistingAttachment(false);
+    setAdvancedOpen(Boolean(expense.attachment_url || expense.notes));
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const resetExpenseForm = () => {
+    setEditingExpenseId(null);
+    setDescription("");
+    setCategory("carne");
+    setAmount("");
+    setCompetencyDate(today);
+    setPostedAt(new Date().toISOString().slice(0, 16));
+    setNotes("");
+    setFile(null);
+    setExistingAttachmentUrl(null);
+    setRemoveExistingAttachment(false);
+    setAdvancedOpen(false);
+  };
 
   return (
     <div className="space-y-6">
@@ -178,9 +236,12 @@ export default function FinanceiroPage() {
 
         <Card className="xl:col-span-2 p-5">
           <div>
-            <h2 className="text-lg font-semibold text-foreground">Nova despesa</h2>
+            <h2 className="text-lg font-semibold text-foreground">{editingExpenseId ? `Editando despesa #${editingExpenseId}` : "Nova despesa"}</h2>
             <p className="mt-1 text-sm text-muted-foreground">Lance o essencial primeiro. Comprovante, horario e observacoes ficam em campos avancados.</p>
           </div>
+          {editingExpenseId ? (
+            <Button type="button" variant="outline" onClick={resetExpenseForm}>Cancelar edicao</Button>
+          ) : null}
           <div className="mt-4 flex flex-wrap gap-2">
             {[
               { label: "Carne", value: "carne" },
@@ -265,6 +326,23 @@ export default function FinanceiroPage() {
                     </div>
                   ) : null}
 
+                  {!file && existingAttachmentUrl && !removeExistingAttachment ? (
+                    <div className="flex items-center justify-between rounded-lg border border-border/70 bg-background/70 px-3 py-2 text-sm">
+                      <button type="button" className="text-primary underline" onClick={() => editingExpenseId && openExpenseAttachment(editingExpenseId)}>
+                        Abrir comprovante atual
+                      </button>
+                      <button type="button" className="text-xs text-muted-foreground hover:text-foreground" onClick={() => setRemoveExistingAttachment(true)}>
+                        Remover do registro
+                      </button>
+                    </div>
+                  ) : null}
+
+                  {!file && removeExistingAttachment ? (
+                    <div className="rounded-lg border border-dashed border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                      O comprovante atual sera removido ao salvar.
+                    </div>
+                  ) : null}
+
                   <div>
                     <label className="mb-1 block text-sm text-muted-foreground">Observacoes</label>
                     <textarea value={notes} onChange={(event) => setNotes(event.target.value)} className="min-h-[100px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm" placeholder="Detalhes opcionais para consulta futura." />
@@ -276,7 +354,7 @@ export default function FinanceiroPage() {
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-xs text-muted-foreground">Obrigatorio para lancar rapido: descricao, valor, categoria e competencia.</p>
               <Button type="submit" className="w-full sm:w-auto" disabled={submitExpenseMutation.isPending}>
-                {submitExpenseMutation.isPending ? "Salvando..." : "Registrar despesa"}
+                {submitExpenseMutation.isPending ? "Salvando..." : editingExpenseId ? "Salvar alteracoes" : "Registrar despesa"}
               </Button>
             </div>
           </form>
@@ -348,6 +426,7 @@ export default function FinanceiroPage() {
                           <th className="pb-3">Descricao</th>
                           <th className="pb-3">Categoria</th>
                           <th className="pb-3">Comprovante</th>
+                          <th className="pb-3 text-right">Acoes</th>
                           <th className="pb-3 text-right">Valor</th>
                         </tr>
                       </thead>
@@ -362,12 +441,28 @@ export default function FinanceiroPage() {
                             <td className="py-3 capitalize">{expense.category}</td>
                             <td className="py-3">
                               {expense.attachment_url ? (
-                                <a href={expense.attachment_url} target="_blank" rel="noreferrer" className="text-primary underline">
+                                <button type="button" className="text-primary underline" onClick={() => openExpenseAttachment(Number(expense.id))}>
                                   Abrir
-                                </a>
+                                </button>
                               ) : (
                                 <span className="text-muted-foreground">-</span>
                               )}
+                            </td>
+                            <td className="py-3 text-right">
+                              <div className="flex justify-end gap-2">
+                                <Button type="button" variant="outline" size="sm" onClick={() => startExpenseEdit(expense)}>Editar</Button>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => {
+                                    if (window.confirm(`Excluir a despesa #${expense.id}?`)) deleteExpenseMutation.mutate(Number(expense.id));
+                                  }}
+                                  disabled={deleteExpenseMutation.isPending}
+                                >
+                                  Excluir
+                                </Button>
+                              </div>
                             </td>
                             <td className="py-3 text-right font-semibold">{money(expense.amount)}</td>
                           </tr>

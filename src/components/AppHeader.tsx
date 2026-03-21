@@ -24,20 +24,19 @@ const pageTitleByPath: Record<string, TranslationKey> = {
 
 export default function AppHeader() {
   const { config } = useTenant();
-  const { logout } = useAuth();
+  const { logout, profileName, role } = useAuth();
   const { t } = useI18n();
   const navigate = useNavigate();
   const location = useLocation();
 
-  const userNome = window.localStorage.getItem('imperial-flow-nome') || t('common.user');
-  const userRole = window.localStorage.getItem('imperial-flow-role') || 'cliente';
+  const userNome = profileName || t('common.user');
+  const userRole = role || 'cliente';
 
   const currentPageTitleKey = pageTitleByPath[location.pathname];
   const currentPageTitle = currentPageTitleKey ? t(currentPageTitleKey) : t('header.adminPanel');
 
-  const handleLogout = () => {
-    logout();
-    window.localStorage.removeItem('imperial-flow-nome');
+  const handleLogout = async () => {
+    await logout();
     navigate('/login');
   };
 
@@ -66,7 +65,7 @@ export default function AppHeader() {
           <Plus className="h-4 w-4" />
           {t('common.newBatch')}
         </Button>
-        <Button variant="ghost" size="icon" className="relative" onClick={() => navigate('/admin/alertas')}>
+        <Button variant="ghost" size="icon" className="relative" onClick={() => navigate('/admin/estoque')}>
           <Bell className="h-4 w-4" />
           <span className="absolute -top-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-[10px] text-destructive-foreground">
             4

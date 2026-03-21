@@ -139,6 +139,7 @@ export default function VendasPage() {
   const [paymentMethod, setPaymentMethod] = useState("pix");
   const [notes, setNotes] = useState("");
   const [draftItems, setDraftItems] = useState<SaleDraftItem[]>([createDraftItem()]);
+  const [editingSaleId, setEditingSaleId] = useState<number | null>(null);
 
   const reportQuery = useOperationalReportQuery({ start, end });
   const productsQuery = useStockProductsQuery();
@@ -344,8 +345,8 @@ export default function VendasPage() {
 
   const submitSaleMutation = useMutation({
     mutationFn: async () =>
-      backendRequest<{ sale: any }>("/api/store-sales", {
-        method: "POST",
+      backendRequest<{ sale: any }>(editingSaleId ? `/api/store-sales/${editingSaleId}` : "/api/store-sales", {
+        method: editingSaleId ? "PATCH" : "POST",
         body: JSON.stringify({
           saleDatetime: new Date(saleDatetime).toISOString(),
           paymentMethod,
@@ -367,7 +368,8 @@ export default function VendasPage() {
       setPaymentMethod("pix");
       setSaleDatetime(new Date().toISOString().slice(0, 16));
       setDraftItems([createDraftItem()]);
-      toast.success("Venda presencial registrada com baixa de estoque");
+      setEditingSaleId(null);
+      toast.success(editingSaleId ? "Venda presencial atualizada" : "Venda presencial registrada com baixa de estoque");
       queryClient.invalidateQueries({ queryKey: ["admin", "operational-report"] });
       queryClient.invalidateQueries({ queryKey: ["admin", "store-sales-history"] });
       queryClient.invalidateQueries({ queryKey: ["admin", "stock-products"] });
@@ -376,6 +378,43 @@ export default function VendasPage() {
       toast.error(error.message || "Erro ao registrar venda presencial");
     },
   });
+
+  const deleteSaleMutation = useMutation({
+    mutationFn: (saleId: number) => backendRequest(`/api/store-sales/${saleId}`, { method: "DELETE" }),
+    onSuccess: () => {
+      toast.success("Venda presencial excluida");
+      queryClient.invalidateQueries({ queryKey: ["admin", "operational-report"] });
+      queryClient.invalidateQueries({ queryKey: ["admin", "store-sales-history"] });
+      queryClient.invalidateQueries({ queryKey: ["admin", "stock-products"] });
+    },
+    onError: (error: any) => {
+      toast.error(error.message || "Erro ao excluir venda presencial");
+    },
+  });
+
+  const startSaleEdit = (sale: any) => {
+    setEditingSaleId(Number(sale.id));
+    setSaleDatetime(sale.sale_datetime ? new Date(sale.sale_datetime).toISOString().slice(0, 16) : new Date().toISOString().slice(0, 16));
+    setPaymentMethod(sale.payment_method || "pix");
+    setNotes(sale.notes || "");
+    setDraftItems(
+      (sale.items || []).map((item: any) => ({
+        productId: String(item.product_id || ""),
+        quantity: String(item.quantity || ""),
+        unitPrice: String(item.unit_price || ""),
+        unit: normalizeUnit(item.unit || "UN"),
+      })),
+    );
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const resetSaleForm = () => {
+    setEditingSaleId(null);
+    setNotes("");
+    setPaymentMethod("pix");
+    setSaleDatetime(new Date().toISOString().slice(0, 16));
+    setDraftItems([createDraftItem()]);
+  };
 
   const submitSale = async (event: any) => {
     event.preventDefault();
@@ -424,7 +463,7 @@ export default function VendasPage() {
             <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
               <div>
                 <div className="text-[11px] font-semibold uppercase tracking-[0.28em] text-yellow-400/80">Venda presencial</div>
-                <h2 className="mt-2 text-2xl font-bold text-foreground">Lancamento com baixa de estoque</h2>
+                <h2 className="mt-2 text-2xl font-bold text-foreground">{editingSaleId ? `Editando venda #${editingSaleId}` : "Lancamento com baixa de estoque"}</h2>
                 <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">Selecione os produtos vendidos, ajuste unidade e registre o pagamento.</p>
               </div>
               <div className="rounded-2xl border border-yellow-500/20 bg-yellow-500/10 px-5 py-4 text-right">
@@ -535,6 +574,7 @@ export default function VendasPage() {
                 <Plus className="mr-2 h-4 w-4" />
                 Adicionar produto
               </Button>
+              {editingSaleId ? <Button type="button" variant="outline" onClick={resetSaleForm} className="h-11 rounded-xl px-5">Cancelar edicao</Button> : null}
               <div className="rounded-xl border border-border/70 bg-background/70 px-4 py-3 text-sm text-muted-foreground">
                 Produtos unitarios vendem apenas em UN. Produtos por peso aceitam LB ou KG.
               </div>
@@ -546,7 +586,7 @@ export default function VendasPage() {
             </div>
 
             <Button type="submit" className="h-12 w-full rounded-xl text-base font-semibold" disabled={submitSaleMutation.isPending || productsQuery.isLoading}>
-              {submitSaleMutation.isPending ? "Salvando..." : "Registrar venda com baixa de estoque"}
+              {submitSaleMutation.isPending ? "Salvando..." : editingSaleId ? "Salvar alteracoes da venda" : "Registrar venda com baixa de estoque"}
             </Button>
           </form>
         </Card>
@@ -594,6 +634,19 @@ export default function VendasPage() {
                         </Button>
                         <Button type="button" variant="outline" onClick={() => printReceipt(sale)}>
                           <Printer className="mr-2 h-4 w-4" /> Imprimir
+                        </Button>
+                        <Button type="button" variant="outline" onClick={() => startSaleEdit(sale)}>
+                          Editar
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => {
+                            if (window.confirm(`Excluir a venda #${sale.id}? O estoque sera recomposto.`)) deleteSaleMutation.mutate(Number(sale.id));
+                          }}
+                          disabled={deleteSaleMutation.isPending}
+                        >
+                          Excluir
                         </Button>
                       </div>
                     </div>

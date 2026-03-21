@@ -89,6 +89,7 @@ export default function FinanceiroPage() {
       toast.success("Despesa registrada");
       queryClient.invalidateQueries({ queryKey: ["admin", "finance-overview"] });
       queryClient.invalidateQueries({ queryKey: ["admin", "expenses-history"] });
+      queryClient.invalidateQueries({ queryKey: ["admin", "operational-report"] });
     },
     onError: (error: any) => {
       toast.error(error.message || "Erro ao registrar despesa");

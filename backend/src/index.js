@@ -74,7 +74,7 @@ async function requireAssistantAdmin(req) {
 
   const byAuthUser = await supabase
     .from("users")
-    .select("id, nome, email, tipo, auth_user_id")
+    .select("id, nome, email, tipo, auth_user_id, tenant_id")
     .eq("auth_user_id", authData.user.id)
     .order("id", { ascending: false })
     .limit(1);
@@ -86,7 +86,7 @@ async function requireAssistantAdmin(req) {
   if (!profile && email) {
     const byEmail = await supabase
       .from("users")
-      .select("id, nome, email, tipo")
+      .select("id, nome, email, tipo, tenant_id")
       .eq("email", email)
       .order("id", { ascending: false })
       .limit(1);
@@ -107,6 +107,7 @@ async function requireAssistantAdmin(req) {
   return {
     authUserId: authData.user.id,
     profileId: profile.id,
+    tenantId: Number(profile.tenant_id || 1),
     name: profile.nome || authData.user.email || "admin",
     email: email || String(profile.email || "").trim().toLowerCase() || null,
   };
@@ -285,64 +286,222 @@ function resolveDeliveryAddress(client) {
   return [street, complement, locality, country].filter(Boolean).join(" - ");
 }
 
-function buildMessage({ type, name, code, orderItems, orderTotal, locale, deliveryAddress }) {
+const ZAPI_MESSAGE_SETTINGS_KEYS = {
+  confirmed: "zapi_template_confirmed",
+  out_for_delivery: "zapi_template_out_for_delivery",
+};
+
+const ZAPI_TEMPLATE_PLACEHOLDERS = [
+  "{{nome}}",
+  "{{codigo_pedido}}",
+  "{{itens}}",
+  "{{itens_bloco}}",
+  "{{total_estimado}}",
+  "{{total_bloco}}",
+  "{{endereco_entrega}}",
+  "{{endereco_bloco}}",
+];
+
+const DEFAULT_ZAPI_MESSAGE_TEMPLATES = {
+  confirmed: {
+    pt: [
+      "Atualizacao do pedido: Ola {{nome}}, seu pedido {{codigo_pedido}} foi confirmado com sucesso!",
+      "",
+      "Ja comecamos a preparacao dos itens.",
+      "Produtos vendidos por peso (KG/LB) podem ter pequena variacao de valor apos pesagem e embalagem.",
+      "",
+      "{{itens_bloco}}",
+      "{{total_bloco}}",
+    ].join("\n"),
+    en: [
+      "Order update: Hi {{nome}}, your order {{codigo_pedido}} was confirmed successfully!",
+      "",
+      "We have already started preparing your items.",
+      "Products sold by weight (KG/LB) may have a small price variation after weighing and packaging.",
+      "",
+      "{{itens_bloco}}",
+      "{{total_bloco}}",
+    ].join("\n"),
+  },
+  out_for_delivery: {
+    pt: [
+      "Atualizacao de entrega: Ola {{nome}}, seu pedido {{codigo_pedido}} saiu para entrega!",
+      "",
+      "Em breve ele chegara ao endereco informado.",
+      "{{endereco_bloco}}",
+      "",
+      "Obrigado pela preferencia.",
+      "",
+      "{{itens_bloco}}",
+      "{{total_bloco}}",
+    ].join("\n"),
+    en: [
+      "Delivery update: Hi {{nome}}, your order {{codigo_pedido}} is out for delivery!",
+      "",
+      "It will arrive at your address shortly.",
+      "{{endereco_bloco}}",
+      "",
+      "Thank you for your preference.",
+      "",
+      "{{itens_bloco}}",
+      "{{total_bloco}}",
+    ].join("\n"),
+  },
+};
+
+function parseJsonSafe(value, fallback = null) {
+  if (!value || typeof value !== "string") return fallback;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+
+function normalizeTemplateText(value, fallback = "") {
+  const text = String(value || "").replace(/\r\n/g, "\n").trim();
+  return text || fallback;
+}
+
+function cleanupRenderedMessage(value) {
+  return String(value || "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+async function loadZapiMessageTemplates(tenantId = 1) {
+  const keys = Object.values(ZAPI_MESSAGE_SETTINGS_KEYS);
+  const { data, error } = await supabase
+    .from("settings")
+    .select("chave, valor, tenant_id")
+    .in("chave", keys)
+    .or(`tenant_id.eq.${tenantId},tenant_id.is.null`);
+
+  if (error) {
+    throw createHttpError(500, "Erro ao carregar templates da Z-API.", error.message);
+  }
+
+  const rowsByKey = new Map();
+  for (const row of data || []) {
+    const key = String(row.chave || "").trim();
+    if (!key) continue;
+    const existing = rowsByKey.get(key);
+    const incomingTenant = Number(row.tenant_id || 0);
+    const existingTenant = Number(existing?.tenant_id || 0);
+    if (!existing || incomingTenant === tenantId || (!existingTenant && incomingTenant)) {
+      rowsByKey.set(key, row);
+    }
+  }
+
+  return {
+    confirmed: {
+      ...DEFAULT_ZAPI_MESSAGE_TEMPLATES.confirmed,
+      ...(parseJsonSafe(rowsByKey.get(ZAPI_MESSAGE_SETTINGS_KEYS.confirmed)?.valor, {}) || {}),
+    },
+    out_for_delivery: {
+      ...DEFAULT_ZAPI_MESSAGE_TEMPLATES.out_for_delivery,
+      ...(parseJsonSafe(rowsByKey.get(ZAPI_MESSAGE_SETTINGS_KEYS.out_for_delivery)?.valor, {}) || {}),
+    },
+  };
+}
+
+async function saveZapiMessageTemplates(tenantId, templates) {
+  const entries = [
+    [ZAPI_MESSAGE_SETTINGS_KEYS.confirmed, templates.confirmed],
+    [ZAPI_MESSAGE_SETTINGS_KEYS.out_for_delivery, templates.out_for_delivery],
+  ];
+
+  for (const [key, value] of entries) {
+    const payload = {
+      tenant_id: tenantId,
+      chave: key,
+      valor: JSON.stringify({
+        pt: normalizeTemplateText(value?.pt),
+        en: normalizeTemplateText(value?.en),
+      }),
+    };
+
+    const existing = await supabase
+      .from("settings")
+      .select("id")
+      .eq("tenant_id", tenantId)
+      .eq("chave", key)
+      .order("id", { ascending: false })
+      .limit(1);
+
+    if (existing.error) {
+      throw createHttpError(500, "Erro ao localizar configuracao da Z-API.", existing.error.message);
+    }
+
+    if (existing.data?.[0]?.id) {
+      const updateResult = await supabase.from("settings").update({ valor: payload.valor }).eq("id", existing.data[0].id);
+      if (updateResult.error) {
+        throw createHttpError(500, "Erro ao salvar configuracao da Z-API.", updateResult.error.message);
+      }
+      continue;
+    }
+
+    const insertResult = await supabase.from("settings").insert([payload]);
+    if (insertResult.error) {
+      throw createHttpError(500, "Erro ao criar configuracao da Z-API.", insertResult.error.message);
+    }
+  }
+}
+
+function renderNotificationTemplate(template, values) {
+  let output = String(template || "");
+  for (const [key, value] of Object.entries(values || {})) {
+    const token = new RegExp(`{{\\s*${key}\\s*}}`, "g");
+    output = output.replace(token, String(value || ""));
+  }
+  return cleanupRenderedMessage(output);
+}
+
+function buildMessage({ type, name, code, orderItems, orderTotal, locale, deliveryAddress, templates }) {
   const isEn = locale === "en";
   const safeName = String(name || "").trim() || (isEn ? "customer" : "cliente");
   const itemsLines = (orderItems || []).map((item) => `- ${item.nome}: ${formatQuantity(item.quantidade)}`);
-  const totalLabel = formatMoney(orderTotal);
-  const addressSuffix = deliveryAddress ? ` (${deliveryAddress})` : "";
-  const lines = [];
+  const totalLabel = formatMoney(orderTotal) || "";
+  const itemsBlock = itemsLines.length > 0
+    ? `${isEn ? "Order items:" : "Itens do pedido:"}\n${itemsLines.join("\n")}`
+    : "";
+  const totalBlock = totalLabel ? `${isEn ? "Estimated total" : "Total estimado"}: ${totalLabel}` : "";
+  const addressBlock = deliveryAddress
+    ? `${isEn ? "Delivery address" : "Endereco de entrega"}: ${deliveryAddress}`
+    : "";
 
-  if (type === "confirmed") {
-    if (isEn) {
-      lines.push(`Order update: Hi ${safeName}, your order ${code} was confirmed successfully!`);
-      lines.push("");
-      lines.push("We have already started preparing your items.");
-      lines.push("Products sold by weight (KG/LB) may have a small price variation after weighing and packaging.");
-    } else {
-      lines.push(`Atualizacao do pedido: Ola ${safeName}, seu pedido ${code} foi confirmado com sucesso!`);
-      lines.push("");
-      lines.push("Ja comecamos a preparacao dos itens.");
-      lines.push("Produtos vendidos por peso (KG/LB) podem ter pequena variacao de valor apos pesagem e embalagem.");
-    }
-  } else if (type === "review_request") {
-    if (isEn) {
-      lines.push(`Hi ${safeName}, your order ${code} was completed successfully.`);
-      lines.push("");
-      lines.push("Could you reply to this message with a quick review of your experience?");
-      lines.push("Your feedback helps us improve the service.");
-    } else {
-      lines.push(`Ola ${safeName}, seu pedido ${code} foi concluido com sucesso.`);
-      lines.push("");
-      lines.push("Voce pode responder esta mensagem com uma avaliacao rapida da sua experiencia?");
-      lines.push("Seu feedback ajuda a melhorar nosso atendimento.");
-    }
-  } else if (isEn) {
-    lines.push(`Delivery update: Hi ${safeName}, your order ${code} is out for delivery!`);
-    lines.push("");
-    lines.push(`It will arrive at your address shortly${addressSuffix}.`);
-    lines.push("");
-    lines.push("Thank you for your preference.");
-  } else {
-    lines.push(`Atualizacao de entrega: Ola ${safeName}, seu pedido ${code} saiu para entrega!`);
-    lines.push("");
-    lines.push(`Em breve ele chegara ao endereco informado${addressSuffix}.`);
-    lines.push("");
-    lines.push("Obrigado pela preferencia.");
+  if (type === "review_request") {
+    return cleanupRenderedMessage(
+      isEn
+        ? [
+            `Hi ${safeName}, your order ${code} was completed successfully.`,
+            "",
+            "Could you reply to this message with a quick review of your experience?",
+            "Your feedback helps us improve the service.",
+          ].join("\n")
+        : [
+            `Ola ${safeName}, seu pedido ${code} foi concluido com sucesso.`,
+            "",
+            "Voce pode responder esta mensagem com uma avaliacao rapida da sua experiencia?",
+            "Seu feedback ajuda a melhorar nosso atendimento.",
+          ].join("\n"),
+    );
   }
 
-  if (itemsLines.length > 0) {
-    lines.push("");
-    lines.push(isEn ? "Order items:" : "Itens do pedido:");
-    lines.push(...itemsLines);
-  }
+  const templateByType = templates?.[type] || DEFAULT_ZAPI_MESSAGE_TEMPLATES[type] || {};
+  const template = normalizeTemplateText(templateByType?.[isEn ? "en" : "pt"], DEFAULT_ZAPI_MESSAGE_TEMPLATES[type]?.[isEn ? "en" : "pt"] || "");
 
-  if (totalLabel) {
-    lines.push("");
-    lines.push(`${isEn ? "Estimated total" : "Total estimado"}: ${totalLabel}`);
-  }
-
-  return lines.join("\n");
+  return renderNotificationTemplate(template, {
+    nome: safeName,
+    codigo_pedido: code,
+    itens: itemsLines.join("\n"),
+    itens_bloco: itemsBlock,
+    total_estimado: totalLabel,
+    total_bloco: totalBlock,
+    endereco_entrega: deliveryAddress || "",
+    endereco_bloco: addressBlock,
+  });
 }
 
 function formatPaymentMethodLabel(paymentMethod, locale = "pt") {
@@ -356,6 +515,71 @@ function formatPaymentMethodLabel(paymentMethod, locale = "pt") {
       return isEn ? "Cash" : "Dinheiro";
     default:
       return paymentMethod ? String(paymentMethod) : (isEn ? "Not informed" : "Nao informado");
+  }
+}
+
+async function insertStockMovementSafe(payload, duplicateScope = "movement") {
+  const result = await supabase
+    .from("stock_movements")
+    .insert([payload])
+    .select("id")
+    .single();
+
+  if (!result.error && result.data?.id) {
+    return { inserted: true, movementId: Number(result.data.id) };
+  }
+
+  const duplicated = String(result.error?.message || "").toLowerCase().includes("duplicate") ||
+    String(result.error?.code || "") === "23505";
+
+  if (duplicated) {
+    return { inserted: false, movementId: null, reason: `${duplicateScope}_duplicate` };
+  }
+
+  throw createHttpError(500, "Erro ao registrar movimentacao de estoque.", result.error?.message || null);
+}
+
+async function deleteStockMovementById(movementId) {
+  if (!movementId) return;
+  const { error } = await supabase.from("stock_movements").delete().eq("id", movementId);
+  if (error) {
+    throw createHttpError(500, "Erro ao limpar movimentacao temporaria de estoque.", error.message);
+  }
+}
+
+async function updateBatchQuantityExpected({ batchId, expectedQty, nextQty, notFoundMessage, conflictMessage, genericMessage }) {
+  const result = await supabase
+    .from("batches")
+    .update({ quantidade_disponivel: nextQty })
+    .eq("id", batchId)
+    .eq("quantidade_disponivel", expectedQty)
+    .select("id")
+    .maybeSingle();
+
+  if (result.error) {
+    throw createHttpError(500, genericMessage, result.error.message);
+  }
+
+  if (!result.data) {
+    const { data: batch, error: batchError } = await supabase
+      .from("batches")
+      .select("id, quantidade_disponivel")
+      .eq("id", batchId)
+      .maybeSingle();
+
+    if (batchError) {
+      throw createHttpError(500, genericMessage, batchError.message);
+    }
+
+    if (!batch) {
+      throw createHttpError(404, notFoundMessage);
+    }
+
+    throw createHttpError(409, conflictMessage, {
+      batchId,
+      expectedQty,
+      currentQty: parseNumber(batch.quantidade_disponivel, 0),
+    });
   }
 }
 
@@ -653,7 +877,7 @@ async function sendWhatsAppViaZApi({ phone, message }) {
   };
 }
 
-async function sendStatusNotification({ previousStatus, newStatus, clientName, clientPhone, orderCode, orderItems, orderTotal, locale, deliveryAddress }) {
+async function sendStatusNotification({ previousStatus, newStatus, clientName, clientPhone, orderCode, orderItems, orderTotal, locale, deliveryAddress, tenantId }) {
   let type = null;
   if (previousStatus === STATUS.RECEBIDO && newStatus === STATUS.CONFIRMADO) type = "confirmed";
   if (previousStatus === STATUS.PRONTO && newStatus === STATUS.ENTREGA) type = "out_for_delivery";
@@ -670,7 +894,17 @@ async function sendStatusNotification({ previousStatus, newStatus, clientName, c
   const phone = normalizePhone(clientPhone);
   if (!phone) return { sent: false, queued: false, reason: "missing-phone", eventType };
 
-  const message = buildMessage({ type, name: clientName || "cliente", code: orderCode, orderItems, orderTotal, locale, deliveryAddress });
+  const templates = type === "review_request" ? null : await loadZapiMessageTemplates(Number(tenantId || 1));
+  const message = buildMessage({
+    type,
+    name: clientName || "cliente",
+    code: orderCode,
+    orderItems,
+    orderTotal,
+    locale,
+    deliveryAddress,
+    templates,
+  });
 
   const sendResult = await sendWhatsAppViaZApi({ phone, message });
   if (!sendResult.ok) {
@@ -972,33 +1206,31 @@ async function applyOrderStockExit(orderId) {
 
   for (const step of consumptionPlan) {
     const nextQty = roundQty(step.availableBefore - step.consumeInBatchUnit, 3);
+    const movementInsert = await insertStockMovementSafe({
+      tipo: "exit",
+      produto_id: step.productId,
+      batch_id: step.batchId,
+      qty: step.consumeInStockUnit,
+      unit: step.productUnit,
+      source_type: "order",
+      source_id: sourceId,
+      metadata: { reason: "order_concluded" },
+    }, "order_exit");
 
-    const { error: updateBatchError } = await supabase
-      .from("batches")
-      .update({ quantidade_disponivel: nextQty })
-      .eq("id", step.batchId);
+    if (!movementInsert.inserted) continue;
 
-    if (updateBatchError) throw createHttpError(500, "Erro ao atualizar saldo do lote.", updateBatchError.message);
-
-    const { error: movementError } = await supabase
-      .from("stock_movements")
-      .insert([
-        {
-          tipo: "exit",
-          produto_id: step.productId,
-          batch_id: step.batchId,
-          qty: step.consumeInStockUnit,
-          unit: step.productUnit,
-          source_type: "order",
-          source_id: sourceId,
-          metadata: { reason: "order_concluded" },
-        },
-      ]);
-
-    if (movementError) {
-      const duplicated = String(movementError.message || "").toLowerCase().includes("duplicate") ||
-        String(movementError.code || "") === "23505";
-      if (!duplicated) throw createHttpError(500, "Erro ao registrar movimentacao de saida.", movementError.message);
+    try {
+      await updateBatchQuantityExpected({
+        batchId: step.batchId,
+        expectedQty: step.availableBefore,
+        nextQty,
+        notFoundMessage: "Lote nao encontrado para baixa de estoque do pedido.",
+        conflictMessage: "Saldo do lote mudou durante a baixa do pedido. Recarregue e tente novamente.",
+        genericMessage: "Erro ao atualizar saldo do lote.",
+      });
+    } catch (error) {
+      await deleteStockMovementById(movementInsert.movementId);
+      throw error;
     }
 
     changedProducts.add(step.productId);
@@ -1041,6 +1273,23 @@ async function applyOrderStockReversal(orderId, reason = "manual_status_reversal
   const changedProducts = new Set();
 
   for (const movement of exits) {
+    const normalizedUnit = normalizeStockUnit(movement.unit, "LB");
+    const movementInsert = await insertStockMovementSafe({
+      tipo: "reversal",
+      produto_id: movement.produto_id,
+      batch_id: movement.batch_id,
+      qty: movement.qty,
+      unit: normalizedUnit,
+      source_type: "order",
+      source_id: sourceId,
+      metadata: { reversed_from_movement_id: movement.id, reason },
+    }, "order_reversal");
+
+    if (!movementInsert.inserted) {
+      changedProducts.add(Number(movement.produto_id));
+      continue;
+    }
+
     if (movement.batch_id) {
       const { data: batch, error: batchError } = await supabase
         .from("batches")
@@ -1050,34 +1299,20 @@ async function applyOrderStockReversal(orderId, reason = "manual_status_reversal
 
       if (!batchError && batch) {
         const nextQty = roundQty(parseNumber(batch.quantidade_disponivel, 0) + parseNumber(movement.qty, 0), 3);
-        const { error: batchUpdateError } = await supabase
-          .from("batches")
-          .update({ quantidade_disponivel: nextQty })
-          .eq("id", movement.batch_id);
-
-        if (batchUpdateError) throw createHttpError(500, "Erro ao atualizar lote no estorno de estoque.", batchUpdateError.message);
+        try {
+          await updateBatchQuantityExpected({
+            batchId: movement.batch_id,
+            expectedQty: parseNumber(batch.quantidade_disponivel, 0),
+            nextQty,
+            notFoundMessage: "Lote nao encontrado para estorno de estoque do pedido.",
+            conflictMessage: "Saldo do lote mudou durante o estorno do pedido. Recarregue e tente novamente.",
+            genericMessage: "Erro ao atualizar lote no estorno de estoque.",
+          });
+        } catch (error) {
+          await deleteStockMovementById(movementInsert.movementId);
+          throw error;
+        }
       }
-    }
-
-    const { error: reversalError } = await supabase
-      .from("stock_movements")
-      .insert([
-        {
-          tipo: "reversal",
-          produto_id: movement.produto_id,
-          batch_id: movement.batch_id,
-          qty: movement.qty,
-          unit: normalizeStockUnit(movement.unit, "LB"),
-          source_type: "order",
-          source_id: sourceId,
-          metadata: { reversed_from_movement_id: movement.id, reason },
-        },
-      ]);
-
-    if (reversalError) {
-      const duplicated = String(reversalError.message || "").toLowerCase().includes("duplicate") ||
-        String(reversalError.code || "") === "23505";
-      if (!duplicated) throw createHttpError(500, "Erro ao registrar movimentacao de estorno.", reversalError.message);
     }
 
     changedProducts.add(Number(movement.produto_id));
@@ -1267,34 +1502,34 @@ async function applyStoreSaleStockExit(storeSaleId, saleItems, reason = "store_s
   try {
     for (const step of consumptionPlan) {
       const nextQty = roundQty(step.availableBefore - step.consumeInBatchUnit, 3);
+      const movementInsert = await insertStockMovementSafe({
+        tipo: "exit",
+        produto_id: step.productId,
+        batch_id: step.batchId,
+        qty: step.consumeInStockUnit,
+        unit: step.productUnit,
+        source_type: "manual",
+        source_id: sourceId,
+        metadata: { reason, origin: "store_sale" },
+      }, "store_sale_exit");
 
-      const { error: updateBatchError } = await supabase
-        .from("batches")
-        .update({ quantidade_disponivel: nextQty })
-        .eq("id", step.batchId);
+      if (!movementInsert.inserted) continue;
 
-      if (updateBatchError) throw createHttpError(500, "Erro ao atualizar saldo do lote da venda presencial.", updateBatchError.message);
+      try {
+        await updateBatchQuantityExpected({
+          batchId: step.batchId,
+          expectedQty: step.availableBefore,
+          nextQty,
+          notFoundMessage: "Lote nao encontrado para baixa da venda presencial.",
+          conflictMessage: "Saldo do lote mudou durante a venda presencial. Recarregue e tente novamente.",
+          genericMessage: "Erro ao atualizar saldo do lote da venda presencial.",
+        });
+      } catch (error) {
+        await deleteStockMovementById(movementInsert.movementId);
+        throw error;
+      }
 
       appliedSteps.push(step);
-
-      const { error: movementError } = await supabase
-        .from("stock_movements")
-        .insert([
-          {
-            tipo: "exit",
-            produto_id: step.productId,
-            batch_id: step.batchId,
-            qty: step.consumeInStockUnit,
-            unit: step.productUnit,
-            source_type: "manual",
-            source_id: sourceId,
-            metadata: { reason, origin: "store_sale" },
-          },
-        ]);
-
-      if (movementError) {
-        throw createHttpError(500, "Erro ao registrar movimentacao de estoque da venda presencial.", movementError.message);
-      }
 
       changedProducts.add(step.productId);
     }
@@ -3351,6 +3586,56 @@ const assistantService = createAssistantService({
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true });
+});
+
+app.get("/api/admin/zapi-message-templates", async (req, res) => {
+  try {
+    const actor = await requireAssistantAdmin(req);
+    const templates = await loadZapiMessageTemplates(actor.tenantId);
+    return res.json({
+      ok: true,
+      tenantId: actor.tenantId,
+      placeholders: ZAPI_TEMPLATE_PLACEHOLDERS,
+      defaults: DEFAULT_ZAPI_MESSAGE_TEMPLATES,
+      templates,
+    });
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro ao carregar configuracao de mensagens da Z-API.",
+      detail: error?.detail || null,
+    });
+  }
+});
+
+app.patch("/api/admin/zapi-message-templates", async (req, res) => {
+  try {
+    const actor = await requireAssistantAdmin(req);
+    const templates = {
+      confirmed: {
+        pt: normalizeTemplateText(req.body?.templates?.confirmed?.pt, DEFAULT_ZAPI_MESSAGE_TEMPLATES.confirmed.pt),
+        en: normalizeTemplateText(req.body?.templates?.confirmed?.en, DEFAULT_ZAPI_MESSAGE_TEMPLATES.confirmed.en),
+      },
+      out_for_delivery: {
+        pt: normalizeTemplateText(req.body?.templates?.out_for_delivery?.pt, DEFAULT_ZAPI_MESSAGE_TEMPLATES.out_for_delivery.pt),
+        en: normalizeTemplateText(req.body?.templates?.out_for_delivery?.en, DEFAULT_ZAPI_MESSAGE_TEMPLATES.out_for_delivery.en),
+      },
+    };
+
+    await saveZapiMessageTemplates(actor.tenantId, templates);
+
+    return res.json({
+      ok: true,
+      tenantId: actor.tenantId,
+      placeholders: ZAPI_TEMPLATE_PLACEHOLDERS,
+      defaults: DEFAULT_ZAPI_MESSAGE_TEMPLATES,
+      templates,
+    });
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro ao salvar configuracao de mensagens da Z-API.",
+      detail: error?.detail || null,
+    });
+  }
 });
 
 app.use("/api/stock", createStockRouter({

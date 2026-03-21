@@ -13,6 +13,7 @@ import {
   Store,
   Bot,
   UserRoundCog,
+  Settings,
 } from 'lucide-react';
 
 type NavItem = {
@@ -32,6 +33,7 @@ const navItems: NavItem[] = [
   { titleKey: 'nav.employees', url: '/admin/funcionarios', icon: UserRoundCog },
   { titleKey: 'nav.reports', url: '/admin/relatorios', icon: BarChart3 },
   { titleKey: 'nav.assistant', url: '/admin/assistente', icon: Bot },
+  { titleKey: 'page.settings', url: '/admin/configuracoes', icon: Settings },
 ];
 
 export default function AppSidebar() {

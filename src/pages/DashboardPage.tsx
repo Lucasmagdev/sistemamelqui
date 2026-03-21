@@ -114,15 +114,17 @@ export default function DashboardPage() {
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-    const revenue30 = orders.reduce((sum, order) => sum + (order.valor_total || 0), 0);
-    const todayOrders = orders.filter((order) => getDateKey(order.data_pedido) === todayKey).length;
-    const pendingOrders = orders.filter((order) => (order.status ?? 0) < 5).length;
     const recentOrders = orders.filter((order) => {
       if (!order.data_pedido) return false;
       return new Date(order.data_pedido) >= thirtyDaysAgo;
     });
-    const ticketAvg = recentOrders.length
-      ? recentOrders.reduce((sum, order) => sum + (order.valor_total || 0), 0) / recentOrders.length
+    const recentConcludedOrders = recentOrders.filter((order) => (order.status ?? 0) === 5);
+
+    const revenue30 = recentConcludedOrders.reduce((sum, order) => sum + (order.valor_total || 0), 0);
+    const todayOrders = orders.filter((order) => getDateKey(order.data_pedido) === todayKey).length;
+    const pendingOrders = orders.filter((order) => (order.status ?? 0) < 5).length;
+    const ticketAvg = recentConcludedOrders.length
+      ? recentConcludedOrders.reduce((sum, order) => sum + (order.valor_total || 0), 0) / recentConcludedOrders.length
       : 0;
 
     return {
@@ -177,6 +179,7 @@ export default function DashboardPage() {
   const topClients = useMemo(() => {
     const map = new Map<string, { pedidos: number; valor: number }>();
     orders.forEach((order) => {
+      if ((order.status ?? 0) !== 5) return;
       if (!order.cliente_id) return;
       const current = map.get(order.cliente_id) || { pedidos: 0, valor: 0 };
       map.set(order.cliente_id, {
@@ -243,7 +246,7 @@ export default function DashboardPage() {
 
         <Card className="card-elevated">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm text-muted-foreground">Faturamento (30 dias)</CardTitle>
+            <CardTitle className="text-sm text-muted-foreground">Faturamento delivery concluido (30 dias)</CardTitle>
           </CardHeader>
           <CardContent className="flex items-center justify-between">
             <span className="text-2xl font-bold">{formatCurrency(stats.revenue30)}</span>
@@ -253,7 +256,7 @@ export default function DashboardPage() {
 
         <Card className="card-elevated">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm text-muted-foreground">Ticket medio (30 dias)</CardTitle>
+            <CardTitle className="text-sm text-muted-foreground">Ticket medio concluido (30 dias)</CardTitle>
           </CardHeader>
           <CardContent className="flex items-center justify-between">
             <span className="text-2xl font-bold">{formatCurrency(stats.ticketAvg)}</span>

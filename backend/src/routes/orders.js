@@ -283,6 +283,7 @@ export function createOrdersRouter(deps) {
           notification = await sendStatusNotification({
             previousStatus,
             newStatus,
+            tenantId: order.tenant_id || client.tenant_id || 1,
             clientName: client.nome,
             clientPhone: client.telefone,
             orderCode,

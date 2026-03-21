@@ -1,25 +1,209 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTenant } from '@/contexts/TenantContext';
+import { backendRequest } from '@/lib/backendClient';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
+import { Badge } from '@/components/ui/badge';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Check, Copy, MessageSquareText, Truck } from 'lucide-react';
 import { toast } from 'sonner';
+
+type TemplateLocale = {
+  pt: string;
+  en: string;
+};
+
+type ZapiTemplates = {
+  confirmed: TemplateLocale;
+  out_for_delivery: TemplateLocale;
+};
+
+type TemplatesResponse = {
+  ok: true;
+  tenantId: number;
+  placeholders: string[];
+  defaults: ZapiTemplates;
+  templates: ZapiTemplates;
+};
+
+const emptyTemplates: ZapiTemplates = {
+  confirmed: { pt: '', en: '' },
+  out_for_delivery: { pt: '', en: '' },
+};
+
+const previewData = {
+  nome: 'Maria',
+  codigo_pedido: 'IMP123',
+  itens: '- Costela: 2\n- Linguica: 1',
+  itens_bloco: 'Itens do pedido:\n- Costela: 2\n- Linguica: 1',
+  total_estimado: '$48.50',
+  total_bloco: 'Total estimado: $48.50',
+  endereco_entrega: '123 Main St, Dallas, TX',
+  endereco_bloco: 'Endereco de entrega: 123 Main St, Dallas, TX',
+};
+
+const eventMeta = {
+  confirmed: {
+    title: 'Pedido confirmado',
+    description: 'Enviado quando o status muda para confirmado.',
+    icon: MessageSquareText,
+  },
+  out_for_delivery: {
+    title: 'Saiu para entrega',
+    description: 'Enviado quando o status muda para entrega.',
+    icon: Truck,
+  },
+} as const;
+
+function renderPreview(template: string) {
+  let output = template || '';
+  for (const [key, value] of Object.entries(previewData)) {
+    output = output.replace(new RegExp(`{{\\s*${key}\\s*}}`, 'g'), value);
+  }
+
+  return output
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
 
 export default function ConfiguracoesPage() {
   const { config, updateConfig } = useTenant();
   const [nome, setNome] = useState(config.nomeEmpresa);
   const [cor, setCor] = useState(config.corPrimaria);
+  const [logoUrl, setLogoUrl] = useState(config.logoUrl || '');
+  const [templates, setTemplates] = useState<ZapiTemplates>(emptyTemplates);
+  const [defaultTemplates, setDefaultTemplates] = useState<ZapiTemplates>(emptyTemplates);
+  const [placeholders, setPlaceholders] = useState<string[]>([]);
+  const [loadingTemplates, setLoadingTemplates] = useState(true);
+  const [savingTemplates, setSavingTemplates] = useState(false);
+  const [activeTemplateType, setActiveTemplateType] = useState<keyof ZapiTemplates>('confirmed');
+  const [activeLocale, setActiveLocale] = useState<keyof TemplateLocale>('pt');
+  const [copiedPlaceholder, setCopiedPlaceholder] = useState<string | null>(null);
 
-  const handleSave = () => {
-    updateConfig({ nomeEmpresa: nome, corPrimaria: cor });
-    toast.success('Configurações salvas!');
+  useEffect(() => {
+    let active = true;
+
+    const loadTemplates = async () => {
+      try {
+        setLoadingTemplates(true);
+        const response = await backendRequest<TemplatesResponse>('/api/admin/zapi-message-templates');
+        if (!active) return;
+        setTemplates(response.templates || emptyTemplates);
+        setDefaultTemplates(response.defaults || emptyTemplates);
+        setPlaceholders(response.placeholders || []);
+      } catch (error: any) {
+        if (!active) return;
+        toast.error(error.message || 'Erro ao carregar mensagens da Z-API');
+      } finally {
+        if (active) setLoadingTemplates(false);
+      }
+    };
+
+    void loadTemplates();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const previews = useMemo(() => ({
+    confirmed: {
+      pt: renderPreview(templates.confirmed.pt),
+      en: renderPreview(templates.confirmed.en),
+    },
+    out_for_delivery: {
+      pt: renderPreview(templates.out_for_delivery.pt),
+      en: renderPreview(templates.out_for_delivery.en),
+    },
+  }), [templates]);
+
+  const handleSaveBrand = () => {
+    updateConfig({ nomeEmpresa: nome, corPrimaria: cor, logoUrl });
+    toast.success('Configuracoes locais salvas!');
   };
 
+  const handleTemplateChange = (type: keyof ZapiTemplates, locale: keyof TemplateLocale, value: string) => {
+    setTemplates((current) => ({
+      ...current,
+      [type]: {
+        ...current[type],
+        [locale]: value,
+      },
+    }));
+  };
+
+  const handleSaveTemplates = async () => {
+    try {
+      setSavingTemplates(true);
+      const response = await backendRequest<TemplatesResponse>('/api/admin/zapi-message-templates', {
+        method: 'PATCH',
+        body: JSON.stringify({ templates }),
+      });
+      setTemplates(response.templates || emptyTemplates);
+      setDefaultTemplates(response.defaults || emptyTemplates);
+      setPlaceholders(response.placeholders || []);
+      toast.success('Mensagens da Z-API salvas!');
+    } catch (error: any) {
+      toast.error(error.message || 'Erro ao salvar mensagens da Z-API');
+    } finally {
+      setSavingTemplates(false);
+    }
+  };
+
+  const handleRestoreDefaults = async () => {
+    try {
+      setSavingTemplates(true);
+      const response = await backendRequest<TemplatesResponse>('/api/admin/zapi-message-templates', {
+        method: 'PATCH',
+        body: JSON.stringify({ templates: defaultTemplates }),
+      });
+      setTemplates(response.templates || emptyTemplates);
+      setDefaultTemplates(response.defaults || emptyTemplates);
+      setPlaceholders(response.placeholders || []);
+      toast.success('Padroes da Z-API restaurados!');
+    } catch (error: any) {
+      toast.error(error.message || 'Erro ao restaurar padroes da Z-API');
+    } finally {
+      setSavingTemplates(false);
+    }
+  };
+
+  const handleCopyPlaceholder = async (placeholder: string) => {
+    try {
+      await navigator.clipboard.writeText(placeholder);
+      setCopiedPlaceholder(placeholder);
+      toast.success('Placeholder copiado');
+      window.setTimeout(() => {
+        setCopiedPlaceholder((current) => (current === placeholder ? null : current));
+      }, 1500);
+    } catch {
+      toast.error('Nao foi possivel copiar o placeholder');
+    }
+  };
+
+  const handleInsertPlaceholder = (placeholder: string) => {
+    setTemplates((current) => ({
+      ...current,
+      [activeTemplateType]: {
+        ...current[activeTemplateType],
+        [activeLocale]: `${current[activeTemplateType][activeLocale]}${current[activeTemplateType][activeLocale] ? '\n' : ''}${placeholder}`,
+      },
+    }));
+  };
+
+  const activePreview = previews[activeTemplateType][activeLocale];
+  const activeTemplate = templates[activeTemplateType][activeLocale];
+  const activeEvent = eventMeta[activeTemplateType];
+  const ActiveEventIcon = activeEvent.icon;
+
   return (
-    <div className="mx-auto max-w-2xl space-y-6">
+    <div className="mx-auto max-w-5xl space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-foreground">Configurações</h1>
-        <p className="text-sm text-muted-foreground">White Label — personalização do tenant</p>
+        <h1 className="text-2xl font-bold text-foreground">Configuracoes</h1>
+        <p className="text-sm text-muted-foreground">White label local e mensagens automaticas da Z-API</p>
       </div>
 
       <div className="rounded-xl border border-border bg-card p-6 card-elevated space-y-5">
@@ -28,7 +212,7 @@ export default function ConfiguracoesPage() {
           <Input value={nome} onChange={(e) => setNome(e.target.value)} />
         </div>
         <div className="space-y-1.5">
-          <Label>Cor Primária</Label>
+          <Label>Cor Primaria</Label>
           <div className="flex items-center gap-3">
             <Input value={cor} onChange={(e) => setCor(e.target.value)} className="max-w-[200px]" />
             <div className="h-10 w-10 rounded-md border border-border" style={{ backgroundColor: cor }} />
@@ -36,15 +220,188 @@ export default function ConfiguracoesPage() {
         </div>
         <div className="space-y-1.5">
           <Label>Logo (URL)</Label>
-          <Input placeholder="https://..." onChange={(e) => updateConfig({ logoUrl: e.target.value })} />
+          <Input value={logoUrl} placeholder="https://..." onChange={(e) => setLogoUrl(e.target.value)} />
         </div>
         <div className="space-y-1.5">
           <Label>Tenant ID</Label>
           <Input value={config.tenantId} disabled className="bg-muted" />
         </div>
-        <Button onClick={handleSave} className="gold-gradient-bg text-accent-foreground font-semibold hover:opacity-90 gold-shadow">
-          Salvar Configurações
+        <Button onClick={handleSaveBrand} className="gold-gradient-bg text-accent-foreground font-semibold hover:opacity-90 gold-shadow">
+          Salvar configuracoes locais
         </Button>
+      </div>
+
+      <div className="rounded-xl border border-border bg-card p-6 card-elevated space-y-6">
+        <div className="flex flex-col gap-4 border-b border-border/70 pb-5 lg:flex-row lg:items-end lg:justify-between">
+          <div className="space-y-1.5">
+            <h2 className="text-xl font-semibold text-foreground">Mensagens automaticas do WhatsApp</h2>
+            <p className="max-w-2xl text-sm text-muted-foreground">
+              O admin pode cadastrar os textos usados no pedido confirmado e no pedido saiu para entrega.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Badge variant="outline" className="border-amber-500/30 bg-amber-500/10 px-3 py-1 text-[11px] font-medium text-amber-200">
+              2 eventos configuraveis
+            </Badge>
+            <Badge variant="outline" className="border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-[11px] font-medium text-emerald-200">
+              Preview em tempo real
+            </Badge>
+          </div>
+        </div>
+
+        <Tabs value={activeTemplateType} onValueChange={(value) => setActiveTemplateType(value as keyof ZapiTemplates)} className="space-y-5">
+          <TabsList className="grid h-auto grid-cols-1 gap-2 bg-transparent p-0 lg:grid-cols-2">
+            {Object.entries(eventMeta).map(([key, meta]) => {
+              const Icon = meta.icon;
+              return (
+                <TabsTrigger
+                  key={key}
+                  value={key}
+                  className="h-auto rounded-xl border border-border/80 bg-background/60 px-4 py-4 data-[state=active]:border-primary/50 data-[state=active]:bg-primary/10 data-[state=active]:text-foreground data-[state=active]:shadow-none"
+                >
+                  <div className="flex w-full items-start gap-3 text-left">
+                    <div className="mt-0.5 rounded-lg border border-border/70 bg-muted/40 p-2">
+                      <Icon className="h-4 w-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="font-semibold">{meta.title}</div>
+                      <div className="mt-1 text-xs leading-5 text-muted-foreground">{meta.description}</div>
+                    </div>
+                  </div>
+                </TabsTrigger>
+              );
+            })}
+          </TabsList>
+
+          {Object.keys(eventMeta).map((typeKey) => (
+            <TabsContent key={typeKey} value={typeKey} className="mt-0">
+              <div className="grid gap-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
+                <div className="space-y-5 rounded-2xl border border-border/80 bg-background/40 p-5">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                    <div className="flex items-start gap-3">
+                      <div className="rounded-xl border border-border/70 bg-muted/40 p-2.5">
+                        <ActiveEventIcon className="h-4 w-4 text-primary" />
+                      </div>
+                      <div>
+                        <h3 className="font-semibold text-foreground">{activeEvent.title}</h3>
+                        <p className="text-sm text-muted-foreground">{activeEvent.description}</p>
+                      </div>
+                    </div>
+                    <Tabs value={activeLocale} onValueChange={(value) => setActiveLocale(value as keyof TemplateLocale)}>
+                      <TabsList className="bg-muted/60">
+                        <TabsTrigger value="pt">PT-BR</TabsTrigger>
+                        <TabsTrigger value="en">EN</TabsTrigger>
+                      </TabsList>
+                    </Tabs>
+                  </div>
+
+                  <div className="rounded-xl border border-dashed border-border/70 bg-muted/20 p-4">
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-medium text-foreground">Atalhos de placeholders</p>
+                        <p className="text-xs text-muted-foreground">
+                          Clique para inserir no template atual ou use copiar para colar onde quiser.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {placeholders.map((placeholder) => (
+                        <div key={placeholder} className="flex items-center gap-1 rounded-full border border-border bg-background/70 p-1">
+                          <button
+                            type="button"
+                            onClick={() => handleInsertPlaceholder(placeholder)}
+                            className="rounded-full px-3 py-1 text-xs font-medium text-foreground transition hover:bg-muted"
+                          >
+                            {placeholder}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleCopyPlaceholder(placeholder)}
+                            className="rounded-full p-1.5 text-muted-foreground transition hover:bg-muted hover:text-foreground"
+                            aria-label={`Copiar ${placeholder}`}
+                            title={`Copiar ${placeholder}`}
+                          >
+                            {copiedPlaceholder === placeholder ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="mt-3 text-xs leading-5 text-muted-foreground">
+                      Os blocos `itens_bloco`, `total_bloco` e `endereco_bloco` sao ideais quando voce quer ocultar a linha automaticamente se nao houver conteudo.
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <Label>{activeLocale === 'pt' ? 'Template em portugues' : 'Template em ingles'}</Label>
+                      <span className="text-xs text-muted-foreground">
+                        {activeTemplate.trim().split(/\s+/).filter(Boolean).length} palavras
+                      </span>
+                    </div>
+                    <Textarea
+                      value={activeTemplate}
+                      onChange={(e) => handleTemplateChange(activeTemplateType, activeLocale, e.target.value)}
+                      className="min-h-[320px] resize-y rounded-xl border-border/80 bg-background/70 font-medium leading-6"
+                      disabled={loadingTemplates}
+                    />
+                  </div>
+                </div>
+
+                <aside className="space-y-4 rounded-2xl border border-border/80 bg-gradient-to-b from-muted/30 to-background p-5">
+                  <div className="space-y-1">
+                    <p className="text-sm font-semibold text-foreground">Previa da mensagem</p>
+                    <p className="text-xs leading-5 text-muted-foreground">
+                      Exemplo com dados ficticios para validar leitura, espacamento e placeholders.
+                    </p>
+                  </div>
+
+                  <div className="rounded-[24px] border border-emerald-500/20 bg-[#111714] p-3 shadow-[0_0_0_1px_rgba(16,185,129,0.05)]">
+                    <div className="rounded-[18px] bg-[#0b0f0d] p-4">
+                      <div className="mb-3 flex items-center gap-2">
+                        <div className="h-8 w-8 rounded-full bg-emerald-500/20" />
+                        <div>
+                          <p className="text-sm font-semibold text-emerald-50">WhatsApp cliente</p>
+                          <p className="text-[11px] text-emerald-200/60">{activeLocale === 'pt' ? 'Visualizacao do envio' : 'Send preview'}</p>
+                        </div>
+                      </div>
+                      <div className="max-h-[360px] overflow-auto rounded-2xl bg-[#17221b] px-4 py-3 text-sm leading-6 text-emerald-50 whitespace-pre-wrap">
+                        {activePreview || 'Sem texto'}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-border/70 bg-background/60 p-4">
+                    <p className="text-sm font-medium text-foreground">Boas praticas</p>
+                    <ul className="mt-2 space-y-2 text-xs leading-5 text-muted-foreground">
+                      <li>Mantenha a primeira linha objetiva com o status e o codigo do pedido.</li>
+                      <li>Use blocos para itens, total e endereco sem deixar linhas vazias desnecessarias.</li>
+                      <li>Evite mensagens muito longas para nao prejudicar leitura no celular.</li>
+                    </ul>
+                  </div>
+                </aside>
+              </div>
+            </TabsContent>
+          ))}
+        </Tabs>
+
+        <div className="flex flex-col gap-3 sm:flex-row sm:justify-end">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={handleRestoreDefaults}
+            disabled={loadingTemplates || savingTemplates}
+            className="border-border/80 bg-background/70"
+          >
+            Restaurar padroes
+          </Button>
+          <Button
+            onClick={handleSaveTemplates}
+            disabled={loadingTemplates || savingTemplates}
+            className="gold-gradient-bg text-accent-foreground font-semibold hover:opacity-90 gold-shadow"
+          >
+            {savingTemplates ? 'Salvando mensagens...' : 'Salvar mensagens da Z-API'}
+          </Button>
+        </div>
       </div>
     </div>
   );

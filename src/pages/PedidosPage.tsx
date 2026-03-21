@@ -230,7 +230,11 @@ export default function PedidosPage() {
             orders={openOrders}
             moeda="USD"
             unidadePeso="LB"
-            onStatusChange={() => queryClient.invalidateQueries({ queryKey: ["admin", "orders"] })}
+            onStatusChange={() => {
+              queryClient.invalidateQueries({ queryKey: ["admin", "orders"] });
+              queryClient.invalidateQueries({ queryKey: ["admin", "operational-report"] });
+              queryClient.invalidateQueries({ queryKey: ["admin", "stock-products"] });
+            }}
           />
         </section>
       ) : null}

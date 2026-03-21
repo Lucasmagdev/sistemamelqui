@@ -236,10 +236,13 @@ export function createStockRouter(deps) {
 
       const costTotal = parseNumber(req.body?.custo_total, NaN);
       const unitCost = parseNumber(req.body?.custo_unitario, NaN);
-      const safeCostTotal = Number.isFinite(costTotal) ? roundQty(costTotal, 2) : null;
-      const safeUnitCost = Number.isFinite(unitCost)
-        ? roundQty(unitCost, 4)
-        : (safeCostTotal != null ? roundQty(safeCostTotal / qtyRaw, 4) : null);
+      const resolvedCostTotal = Number.isFinite(costTotal)
+        ? roundQty(costTotal, 2)
+        : (Number.isFinite(unitCost) ? roundQty(unitCost * qtyRaw, 2) : null);
+      const safeCostTotal = resolvedCostTotal;
+      const safeUnitCost = safeCostTotal != null && qtyInStockUnit > 0
+        ? roundQty(safeCostTotal / qtyInStockUnit, 4)
+        : null;
 
       const { data: newBatch, error: batchError } = await supabase
         .from("batches")

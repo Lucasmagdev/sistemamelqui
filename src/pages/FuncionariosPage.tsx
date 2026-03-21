@@ -138,6 +138,7 @@ export default function FuncionariosPage() {
       queryClient.invalidateQueries({ queryKey: ["admin", "employee-payments-summary"] });
       queryClient.invalidateQueries({ queryKey: ["admin", "employee-payments-history"] });
       queryClient.invalidateQueries({ queryKey: ["admin", "finance-overview"] });
+      queryClient.invalidateQueries({ queryKey: ["admin", "operational-report"] });
     },
     onError: (error: any) => {
       toast.error(error.message || "Erro ao registrar pagamento");

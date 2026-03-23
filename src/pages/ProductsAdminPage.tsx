@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { AlertTriangle, Boxes, Pencil, Plus, RefreshCw, Search, Tag, X } from "lucide-react";
+import { useSearchParams } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -68,6 +69,22 @@ const money = (value: number | string | null | undefined) =>
 const inputClass = "h-11 rounded-xl border border-amber-400/50 bg-zinc-900 text-white placeholder:text-zinc-500 focus-visible:ring-amber-400";
 const textareaClass = "min-h-[110px] w-full rounded-xl border border-amber-400/50 bg-zinc-900 px-3 py-2 text-sm text-white placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-amber-400";
 const selectClass = "flex h-11 w-full rounded-xl border border-amber-400/50 bg-zinc-900 px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-amber-400";
+const EDIT_PRODUCT_ID_STORAGE_KEY = "products-admin-edit-id";
+const editDraftStorageKey = (productId: number | string) => `products-admin-edit-draft:${productId}`;
+
+const createEditFormFromProduct = (product: Product, draft?: Partial<ProductFormState> | null): ProductFormState => ({
+  id: product.id,
+  nome: draft?.nome ?? product.nome ?? "",
+  nome_en: draft?.nome_en ?? product.nome_en ?? "",
+  descricao: draft?.descricao ?? product.descricao ?? "",
+  descricao_en: draft?.descricao_en ?? product.descricao_en ?? "",
+  categoria: draft?.categoria ?? product.categoria ?? "",
+  categoria_en: draft?.categoria_en ?? product.categoria_en ?? "",
+  preco: draft?.preco ?? String(product.preco || ""),
+  unidade: draft?.unidade ?? product.unidade ?? "LB",
+  foto: null,
+  foto_url: product.foto_url || "",
+});
 
 function ProductModal({
   open,
@@ -221,6 +238,7 @@ function ProductModal({
 }
 
 const ProductsAdminPage: React.FC = () => {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [products, setProducts] = useState<Product[]>([]);
   const [fetching, setFetching] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -234,6 +252,22 @@ const ProductsAdminPage: React.FC = () => {
   const [editForm, setEditForm] = useState<ProductFormState>(emptyForm);
   const [createPreviewUrl, setCreatePreviewUrl] = useState<string | null>(null);
   const [editPreviewUrl, setEditPreviewUrl] = useState<string | null>(null);
+
+  const setEditSearchParam = (productId: number | null) => {
+    const nextParams = new URLSearchParams(searchParams);
+    if (productId) {
+      nextParams.set("edit", String(productId));
+    } else {
+      nextParams.delete("edit");
+    }
+    setSearchParams(nextParams, { replace: true });
+  };
+
+  const clearPersistedEditState = (productId?: number | null) => {
+    localStorage.removeItem(EDIT_PRODUCT_ID_STORAGE_KEY);
+    if (productId) localStorage.removeItem(editDraftStorageKey(productId));
+    setEditSearchParam(null);
+  };
 
   const refreshProducts = async () => {
     setFetching(true);
@@ -321,6 +355,7 @@ const ProductsAdminPage: React.FC = () => {
       if (editForm.foto) photoUrl = await uploadProductImage(editForm.foto, editForm.nome);
       const { error } = await supabase.from("products").update({ nome: editForm.nome.trim(), nome_en: editForm.nome_en.trim() || null, descricao: editForm.descricao.trim() || null, descricao_en: editForm.descricao_en.trim() || null, categoria: editForm.categoria.trim() || null, categoria_en: editForm.categoria_en.trim() || null, preco: parseFloat(editForm.preco), unidade: editForm.unidade || "LB", foto_url: photoUrl }).eq("id", editForm.id);
       if (error) throw new Error(error.message);
+      clearPersistedEditState(editProduct?.id ?? editForm.id ?? null);
       setEditProduct(null);
       setEditPreviewUrl(null);
       setEditForm(emptyForm());
@@ -333,11 +368,55 @@ const ProductsAdminPage: React.FC = () => {
     }
   };
 
-  const openEditModal = (product: Product) => {
+  const openEditModal = (product: Product, draft?: Partial<ProductFormState> | null) => {
     setEditProduct(product);
-    setEditForm({ id: product.id, nome: product.nome || "", nome_en: product.nome_en || "", descricao: product.descricao || "", descricao_en: product.descricao_en || "", categoria: product.categoria || "", categoria_en: product.categoria_en || "", preco: String(product.preco || ""), unidade: product.unidade || "LB", foto: null, foto_url: product.foto_url || "" });
+    setEditForm(createEditFormFromProduct(product, draft));
     setEditPreviewUrl(product.foto_url || null);
+    localStorage.setItem(EDIT_PRODUCT_ID_STORAGE_KEY, String(product.id));
+    setEditSearchParam(product.id);
   };
+
+  useEffect(() => {
+    if (!editProduct?.id) return;
+    localStorage.setItem(EDIT_PRODUCT_ID_STORAGE_KEY, String(editProduct.id));
+    localStorage.setItem(editDraftStorageKey(editProduct.id), JSON.stringify({
+      nome: editForm.nome,
+      nome_en: editForm.nome_en,
+      descricao: editForm.descricao,
+      descricao_en: editForm.descricao_en,
+      categoria: editForm.categoria,
+      categoria_en: editForm.categoria_en,
+      preco: editForm.preco,
+      unidade: editForm.unidade,
+    }));
+  }, [editForm, editProduct]);
+
+  useEffect(() => {
+    if (fetching || products.length === 0 || editProduct) return;
+
+    const persistedEditId = searchParams.get("edit") || localStorage.getItem(EDIT_PRODUCT_ID_STORAGE_KEY);
+    if (!persistedEditId) return;
+
+    const productId = Number(persistedEditId);
+    const product = products.find((item) => Number(item.id) === productId);
+
+    if (!product) {
+      clearPersistedEditState(productId);
+      return;
+    }
+
+    let draft: Partial<ProductFormState> | null = null;
+    const rawDraft = localStorage.getItem(editDraftStorageKey(productId));
+    if (rawDraft) {
+      try {
+        draft = JSON.parse(rawDraft) as Partial<ProductFormState>;
+      } catch {
+        localStorage.removeItem(editDraftStorageKey(productId));
+      }
+    }
+
+    openEditModal(product, draft);
+  }, [editProduct, fetching, products, searchParams]);
 
   const totalCategories = new Set(products.map((product) => String(product.categoria || "").trim()).filter(Boolean)).size;
 
@@ -542,6 +621,7 @@ const ProductsAdminPage: React.FC = () => {
         loading={loading}
         submitLabel="Salvar alteracoes"
         onClose={() => {
+          clearPersistedEditState(editProduct?.id ?? editForm.id ?? null);
           setEditProduct(null);
           setEditForm(emptyForm());
           setEditPreviewUrl(null);

@@ -7,6 +7,7 @@ import { createCorsMiddleware } from "./middleware/cors.js";
 import { createOrdersRouter } from "./routes/orders.js";
 import { createStockRouter } from "./routes/stock.js";
 import { createZapiRouter } from "./routes/zapi.js";
+import { createDeliveryRoutesRouter } from "./routes/deliveryRoutes.js";
 
 const app = express();
 app.use(express.json({ limit: "20mb" }));
@@ -4043,6 +4044,15 @@ app.use("/api/orders", createOrdersRouter({
   normalizePhone,
   applyOrderStockExit,
   applyOrderStockReversal,
+}));
+
+app.use("/api/delivery-routes", createDeliveryRoutesRouter({
+  supabase,
+  createHttpError,
+  resolveOrderCode,
+  resolveDeliveryAddress,
+  fetchOrderItems,
+  status: STATUS,
 }));
 
 app.use("/api/zapi", createZapiRouter({

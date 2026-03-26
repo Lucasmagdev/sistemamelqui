@@ -33,9 +33,9 @@ if (typeof window !== 'undefined') {
 
 export class BackendRequestError extends Error {
   status: number;
-  data: any;
+  data: unknown;
 
-  constructor(message: string, status: number, data: any) {
+  constructor(message: string, status: number, data: unknown) {
     super(message);
     this.name = "BackendRequestError";
     this.status = status;
@@ -43,7 +43,7 @@ export class BackendRequestError extends Error {
   }
 }
 
-export async function backendRequest<T = any>(path: string, init: RequestInit = {}): Promise<T> {
+export async function backendRequest<T = unknown>(path: string, init: RequestInit = {}): Promise<T> {
   const accessToken = await resolveCachedAccessToken();
   const startedAt = shouldLogPerf && typeof performance !== 'undefined' ? performance.now() : 0;
 

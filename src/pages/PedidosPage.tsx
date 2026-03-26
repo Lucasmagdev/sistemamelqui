@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useQueryClient } from "@tanstack/react-query";
-import { Download, Plus } from "lucide-react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { Copy, Download, ExternalLink, Plus, Route } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { OrderList, Order } from "@/components/dashboard/OrderList";
-import { useAdminOrdersQuery } from "@/hooks/useAdminQueries";
+import { useAdminDeliveryRouteCurrentQuery, useAdminOrdersQuery } from "@/hooks/useAdminQueries";
+import { backendRequest } from "@/lib/backendClient";
+import { toast } from "sonner";
 
 const PAGE_SIZE = 10;
 
@@ -38,6 +40,53 @@ type OrdersResponse = {
   };
 };
 
+type DeliveryRouteOrderAudit = {
+  orderId: number;
+  code?: string;
+  clientName?: string;
+  city?: string;
+  assignedDriverName?: string | null;
+  routeOrder: number;
+  deliveryState: string;
+  deliveredAt?: string | null;
+  failureReason?: string | null;
+};
+
+type DeliveryRouteDriverAudit = {
+  driverName: string;
+  orderCount: number;
+  deliveredCount: number;
+  failedCount: number;
+  orders: DeliveryRouteOrderAudit[];
+};
+
+type DeliveryRouteBatchResponse = {
+  id: number;
+  label: string;
+  routeDate: string;
+  publicLink: string;
+  orderCount: number;
+  unassignedCount: number;
+  assignedCount: number;
+  deliveredCount: number;
+  failedCount: number;
+  drivers: DeliveryRouteDriverAudit[];
+  orders: DeliveryRouteOrderAudit[];
+};
+
+type DeliveryRouteAuditEvent = {
+  id: number;
+  event_type: string;
+  driver_name?: string | null;
+  event_at: string;
+  order_id?: number | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  payload?: Record<string, unknown> | null;
+};
+
+const getErrorMessage = (error: unknown, fallback: string) => (error instanceof Error ? error.message : fallback);
+
 const money = (value: number | null | undefined) =>
   Number(value || 0).toLocaleString("en-US", { style: "currency", currency: "USD" });
 
@@ -66,6 +115,23 @@ const statusClass = (status: number) => {
   return "status-critical";
 };
 
+const deliveryEventLabel = (eventType: string) => {
+  switch (eventType) {
+    case "batch_published":
+      return "Rota publicada";
+    case "assigned":
+      return "Pedido assumido";
+    case "reordered":
+      return "Rota reordenada";
+    case "delivered":
+      return "Entrega concluida";
+    case "failed":
+      return "Falha registrada";
+    default:
+      return eventType;
+  }
+};
+
 export default function PedidosPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -77,6 +143,8 @@ export default function PedidosPage() {
   const [city, setCity] = useState("");
   const [onlyOpen, setOnlyOpen] = useState(false);
   const [page, setPage] = useState(1);
+  const [routeLabel, setRouteLabel] = useState(`Rota ${new Date().toLocaleDateString("pt-BR")}`);
+  const [routeNotes, setRouteNotes] = useState("");
 
   useEffect(() => {
     const timer = window.setTimeout(() => setSearch(searchInput.trim()), 250);
@@ -97,13 +165,44 @@ export default function PedidosPage() {
     page,
     pageSize: PAGE_SIZE,
   });
+  const deliveryRouteQuery = useAdminDeliveryRouteCurrentQuery() as {
+    data?: { batch: DeliveryRouteBatchResponse | null; audit: DeliveryRouteAuditEvent[] };
+    isLoading: boolean;
+    isFetching: boolean;
+  };
 
-  const orders = (ordersQuery.data as OrdersResponse | undefined)?.rows || [];
+  const orders = useMemo(() => ((ordersQuery.data as OrdersResponse | undefined)?.rows || []), [ordersQuery.data]);
   const summary = (ordersQuery.data as OrdersResponse | undefined)?.summary;
   const pageInfo = (ordersQuery.data as OrdersResponse | undefined)?.pageInfo;
   const cities = (ordersQuery.data as OrdersResponse | undefined)?.cities || [];
   const openOrders = useMemo(() => orders.filter((order) => Number(order.status) < 5), [orders]);
   const isInitialLoading = ordersQuery.isLoading && !ordersQuery.data;
+  const activeBatch = deliveryRouteQuery.data?.batch || null;
+  const routeAudit = deliveryRouteQuery.data?.audit || [];
+
+  const publishRouteMutation = useMutation({
+    mutationFn: () =>
+      backendRequest("/api/delivery-routes/admin/batches", {
+        method: "POST",
+        body: JSON.stringify({
+          routeDate: new Date().toISOString().slice(0, 10),
+          label: routeLabel.trim() || `Rota ${new Date().toLocaleDateString("pt-BR")}`,
+          notes: routeNotes.trim(),
+          start,
+          end,
+          search,
+          status,
+          city,
+        }),
+      }),
+    onSuccess: async (payload: { batch?: { orderCount?: number } }) => {
+      toast.success(`Rota publicada com ${payload?.batch?.orderCount || 0} pedido(s).`);
+      await queryClient.invalidateQueries({ queryKey: ["admin", "delivery-route-current"] });
+    },
+    onError: (error: unknown) => {
+      toast.error(getErrorMessage(error, "Erro ao publicar rota do dia."));
+    },
+  });
 
   const exportarCSV = () => {
     const header = ["Codigo", "Cliente", "Cidade", "Endereco", "Produtos", "Data", "Valor", "Status"];
@@ -164,6 +263,131 @@ export default function PedidosPage() {
             {isInitialLoading ? <Skeleton className="mt-3 h-8 w-28" /> : <div className={`mt-3 text-3xl font-bold ${card.accent}`}>{card.value}</div>}
           </Card>
         ))}
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
+        <Card className="space-y-4 p-5">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="inline-flex items-center gap-2 text-sm font-semibold text-yellow-400">
+                <Route className="h-4 w-4" /> Rota do Dia
+              </div>
+              <h2 className="mt-2 text-xl font-bold text-foreground">Publicar link geral da entrega</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Publica a rota com os pedidos `Pronto` e `Saiu para entrega` dentro dos filtros atuais.
+              </p>
+            </div>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">Titulo da rota</label>
+              <Input value={routeLabel} onChange={(event) => setRouteLabel(event.target.value)} placeholder="Ex.: Rota sabado ilha" />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">Observacoes</label>
+              <Input value={routeNotes} onChange={(event) => setRouteNotes(event.target.value)} placeholder="Regiao, cidade ou instrucoes internas" />
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={() => publishRouteMutation.mutate()} disabled={publishRouteMutation.isPending}>
+              Publicar rota do dia
+            </Button>
+            {activeBatch?.publicLink ? (
+              <>
+                <Button
+                  variant="outline"
+                  onClick={async () => {
+                    await navigator.clipboard.writeText(activeBatch.publicLink);
+                    toast.success("Link da rota copiado.");
+                  }}
+                >
+                  <Copy className="mr-2 h-4 w-4" /> Copiar link
+                </Button>
+                <Button variant="outline" onClick={() => window.open(activeBatch.publicLink, "_blank", "noopener,noreferrer")}>
+                  <ExternalLink className="mr-2 h-4 w-4" /> Abrir rota
+                </Button>
+              </>
+            ) : null}
+          </div>
+        </Card>
+
+        <Card className="space-y-4 p-5">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h2 className="text-xl font-bold text-foreground">Auditoria da rota ativa</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Quem assumiu, em que ordem, e quais entregas foram concluídas ou falharam.
+              </p>
+            </div>
+            {deliveryRouteQuery.isFetching ? <span className="text-xs text-muted-foreground">Atualizando...</span> : null}
+          </div>
+          {!activeBatch ? (
+            <div className="rounded-xl border border-dashed border-border/70 p-4 text-sm text-muted-foreground">
+              Nenhuma rota ativa publicada ainda.
+            </div>
+          ) : (
+            <>
+              <div className="grid gap-3 md:grid-cols-4">
+                <div className="rounded-xl border border-border/70 p-3">
+                  <div className="text-xs text-muted-foreground">Pedidos</div>
+                  <div className="mt-2 text-2xl font-bold text-foreground">{activeBatch.orderCount}</div>
+                </div>
+                <div className="rounded-xl border border-border/70 p-3">
+                  <div className="text-xs text-muted-foreground">Atribuidos</div>
+                  <div className="mt-2 text-2xl font-bold text-yellow-400">{activeBatch.assignedCount}</div>
+                </div>
+                <div className="rounded-xl border border-border/70 p-3">
+                  <div className="text-xs text-muted-foreground">Entregues</div>
+                  <div className="mt-2 text-2xl font-bold text-emerald-400">{activeBatch.deliveredCount}</div>
+                </div>
+                <div className="rounded-xl border border-border/70 p-3">
+                  <div className="text-xs text-muted-foreground">Sem responsavel</div>
+                  <div className="mt-2 text-2xl font-bold text-foreground">{activeBatch.unassignedCount}</div>
+                </div>
+              </div>
+              <div className="space-y-3">
+                {activeBatch.drivers.length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-border/70 p-4 text-sm text-muted-foreground">
+                    Aguardando entregadores assumirem pedidos.
+                  </div>
+                ) : activeBatch.drivers.map((driver) => (
+                  <div key={driver.driverName} className="rounded-xl border border-border/70 p-4">
+                    <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                      <div className="font-semibold text-foreground">{driver.driverName}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {driver.orderCount} pedidos • {driver.deliveredCount} entregues • {driver.failedCount} falhas
+                      </div>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {driver.orders.map((order) => (
+                        <span key={`${driver.driverName}-${order.orderId}`} className="rounded-full border border-border/70 px-2.5 py-1 text-[11px]">
+                          #{order.routeOrder} {order.code} {order.deliveryState === "delivered" ? "• entregue" : order.deliveryState === "failed" ? "• falha" : ""}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="space-y-2 rounded-xl border border-border/70 p-4">
+                <div className="text-sm font-semibold text-foreground">Ultimos eventos</div>
+                {routeAudit.length === 0 ? (
+                  <div className="text-sm text-muted-foreground">Sem eventos ainda.</div>
+                ) : routeAudit.slice(0, 8).map((event) => (
+                  <div key={event.id} className="flex flex-col gap-1 border-t border-border/60 pt-2 text-sm first:border-t-0 first:pt-0">
+                    <div className="font-medium text-foreground">
+                      {deliveryEventLabel(event.event_type)}
+                      {event.driver_name ? ` • ${event.driver_name}` : ""}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      {event.order_id ? `Pedido #${event.order_id} • ` : ""}
+                      {new Date(event.event_at).toLocaleString("pt-BR")}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </Card>
       </div>
 
       <Card className="sticky top-3 z-10 border-border/70 bg-card/95 p-4 backdrop-blur">
@@ -234,6 +458,7 @@ export default function PedidosPage() {
               queryClient.invalidateQueries({ queryKey: ["admin", "orders"] });
               queryClient.invalidateQueries({ queryKey: ["admin", "operational-report"] });
               queryClient.invalidateQueries({ queryKey: ["admin", "stock-products"] });
+              queryClient.invalidateQueries({ queryKey: ["admin", "delivery-route-current"] });
             }}
           />
         </section>

@@ -26,6 +26,7 @@ const FinanceiroPage = lazy(() => import("@/pages/FinanceiroPage"));
 const FuncionariosPage = lazy(() => import("@/pages/FuncionariosPage"));
 const AssistentePage = lazy(() => import("@/pages/AssistentePage"));
 const ConfiguracoesPage = lazy(() => import("@/pages/ConfiguracoesPage"));
+const DeliveryRoutePage = lazy(() => import("@/pages/DeliveryRoutePage"));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -62,6 +63,7 @@ const App = () => (
             <BrowserRouter>
               <Routes>
                 <Route path="/" element={<ClientePage />} />
+                <Route path="/rota/:token" element={<Suspense fallback={<RouteFallback />}><DeliveryRoutePage /></Suspense>} />
                 <Route path="/login" element={<LoginPage />} />
                 <Route path="/cadastro" element={<CadastroPage />} />
 

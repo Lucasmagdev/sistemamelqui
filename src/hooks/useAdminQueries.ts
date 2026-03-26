@@ -67,6 +67,7 @@ const buildQueryString = (params: Record<string, unknown>) => {
 
 export const adminQueryKeys = {
   orders: (filters: OrdersFilters) => ["admin", "orders", filters] as const,
+  deliveryRouteCurrent: () => ["admin", "delivery-route-current"] as const,
   clients: (filters: ClientsFilters) => ["admin", "clients", filters] as const,
   operationalReport: (range: DateRange) => ["admin", "operational-report", range] as const,
   stockProducts: () => ["admin", "stock-products"] as const,
@@ -84,6 +85,14 @@ export function useAdminOrdersQuery(filters: OrdersFilters) {
     queryKey: adminQueryKeys.orders(filters),
     queryFn: () =>
       backendRequest(`/api/orders/admin${buildQueryString(filters)}`),
+    ...DEFAULT_QUERY_OPTIONS,
+  });
+}
+
+export function useAdminDeliveryRouteCurrentQuery() {
+  return useQuery({
+    queryKey: adminQueryKeys.deliveryRouteCurrent(),
+    queryFn: () => backendRequest("/api/delivery-routes/admin/current"),
     ...DEFAULT_QUERY_OPTIONS,
   });
 }

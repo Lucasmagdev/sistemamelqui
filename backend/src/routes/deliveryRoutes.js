@@ -90,6 +90,7 @@ export function createDeliveryRoutesRouter(deps) {
 
   const router = Router();
   let cachedOrderItemsOrderColumn = null;
+  let cachedOrdersClientColumn = null;
 
   const ensureRouteTables = (error) => {
     if (
@@ -127,6 +128,30 @@ export function createDeliveryRoutesRouter(deps) {
 
     cachedOrderItemsOrderColumn = "pedido_id";
     return cachedOrderItemsOrderColumn;
+  };
+
+  const resolveOrdersClientColumn = async () => {
+    if (cachedOrdersClientColumn) return cachedOrdersClientColumn;
+
+    const byCliente = await supabase.from("orders").select("cliente_id").limit(1);
+    if (!byCliente.error) {
+      cachedOrdersClientColumn = "cliente_id";
+      return cachedOrdersClientColumn;
+    }
+
+    if (!isMissingColumnInSchemaCache(byCliente.error, "cliente_id")) {
+      cachedOrdersClientColumn = "cliente_id";
+      return cachedOrdersClientColumn;
+    }
+
+    const byClient = await supabase.from("orders").select("client_id").limit(1);
+    if (!byClient.error) {
+      cachedOrdersClientColumn = "client_id";
+      return cachedOrdersClientColumn;
+    }
+
+    cachedOrdersClientColumn = "cliente_id";
+    return cachedOrdersClientColumn;
   };
 
   const fetchOrderItemsByOrderIds = async (orderIds = []) => {
@@ -216,9 +241,11 @@ export function createDeliveryRoutesRouter(deps) {
     const orderIds = Array.from(new Set(routeRows.map((row) => Number(row.order_id)).filter((id) => Number.isFinite(id) && id > 0)));
     if (!orderIds.length) return new Map();
 
+    const ordersClientColumn = await resolveOrdersClientColumn();
+
     const ordersResult = await supabase
       .from("orders")
-      .select("id, cliente_id, client_id, valor_total, status, data_pedido")
+      .select(`id, ${ordersClientColumn}, valor_total, status, data_pedido`)
       .in("id", orderIds);
 
     if (ordersResult.error) {
@@ -255,7 +282,7 @@ export function createDeliveryRoutesRouter(deps) {
 
     const clientIds = Array.from(new Set(
       (ordersResult.data || [])
-        .map((row) => Number(row.cliente_id || row.client_id))
+        .map((row) => Number(row[ordersClientColumn]))
         .filter((id) => Number.isFinite(id) && id > 0),
     ));
 
@@ -275,7 +302,7 @@ export function createDeliveryRoutesRouter(deps) {
 
     for (const routeRow of routeRows) {
       const order = ordersMap.get(Number(routeRow.order_id));
-      const clientId = Number(order?.cliente_id || order?.client_id || 0);
+      const clientId = Number(order?.[ordersClientColumn] || 0);
       const client = clientsMap.get(clientId) || null;
       const orderItems = orderItemsMap.get(Number(routeRow.order_id)) || [];
       responseMap.set(Number(routeRow.order_id), {

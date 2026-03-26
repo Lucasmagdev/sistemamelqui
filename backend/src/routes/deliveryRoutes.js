@@ -16,6 +16,8 @@ const normalizeText = (value, fallback = "") => {
   return normalized || fallback;
 };
 
+const normalizeDriverKey = (value) => normalizeText(value).toLocaleLowerCase("pt-BR");
+
 const escapeAdminSearchTerm = (value) =>
   String(value || "")
     .replace(/[%_,]/g, " ")
@@ -235,6 +237,39 @@ export function createDeliveryRoutesRouter(deps) {
       throw createHttpError(500, "Erro ao salvar evento da rota.", result.error.message);
     }
     return result.data;
+  };
+
+  const normalizeDriverRouteOrder = async (batchId, driverName) => {
+    const normalizedDriverKey = normalizeDriverKey(driverName);
+    if (!normalizedDriverKey) return [];
+
+    const routeRows = await loadRouteRows(batchId);
+    const driverRows = routeRows
+      .filter((row) => normalizeDriverKey(row.assigned_driver_name) === normalizedDriverKey)
+      .sort((a, b) => Number(a.route_order || 0) - Number(b.route_order || 0));
+
+    for (let index = 0; index < driverRows.length; index += 1) {
+      const expectedOrder = index + 1;
+      if (Number(driverRows[index].route_order || 0) === expectedOrder) continue;
+
+      const updateResult = await supabase
+        .from(DELIVERY_ROUTE_RELATION)
+        .update({ route_order: expectedOrder })
+        .eq("id", driverRows[index].id)
+        .select("*")
+        .maybeSingle();
+
+      if (updateResult.error) {
+        ensureRouteTables(updateResult.error);
+        throw createHttpError(500, "Erro ao normalizar ordem da rota.", updateResult.error.message);
+      }
+
+      if (updateResult.data) {
+        driverRows[index] = updateResult.data;
+      }
+    }
+
+    return driverRows;
   };
 
   const buildOrderDetailsMap = async (routeRows) => {
@@ -592,6 +627,10 @@ export function createDeliveryRoutesRouter(deps) {
       const batch = await loadRouteBatchByToken(req.params.token);
       const routeRows = await loadRouteRows(batch.id);
       const routeRowMap = new Map(routeRows.map((row) => [Number(row.order_id), row]));
+      const existingDriverRows = routeRows
+        .filter((row) => normalizeDriverKey(row.assigned_driver_name) === normalizeDriverKey(driverName))
+        .sort((a, b) => Number(a.route_order || 0) - Number(b.route_order || 0));
+      let nextRouteOrder = existingDriverRows.length + 1;
       const now = new Date().toISOString();
       const conflicts = [];
 
@@ -612,7 +651,7 @@ export function createDeliveryRoutesRouter(deps) {
         const updatePayload = {
           assigned_driver_name: driverName,
           assigned_at: currentRow.assigned_at || now,
-          route_order: index + 1,
+          route_order: nextRouteOrder,
           delivery_state: currentRow.delivery_state === "pending" ? "assigned" : currentRow.delivery_state,
         };
 
@@ -648,11 +687,14 @@ export function createDeliveryRoutesRouter(deps) {
           route_order_id: updateResult.data.id,
           event_type: "assigned",
           driver_name: driverName,
-          payload: { routeOrder: index + 1 },
+          payload: { routeOrder: nextRouteOrder },
           event_at: now,
         });
+
+        nextRouteOrder += 1;
       }
 
+      await normalizeDriverRouteOrder(batch.id, driverName);
       const refreshedRows = await loadRouteRows(batch.id);
       const payload = await serializeRouteBatch(req, batch, refreshedRows);
       return res.json({
@@ -678,9 +720,14 @@ export function createDeliveryRoutesRouter(deps) {
 
       const batch = await loadRouteBatchByToken(req.params.token);
       const routeRows = await loadRouteRows(batch.id);
-      const driverRows = routeRows.filter((row) => normalizeText(row.assigned_driver_name) === driverName);
+      const driverRows = routeRows.filter((row) => normalizeDriverKey(row.assigned_driver_name) === normalizeDriverKey(driverName));
       const driverOrderIds = new Set(driverRows.map((row) => Number(row.order_id)));
       const now = new Date().toISOString();
+      const routeOrdersSeen = new Set();
+
+      if (items.length !== driverRows.length) {
+        throw createHttpError(400, "Envie a lista completa da rota para reordenar.");
+      }
 
       for (const item of items) {
         const orderId = Number(item?.orderId);
@@ -688,6 +735,10 @@ export function createDeliveryRoutesRouter(deps) {
         if (!driverOrderIds.has(orderId) || !Number.isFinite(routeOrder) || routeOrder <= 0) {
           throw createHttpError(400, "A reordenacao contem pedido invalido.");
         }
+        if (routeOrdersSeen.has(routeOrder)) {
+          throw createHttpError(400, "A reordenacao contem posicoes duplicadas.");
+        }
+        routeOrdersSeen.add(routeOrder);
       }
 
       for (const item of items) {
@@ -749,7 +800,7 @@ export function createDeliveryRoutesRouter(deps) {
       const routeRows = await loadRouteRows(batch.id);
       const routeRow = routeRows.find((row) => Number(row.order_id) === orderId);
       if (!routeRow) throw createHttpError(404, "Pedido nao encontrado nesta rota.");
-      if (normalizeText(routeRow.assigned_driver_name) !== driverName) {
+      if (normalizeDriverKey(routeRow.assigned_driver_name) !== normalizeDriverKey(driverName)) {
         throw createHttpError(403, "Somente o entregador responsavel pode concluir este pedido.");
       }
 
@@ -821,7 +872,7 @@ export function createDeliveryRoutesRouter(deps) {
       const routeRows = await loadRouteRows(batch.id);
       const routeRow = routeRows.find((row) => Number(row.order_id) === orderId);
       if (!routeRow) throw createHttpError(404, "Pedido nao encontrado nesta rota.");
-      if (normalizeText(routeRow.assigned_driver_name) !== driverName) {
+      if (normalizeDriverKey(routeRow.assigned_driver_name) !== normalizeDriverKey(driverName)) {
         throw createHttpError(403, "Somente o entregador responsavel pode registrar falha.");
       }
 

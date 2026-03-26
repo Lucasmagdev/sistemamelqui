@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowDown, ArrowUp, ExternalLink, MapPin, PackageCheck, RefreshCcw, TriangleAlert } from "lucide-react";
+import { ArrowDown, ArrowUp, CheckCircle2, ClipboardList, ExternalLink, MapPin, PackageCheck, RefreshCcw, TriangleAlert } from "lucide-react";
 import { useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { backendRequest } from "@/lib/backendClient";
@@ -44,6 +44,8 @@ type RouteResponse = {
 
 const DRIVER_STORAGE_KEY = "delivery-route-driver-name";
 const getErrorMessage = (error: unknown, fallback: string) => (error instanceof Error ? error.message : fallback);
+const formatDateTime = (value?: string | null) => (value ? new Date(value).toLocaleString("pt-BR") : "-");
+const normalizeDriverName = (value: string | null | undefined) => String(value || "").trim().toLocaleLowerCase("pt-BR");
 
 const getPosition = () =>
   new Promise<GeolocationPosition>((resolve, reject) => {
@@ -85,9 +87,14 @@ export default function DeliveryRoutePage() {
   const orders = useMemo(() => batch?.orders ?? [], [batch?.orders]);
   const unassignedOrders = useMemo(() => orders.filter((order) => !order.assignedDriverName), [orders]);
   const myOrders = useMemo(
-    () => orders.filter((order) => order.assignedDriverName === driverName).sort((a, b) => a.routeOrder - b.routeOrder),
+    () => orders
+      .filter((order) => normalizeDriverName(order.assignedDriverName) === normalizeDriverName(driverName))
+      .sort((a, b) => a.routeOrder - b.routeOrder),
     [orders, driverName],
   );
+  const selectedCount = selectedOrderIds.length;
+  const myDeliveredCount = myOrders.filter((order) => order.deliveryState === "delivered").length;
+  const myFailedCount = myOrders.filter((order) => order.deliveryState === "failed").length;
 
   const persistDriverName = () => {
     const normalized = driverName.trim();
@@ -205,6 +212,14 @@ export default function DeliveryRoutePage() {
     ));
   };
 
+  const toggleSelectAllAvailable = () => {
+    if (selectedOrderIds.length === unassignedOrders.length) {
+      setSelectedOrderIds([]);
+      return;
+    }
+    setSelectedOrderIds(unassignedOrders.map((order) => order.orderId));
+  };
+
   const moveOrder = async (orderId: number, direction: -1 | 1) => {
     const currentIndex = myOrders.findIndex((order) => order.orderId === orderId);
     const targetIndex = currentIndex + direction;
@@ -253,6 +268,21 @@ export default function DeliveryRoutePage() {
             <Button type="button" variant="outline" onClick={() => void refreshRoute()} disabled={routeQuery.isFetching}>
               <RefreshCcw className="mr-2 h-4 w-4" /> Atualizar
             </Button>
+            {batch?.publicLink ? (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={async () => {
+                  await navigator.clipboard.writeText(batch.publicLink);
+                  toast.success("Link da rota copiado.");
+                }}
+              >
+                <ExternalLink className="mr-2 h-4 w-4" /> Copiar link
+              </Button>
+            ) : null}
+          </div>
+          <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 p-4 text-sm text-emerald-100">
+            Para concluir uma entrega, o navegador precisa liberar sua localizacao atual.
           </div>
         </Card>
 
@@ -267,21 +297,30 @@ export default function DeliveryRoutePage() {
         ) : (
           <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
             <Card className="border-white/10 bg-white/5 p-5">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <h2 className="text-xl font-bold">Pedidos disponiveis</h2>
                   <p className="text-sm text-zinc-400">Assuma somente o que voce vai entregar.</p>
                 </div>
-                <Button
-                  type="button"
-                  onClick={() => {
-                    if (!persistDriverName()) return;
-                    void claimMutation.mutate(selectedOrderIds);
-                  }}
-                  disabled={!selectedOrderIds.length || isBusy}
-                >
-                  <PackageCheck className="mr-2 h-4 w-4" /> Assumir selecionados
-                </Button>
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" variant="outline" onClick={toggleSelectAllAvailable} disabled={!unassignedOrders.length || isBusy}>
+                    {selectedCount === unassignedOrders.length && unassignedOrders.length > 0 ? "Limpar selecao" : "Selecionar todos"}
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={() => {
+                      if (!persistDriverName()) return;
+                      void claimMutation.mutate(selectedOrderIds);
+                    }}
+                    disabled={!selectedOrderIds.length || isBusy}
+                  >
+                    <PackageCheck className="mr-2 h-4 w-4" /> Assumir selecionados
+                  </Button>
+                </div>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2 text-xs text-zinc-400">
+                <span className="rounded-full border border-white/10 px-3 py-1">{unassignedOrders.length} disponiveis</span>
+                <span className="rounded-full border border-white/10 px-3 py-1">{selectedCount} selecionados</span>
               </div>
               <div className="mt-4 space-y-3">
                 {unassignedOrders.length === 0 ? (
@@ -315,6 +354,24 @@ export default function DeliveryRoutePage() {
                 <h2 className="text-xl font-bold">Minha rota</h2>
                 <p className="text-sm text-zinc-400">Reordene, abra no mapa e finalize com geolocalizacao.</p>
               </div>
+              <div className="mt-4 grid gap-3 md:grid-cols-3">
+                <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                  <div className="text-xs uppercase tracking-[0.2em] text-zinc-500">Minhas paradas</div>
+                  <div className="mt-2 text-3xl font-black">{myOrders.length}</div>
+                </div>
+                <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                  <div className="text-xs uppercase tracking-[0.2em] text-zinc-500">Entregues</div>
+                  <div className="mt-2 flex items-center gap-2 text-3xl font-black text-emerald-300">
+                    <CheckCircle2 className="h-7 w-7" /> {myDeliveredCount}
+                  </div>
+                </div>
+                <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                  <div className="text-xs uppercase tracking-[0.2em] text-zinc-500">Falhas</div>
+                  <div className="mt-2 flex items-center gap-2 text-3xl font-black text-red-300">
+                    <TriangleAlert className="h-7 w-7" /> {myFailedCount}
+                  </div>
+                </div>
+              </div>
               <div className="mt-4 space-y-4">
                 {myOrders.length === 0 ? (
                   <div className="rounded-xl border border-dashed border-white/10 bg-black/20 p-5 text-sm text-zinc-400">
@@ -334,6 +391,11 @@ export default function DeliveryRoutePage() {
                         <div className="mt-2 text-lg font-semibold">{order.clientName || "Cliente"}</div>
                         <div className="text-sm text-zinc-400">{order.fullAddress || "-"}</div>
                         {order.productsPreview ? <div className="mt-2 text-xs text-zinc-500">{order.productsPreview}</div> : null}
+                        {order.deliveredAt ? (
+                          <div className="mt-2 flex items-center gap-2 text-xs text-zinc-400">
+                            <ClipboardList className="h-3.5 w-3.5" /> Baixado em {formatDateTime(order.deliveredAt)}
+                          </div>
+                        ) : null}
                         {order.failureReason ? (
                           <div className="mt-2 inline-flex items-center gap-2 rounded-full bg-red-500/10 px-3 py-1 text-xs text-red-200">
                             <TriangleAlert className="h-3.5 w-3.5" /> {order.failureReason}

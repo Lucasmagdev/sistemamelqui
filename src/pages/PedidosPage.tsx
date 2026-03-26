@@ -132,6 +132,8 @@ const deliveryEventLabel = (eventType: string) => {
   }
 };
 
+const formatRouteDate = (value: string) => new Date(`${value}T12:00:00`).toLocaleDateString("pt-BR");
+
 export default function PedidosPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -280,7 +282,7 @@ export default function PedidosPage() {
               </div>
               <h2 className="mt-2 text-xl font-bold text-foreground">Publicar link geral da entrega</h2>
               <p className="mt-1 text-sm text-muted-foreground">
-                Publica a rota com os pedidos `Pronto` e `Saiu para entrega` dentro dos filtros atuais.
+                Publica a rota com os pedidos "Pronto" e "Saiu para entrega" dentro dos filtros atuais.
               </p>
             </div>
           </div>

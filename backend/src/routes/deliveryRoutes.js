@@ -289,7 +289,7 @@ export function createDeliveryRoutesRouter(deps) {
     const clientsResult = clientIds.length
       ? await supabase
           .from("clients")
-          .select("id, nome, telefone, endereco_rua, endereco_numero, endereco_apt, endereco_cidade, endereco_estado, endereco_zip")
+          .select("id, nome, telefone, endereco_rua, endereco_numero, endereco_complemento, cidade, estado, cep")
           .in("id", clientIds)
       : { data: [], error: null };
 
@@ -310,7 +310,7 @@ export function createDeliveryRoutesRouter(deps) {
         clientName: client?.nome || routeRow.client_name_snapshot || "Cliente",
         phone: client?.telefone || routeRow.phone_snapshot || "-",
         fullAddress: routeRow.full_address_snapshot || (client ? resolveDeliveryAddress(client) : "-"),
-        city: routeRow.city_snapshot || client?.endereco_cidade || "-",
+        city: routeRow.city_snapshot || client?.cidade || "-",
         value: Number(order?.valor_total || 0),
         orderStatus: Number(order?.status || 0),
         dataPedido: order?.data_pedido || null,

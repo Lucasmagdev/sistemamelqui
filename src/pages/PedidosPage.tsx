@@ -8,7 +8,7 @@ import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { OrderList, Order } from "@/components/dashboard/OrderList";
 import { useAdminDeliveryRouteCurrentQuery, useAdminOrdersQuery } from "@/hooks/useAdminQueries";
-import { backendRequest } from "@/lib/backendClient";
+import { backendRequest, BackendRequestError } from "@/lib/backendClient";
 import { toast } from "sonner";
 
 const PAGE_SIZE = 10;
@@ -145,6 +145,7 @@ export default function PedidosPage() {
   const [page, setPage] = useState(1);
   const [routeLabel, setRouteLabel] = useState(`Rota ${new Date().toLocaleDateString("pt-BR")}`);
   const [routeNotes, setRouteNotes] = useState("");
+  const [routeConflictMessage, setRouteConflictMessage] = useState("");
 
   useEffect(() => {
     const timer = window.setTimeout(() => setSearch(searchInput.trim()), 250);
@@ -196,10 +197,15 @@ export default function PedidosPage() {
         }),
       }),
     onSuccess: async (payload: { batch?: { orderCount?: number } }) => {
+      setRouteConflictMessage("");
       toast.success(`Rota publicada com ${payload?.batch?.orderCount || 0} pedido(s).`);
       await queryClient.invalidateQueries({ queryKey: ["admin", "delivery-route-current"] });
     },
     onError: (error: unknown) => {
+      if (error instanceof BackendRequestError && error.status === 409) {
+        setRouteConflictMessage(error.message);
+        void queryClient.invalidateQueries({ queryKey: ["admin", "delivery-route-current"] });
+      }
       toast.error(getErrorMessage(error, "Erro ao publicar rota do dia."));
     },
   });
@@ -308,6 +314,49 @@ export default function PedidosPage() {
                 </Button>
               </>
             ) : null}
+          </div>
+          {routeConflictMessage ? (
+            <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-100">
+              {routeConflictMessage}
+            </div>
+          ) : null}
+          <div className="space-y-2">
+            <div className="text-sm font-semibold text-foreground">Rotas publicadas</div>
+            {!activeBatch ? (
+              <div className="rounded-xl border border-dashed border-border/70 p-3 text-sm text-muted-foreground">
+                Nenhuma rota ativa publicada.
+              </div>
+            ) : (
+              <div className="rounded-xl border border-border/70 bg-muted/20 p-3">
+                <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <div className="font-semibold text-foreground">{activeBatch.label}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {new Date(activeBatch.routeDate).toLocaleDateString("pt-BR")} • {activeBatch.orderCount} pedidos • {activeBatch.deliveredCount} entregues
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={async () => {
+                        await navigator.clipboard.writeText(activeBatch.publicLink);
+                        toast.success("Link da rota copiado.");
+                      }}
+                    >
+                      <Copy className="mr-2 h-4 w-4" /> Copiar
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => window.open(activeBatch.publicLink, "_blank", "noopener,noreferrer")}
+                    >
+                      <ExternalLink className="mr-2 h-4 w-4" /> Abrir
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </Card>
 

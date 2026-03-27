@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Copy, Download, ExternalLink, Plus, Route } from "lucide-react";
+import { CheckCircle2, Clock, Copy, DollarSign, Download, ExternalLink, Plus, Route, ShoppingCart } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
@@ -113,6 +113,15 @@ const statusClass = (status: number) => {
   if (status === 5) return "status-ok";
   if (status <= 1) return "status-warning";
   return "status-critical";
+};
+
+const STATUS_BADGE_CLASS: Record<number, string> = {
+  0: "bg-amber-500/15 text-amber-400 border-amber-500/20",
+  1: "bg-sky-500/15 text-sky-400 border-sky-500/20",
+  2: "bg-violet-500/15 text-violet-400 border-violet-500/20",
+  3: "bg-teal-500/15 text-teal-400 border-teal-500/20",
+  4: "bg-purple-500/15 text-purple-400 border-purple-500/20",
+  5: "bg-emerald-500/15 text-emerald-400 border-emerald-500/20",
 };
 
 const deliveryEventLabel = (eventType: string) => {
@@ -246,10 +255,10 @@ export default function PedidosPage() {
   };
 
   const cards = [
-    { label: "Pedidos no filtro", value: summary?.totalCount || 0, accent: "text-foreground" },
-    { label: "Em aberto", value: summary?.openCount || 0, accent: "text-amber-300" },
-    { label: "Concluidos", value: summary?.concludedCount || 0, accent: "text-emerald-300" },
-    { label: "Valor total", value: money(summary?.totalValue), accent: "text-yellow-400" },
+    { label: "Pedidos no filtro", value: summary?.totalCount || 0, context: "no periodo filtrado", icon: ShoppingCart, iconClass: "bg-violet-500/15 text-violet-400" },
+    { label: "Em aberto", value: summary?.openCount || 0, context: "aguardando acao", icon: Clock, iconClass: "bg-amber-500/15 text-amber-400" },
+    { label: "Concluidos", value: summary?.concludedCount || 0, context: "no periodo filtrado", icon: CheckCircle2, iconClass: "bg-emerald-500/15 text-emerald-400" },
+    { label: "Valor total", value: money(summary?.totalValue), context: "pedidos concluidos", icon: DollarSign, iconClass: "bg-yellow-500/15 text-yellow-400" },
   ];
 
   return (
@@ -265,20 +274,41 @@ export default function PedidosPage() {
       </div>
 
       <div className="grid gap-4 md:grid-cols-4">
-        {cards.map((card) => (
-          <Card key={card.label} className="p-5">
-            <div className="text-sm text-muted-foreground">{card.label}</div>
-            {isInitialLoading ? <Skeleton className="mt-3 h-8 w-28" /> : <div className={`mt-3 text-3xl font-bold ${card.accent}`}>{card.value}</div>}
-          </Card>
-        ))}
+        {cards.map((card) => {
+          const Icon = card.icon;
+          return (
+            <Card key={card.label} className="card-elevated">
+              <div className="p-5 space-y-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="space-y-3">
+                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{card.label}</p>
+                    {isInitialLoading ? (
+                      <div className="h-8 w-24 animate-pulse rounded-md bg-muted" />
+                    ) : (
+                      <p className="text-3xl font-extrabold text-foreground">{card.value}</p>
+                    )}
+                  </div>
+                  <div className={`rounded-xl p-3 ${card.iconClass}`}>
+                    <Icon className="h-5 w-5" />
+                  </div>
+                </div>
+                {isInitialLoading ? (
+                  <div className="h-3 w-16 animate-pulse rounded bg-muted" />
+                ) : (
+                  <p className="text-xs text-muted-foreground">{card.context}</p>
+                )}
+              </div>
+            </Card>
+          );
+        })}
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
         <Card className="space-y-4 p-5">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <div className="inline-flex items-center gap-2 text-sm font-semibold text-yellow-400">
-                <Route className="h-4 w-4" /> Rota do Dia
+              <div className="inline-flex items-center gap-2 rounded-full border border-yellow-500/30 bg-yellow-500/10 px-3 py-1 text-xs font-semibold text-yellow-400">
+                <Route className="h-3.5 w-3.5" /> Rota do Dia
               </div>
               <h2 className="mt-2 text-xl font-bold text-foreground">Publicar link geral da entrega</h2>
               <p className="mt-1 text-sm text-muted-foreground">
@@ -367,7 +397,7 @@ export default function PedidosPage() {
             <div>
               <h2 className="text-xl font-bold text-foreground">Auditoria da rota ativa</h2>
               <p className="mt-1 text-sm text-muted-foreground">
-                Quem assumiu, em que ordem, e quais entregas foram concluídas ou falharam.
+                Quem assumiu, em que ordem, e quais entregas foram concluidas ou falharam.
               </p>
             </div>
             {deliveryRouteQuery.isFetching ? <span className="text-xs text-muted-foreground">Atualizando...</span> : null}
@@ -379,19 +409,19 @@ export default function PedidosPage() {
           ) : (
             <>
               <div className="grid gap-3 md:grid-cols-4">
-                <div className="rounded-xl border border-border/70 p-3">
-                  <div className="text-xs text-muted-foreground">Pedidos</div>
-                  <div className="mt-2 text-2xl font-bold text-foreground">{activeBatch.orderCount}</div>
+                <div className="rounded-xl border border-sky-500/20 bg-sky-500/10 p-3">
+                  <div className="text-xs text-sky-300/70">Pedidos</div>
+                  <div className="mt-2 text-2xl font-bold text-sky-300">{activeBatch.orderCount}</div>
                 </div>
-                <div className="rounded-xl border border-border/70 p-3">
-                  <div className="text-xs text-muted-foreground">Atribuidos</div>
-                  <div className="mt-2 text-2xl font-bold text-yellow-400">{activeBatch.assignedCount}</div>
+                <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 p-3">
+                  <div className="text-xs text-amber-300/70">Atribuidos</div>
+                  <div className="mt-2 text-2xl font-bold text-amber-300">{activeBatch.assignedCount}</div>
                 </div>
-                <div className="rounded-xl border border-border/70 p-3">
-                  <div className="text-xs text-muted-foreground">Entregues</div>
-                  <div className="mt-2 text-2xl font-bold text-emerald-400">{activeBatch.deliveredCount}</div>
+                <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-3">
+                  <div className="text-xs text-emerald-300/70">Entregues</div>
+                  <div className="mt-2 text-2xl font-bold text-emerald-300">{activeBatch.deliveredCount}</div>
                 </div>
-                <div className="rounded-xl border border-border/70 p-3">
+                <div className="rounded-xl border border-border/70 bg-muted/20 p-3">
                   <div className="text-xs text-muted-foreground">Sem responsavel</div>
                   <div className="mt-2 text-2xl font-bold text-foreground">{activeBatch.unassignedCount}</div>
                 </div>
@@ -411,8 +441,18 @@ export default function PedidosPage() {
                     </div>
                     <div className="mt-3 flex flex-wrap gap-2">
                       {driver.orders.map((order) => (
-                        <span key={`${driver.driverName}-${order.orderId}`} className="rounded-full border border-border/70 px-2.5 py-1 text-[11px]">
-                          #{order.routeOrder} {order.code} {order.deliveryState === "delivered" ? "• entregue" : order.deliveryState === "failed" ? "• falha" : ""}
+                        <span
+                          key={`${driver.driverName}-${order.orderId}`}
+                          className={`rounded-full border px-2.5 py-1 text-[11px] font-medium ${
+                            order.deliveryState === "delivered"
+                              ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-400"
+                              : order.deliveryState === "failed"
+                                ? "border-red-500/20 bg-red-500/10 text-red-400"
+                                : "border-border/70 text-muted-foreground"
+                          }`}
+                        >
+                          #{order.routeOrder} {order.code}
+                          {order.deliveryState === "delivered" ? " · entregue" : order.deliveryState === "failed" ? " · falha" : ""}
                         </span>
                       ))}
                     </div>
@@ -498,7 +538,12 @@ export default function PedidosPage() {
       {openOrders.length > 0 ? (
         <section className="space-y-3">
           <div>
-            <h2 className="text-lg font-semibold text-foreground">Pedidos em aberto nesta visao</h2>
+            <h2 className="text-lg font-semibold text-foreground">
+              Pedidos em aberto
+              <span className="ml-2 inline-flex items-center rounded-full bg-amber-500/15 border border-amber-500/20 px-2 py-0.5 text-xs font-semibold text-amber-400">
+                {openOrders.length}
+              </span>
+            </h2>
             <p className="text-sm text-muted-foreground">Atualize status rapido sem sair da pagina.</p>
           </div>
           <OrderList
@@ -549,7 +594,7 @@ export default function PedidosPage() {
                 </tr>
               ) : (
                 orders.map((order) => (
-                  <tr key={order.id} className="border-t border-border/60 align-top">
+                  <tr key={order.id} className="border-t border-border/60 align-top hover:bg-muted/20 transition-colors">
                     <td className="px-4 py-4">
                       <div className="font-mono text-xs font-bold text-yellow-400">{order.code}</div>
                     </td>
@@ -578,7 +623,7 @@ export default function PedidosPage() {
                     </td>
                     <td className="px-4 py-4 text-right font-semibold text-yellow-400">{money(order.value)}</td>
                     <td className="px-4 py-4 text-center">
-                      <span className={`inline-flex rounded-full border px-2.5 py-0.5 text-xs font-semibold ${statusClass(Number(order.status || 0))}`}>
+                      <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[10px] font-semibold ${STATUS_BADGE_CLASS[Number(order.status || 0)] || "bg-muted text-muted-foreground border-border"}`}>
                         {statusLabel(Number(order.status || 0))}
                       </span>
                     </td>

@@ -298,6 +298,7 @@ const ZAPI_MESSAGE_SETTINGS_KEYS = {
 };
 
 const VEO_QR_SETTING_KEY = "veo_qr_code_base64";
+const VEO_PAYMENT_LINK_SETTING_KEY = "veo_payment_link";
 
 const ZAPI_TEMPLATE_PLACEHOLDERS = [
   "{{nome}}",
@@ -488,6 +489,18 @@ async function loadVeoQrCode(tenantId = 1) {
   return data?.valor || null;
 }
 
+async function loadVeoPaymentLink(tenantId = 1) {
+  const { data } = await supabase
+    .from("settings")
+    .select("valor, tenant_id")
+    .eq("chave", VEO_PAYMENT_LINK_SETTING_KEY)
+    .or(`tenant_id.eq.${tenantId},tenant_id.is.null`)
+    .order("tenant_id", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return String(data?.valor || "").trim() || null;
+}
+
 async function saveVeoQrCode(tenantId, base64) {
   const existing = await supabase
     .from("settings")
@@ -503,6 +516,53 @@ async function saveVeoQrCode(tenantId, base64) {
     const result = await supabase.from("settings").insert([{ tenant_id: tenantId, chave: VEO_QR_SETTING_KEY, valor: base64 }]);
     if (result.error) throw createHttpError(500, "Erro ao salvar QR code Veo.", result.error.message);
   }
+}
+
+async function saveVeoPaymentLink(tenantId, paymentLink) {
+  const existing = await supabase
+    .from("settings")
+    .select("id")
+    .eq("tenant_id", tenantId)
+    .eq("chave", VEO_PAYMENT_LINK_SETTING_KEY)
+    .limit(1);
+
+  if (existing.data?.[0]?.id) {
+    const result = await supabase.from("settings").update({ valor: String(paymentLink || "").trim() }).eq("id", existing.data[0].id);
+    if (result.error) throw createHttpError(500, "Erro ao salvar link de pagamento Veo.", result.error.message);
+  } else {
+    const result = await supabase.from("settings").insert([{
+      tenant_id: tenantId,
+      chave: VEO_PAYMENT_LINK_SETTING_KEY,
+      valor: String(paymentLink || "").trim(),
+    }]);
+    if (result.error) throw createHttpError(500, "Erro ao salvar link de pagamento Veo.", result.error.message);
+  }
+}
+
+function buildVeoPaymentCaption({ orderCode, orderTotal, locale, paymentLink }) {
+  const isEn = locale === "en";
+  const codeLine = orderCode ? `${isEn ? "Order" : "Pedido"}: ${orderCode}` : "";
+  const totalLabel = formatMoney(orderTotal);
+  const totalLine = totalLabel ? `${isEn ? "Estimated total" : "Total estimado"}: ${totalLabel}` : "";
+  const linkLine = paymentLink
+    ? [
+        isEn ? "If you prefer, you can also pay using this link:" : "Se preferir, voce tambem pode pagar por este link:",
+        paymentLink,
+      ].join("\n")
+    : "";
+
+  return [
+    isEn ? "Veo payment" : "Pagamento Veo",
+    codeLine,
+    "",
+    isEn ? "Scan the QR Code to complete your payment." : "Escaneie o QR Code para concluir o pagamento.",
+    totalLine,
+    linkLine,
+    "",
+    isEn ? "If you need help, reply to this message." : "Se precisar de ajuda, responda esta mensagem.",
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function renderNotificationTemplate(template, values) {
@@ -1145,25 +1205,88 @@ async function sendStatusNotification({ previousStatus, newStatus, clientName, c
     };
   }
 
+  let qr = null;
   if (type === "confirmed" && String(paymentMethod || "").toLowerCase() === "veo") {
+    const paymentLink = await loadVeoPaymentLink(Number(tenantId || 1));
+    const qrCaption = buildVeoPaymentCaption({
+      orderCode,
+      orderTotal,
+      locale,
+      paymentLink,
+    });
     const qrBase64 = await loadVeoQrCode(Number(tenantId || 1));
-    if (qrBase64 && sendResult.phone) {
-      await sendWhatsAppImageViaZApi({
-        phone: sendResult.phone,
-        imageBase64: qrBase64,
-        caption: "QR Code Veo para pagamento",
-      });
+    if (!qrBase64) {
+      qr = {
+        attempted: true,
+        sent: false,
+        queued: false,
+        reason: "missing-veo-qr-code",
+        detail: null,
+        caption: qrCaption,
+        paymentLink,
+        destinationPhone: phone,
+        messageId: null,
+        zaapId: null,
+      };
+    } else {
+      try {
+        const qrResult = await sendWhatsAppImageViaZApi({
+          phone,
+          imageBase64: qrBase64,
+          caption: qrCaption,
+        });
+
+        qr = qrResult.ok
+          ? {
+              attempted: true,
+              sent: true,
+              queued: true,
+              reason: null,
+              detail: "pending",
+              caption: qrCaption,
+              paymentLink,
+              destinationPhone: phone,
+              messageId: qrResult.messageId || null,
+              zaapId: qrResult.zaapId || null,
+            }
+          : {
+              attempted: true,
+              sent: false,
+              queued: false,
+              reason: qrResult.reason || "veo-qr-send-failed",
+              detail: qrResult.detail || null,
+              caption: qrCaption,
+              paymentLink,
+              destinationPhone: phone,
+              messageId: qrResult.messageId || null,
+              zaapId: qrResult.zaapId || null,
+            };
+      } catch (error) {
+        qr = {
+          attempted: true,
+          sent: false,
+          queued: false,
+          reason: "veo-qr-send-exception",
+          detail: error?.message || null,
+          caption: qrCaption,
+          paymentLink,
+          destinationPhone: phone,
+          messageId: null,
+          zaapId: null,
+        };
+      }
     }
   }
 
   return {
-    sent: false,
+    sent: true,
     queued: true,
     deliveryStatus: "pending",
     messageId: sendResult.messageId || null,
     zaapId: sendResult.zaapId || null,
     eventType,
     messageText: message,
+    qr,
   };
 }
 
@@ -4042,8 +4165,11 @@ app.get("/api/admin/zapi-instance-phone", async (req, res) => {
 app.get("/api/admin/veo-qr-code", async (req, res) => {
   try {
     const actor = await requireAssistantAdmin(req);
-    const base64 = await loadVeoQrCode(actor.tenantId);
-    return res.json({ ok: true, hasQrCode: Boolean(base64), base64: base64 || null });
+    const [base64, paymentLink] = await Promise.all([
+      loadVeoQrCode(actor.tenantId),
+      loadVeoPaymentLink(actor.tenantId),
+    ]);
+    return res.json({ ok: true, hasQrCode: Boolean(base64), base64: base64 || null, paymentLink: paymentLink || null });
   } catch (error) {
     return res.status(error?.status || 500).json({ error: error?.message || "Erro ao carregar QR code Veo." });
   }
@@ -4052,10 +4178,28 @@ app.get("/api/admin/veo-qr-code", async (req, res) => {
 app.patch("/api/admin/veo-qr-code", async (req, res) => {
   try {
     const actor = await requireAssistantAdmin(req);
-    const base64 = String(req.body?.base64 || "").trim();
-    if (!base64) return res.status(400).json({ error: "Informe o campo base64 com a imagem do QR code." });
-    await saveVeoQrCode(actor.tenantId, base64);
-    return res.json({ ok: true, hasQrCode: true });
+    const hasBase64 = Object.prototype.hasOwnProperty.call(req.body || {}, "base64");
+    const hasPaymentLink = Object.prototype.hasOwnProperty.call(req.body || {}, "paymentLink");
+
+    if (!hasBase64 && !hasPaymentLink) {
+      return res.status(400).json({ error: "Informe ao menos base64 ou paymentLink para atualizar o Veo." });
+    }
+
+    if (hasBase64) {
+      const base64 = String(req.body?.base64 || "").trim();
+      await saveVeoQrCode(actor.tenantId, base64);
+    }
+
+    if (hasPaymentLink) {
+      const paymentLink = String(req.body?.paymentLink || "").trim();
+      await saveVeoPaymentLink(actor.tenantId, paymentLink);
+    }
+
+    const [base64, paymentLink] = await Promise.all([
+      loadVeoQrCode(actor.tenantId),
+      loadVeoPaymentLink(actor.tenantId),
+    ]);
+    return res.json({ ok: true, hasQrCode: Boolean(base64), base64: base64 || null, paymentLink: paymentLink || null });
   } catch (error) {
     return res.status(error?.status || 500).json({ error: error?.message || "Erro ao salvar QR code Veo." });
   }
@@ -4064,8 +4208,11 @@ app.patch("/api/admin/veo-qr-code", async (req, res) => {
 app.delete("/api/admin/veo-qr-code", async (req, res) => {
   try {
     const actor = await requireAssistantAdmin(req);
-    await saveVeoQrCode(actor.tenantId, "");
-    return res.json({ ok: true, hasQrCode: false });
+    await Promise.all([
+      saveVeoQrCode(actor.tenantId, ""),
+      saveVeoPaymentLink(actor.tenantId, ""),
+    ]);
+    return res.json({ ok: true, hasQrCode: false, base64: null, paymentLink: null });
   } catch (error) {
     return res.status(error?.status || 500).json({ error: error?.message || "Erro ao remover QR code Veo." });
   }

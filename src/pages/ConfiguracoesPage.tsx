@@ -83,6 +83,7 @@ export default function ConfiguracoesPage() {
   const [activeLocale, setActiveLocale] = useState<keyof TemplateLocale>('pt');
   const [copiedPlaceholder, setCopiedPlaceholder] = useState<string | null>(null);
   const [veoQrBase64, setVeoQrBase64] = useState<string | null>(null);
+  const [veoPaymentLink, setVeoPaymentLink] = useState('');
   const [loadingVeoQr, setLoadingVeoQr] = useState(true);
   const [savingVeoQr, setSavingVeoQr] = useState(false);
   const veoFileRef = useRef<HTMLInputElement>(null);
@@ -92,9 +93,10 @@ export default function ConfiguracoesPage() {
     const loadVeoQr = async () => {
       try {
         setLoadingVeoQr(true);
-        const res = await backendRequest<{ ok: true; hasQrCode: boolean; base64: string | null }>('/api/admin/veo-qr-code');
+        const res = await backendRequest<{ ok: true; hasQrCode: boolean; base64: string | null; paymentLink: string | null }>('/api/admin/veo-qr-code');
         if (!active) return;
         setVeoQrBase64(res.base64 || null);
+        setVeoPaymentLink(res.paymentLink || '');
       } catch {
         // silently ignore, qr can be unset
       } finally {
@@ -117,16 +119,16 @@ export default function ConfiguracoesPage() {
   };
 
   const handleSaveVeoQr = async () => {
-    if (!veoQrBase64) return;
+    if (!veoQrBase64 && !veoPaymentLink.trim()) return;
     try {
       setSavingVeoQr(true);
       await backendRequest('/api/admin/veo-qr-code', {
         method: 'PATCH',
-        body: JSON.stringify({ base64: veoQrBase64 }),
+        body: JSON.stringify({ base64: veoQrBase64 || '', paymentLink: veoPaymentLink.trim() }),
       });
-      toast.success('QR code Veo salvo!');
+      toast.success('Configuracao do Veo salva!');
     } catch (error: any) {
-      toast.error(error.message || 'Erro ao salvar QR code Veo');
+      toast.error(error.message || 'Erro ao salvar configuracao do Veo');
     } finally {
       setSavingVeoQr(false);
     }
@@ -137,10 +139,11 @@ export default function ConfiguracoesPage() {
       setSavingVeoQr(true);
       await backendRequest('/api/admin/veo-qr-code', { method: 'DELETE' });
       setVeoQrBase64(null);
+      setVeoPaymentLink('');
       if (veoFileRef.current) veoFileRef.current.value = '';
-      toast.success('QR code Veo removido!');
+      toast.success('Configuracao do Veo removida!');
     } catch (error: any) {
-      toast.error(error.message || 'Erro ao remover QR code Veo');
+      toast.error(error.message || 'Erro ao remover configuracao do Veo');
     } finally {
       setSavingVeoQr(false);
     }
@@ -301,7 +304,7 @@ export default function ConfiguracoesPage() {
           </div>
           <div>
             <h2 className="text-xl font-semibold text-foreground">QR Code Veo</h2>
-            <p className="text-sm text-muted-foreground">Imagem enviada automaticamente ao cliente quando o pedido for confirmado com pagamento Veo.</p>
+            <p className="text-sm text-muted-foreground">Imagem enviada automaticamente ao cliente quando o pedido for confirmado com pagamento Veo. Voce tambem pode incluir um link de pagamento na mesma mensagem.</p>
           </div>
         </div>
 
@@ -318,16 +321,27 @@ export default function ConfiguracoesPage() {
                 onChange={handleVeoFileChange}
                 className="block w-full text-sm text-muted-foreground file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-primary/10 file:text-primary hover:file:bg-primary/20 cursor-pointer"
               />
+              <div className="space-y-2">
+                <Label>Link de pagamento Veo</Label>
+                <Input
+                  value={veoPaymentLink}
+                  onChange={(e) => setVeoPaymentLink(e.target.value)}
+                  placeholder="https://..."
+                />
+                <p className="text-xs text-muted-foreground">
+                  Esse link vai junto com o QR code na mensagem enviada ao cliente.
+                </p>
+              </div>
               <div className="flex gap-2">
                 <Button
                   onClick={handleSaveVeoQr}
-                  disabled={savingVeoQr || !veoQrBase64}
+                  disabled={savingVeoQr || (!veoQrBase64 && !veoPaymentLink.trim())}
                   className="gold-gradient-bg text-accent-foreground font-semibold hover:opacity-90 gold-shadow"
                 >
                   <Upload className="mr-2 h-4 w-4" />
-                  {savingVeoQr ? 'Salvando...' : 'Salvar QR code'}
+                  {savingVeoQr ? 'Salvando...' : 'Salvar configuracao'}
                 </Button>
-                {veoQrBase64 && (
+                {(veoQrBase64 || veoPaymentLink.trim()) && (
                   <Button variant="outline" onClick={handleRemoveVeoQr} disabled={savingVeoQr} className="border-border/80">
                     <Trash2 className="mr-2 h-4 w-4" />
                     Remover

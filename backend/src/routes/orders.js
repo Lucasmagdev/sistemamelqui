@@ -279,6 +279,7 @@ export function createOrdersRouter(deps) {
           const locale = resolveMessageLocale(order, client);
           const orderItems = await fetchOrderItems(orderId, locale);
           const deliveryAddress = resolveDeliveryAddress(client);
+          const normalizedPhone = normalizePhone(client.telefone);
 
           notification = await sendStatusNotification({
             previousStatus,
@@ -299,7 +300,7 @@ export function createOrdersRouter(deps) {
               orderId,
               target: "client",
               eventType: notification?.eventType || expectedEventType,
-              destinationPhone: normalizePhone(client.telefone),
+              destinationPhone: normalizedPhone,
               messageText: notification?.messageText || null,
               payload: {
                 previousStatus,
@@ -321,6 +322,40 @@ export function createOrdersRouter(deps) {
                     detail: notification?.detail || null,
                     messageId: notification?.messageId || null,
                     zaapId: notification?.zaapId || null,
+                  },
+            });
+          }
+
+          if (notification?.qr?.attempted) {
+            await persistWhatsAppAttempt({
+              orderId,
+              target: "client",
+              eventType: "order_confirmed_client_veo_qr",
+              destinationPhone: notification.qr.destinationPhone || normalizedPhone,
+              messageText: notification.qr.caption || null,
+              payload: {
+                previousStatus,
+                newStatus,
+                locale,
+                clientId: client.id,
+                orderCode,
+                paymentMethod: order.payment_method || null,
+                paymentLink: notification.qr.paymentLink || null,
+                mediaType: "image",
+              },
+              sendResult: notification.qr.queued
+                ? {
+                    ok: true,
+                    messageId: notification.qr.messageId,
+                    zaapId: notification.qr.zaapId,
+                    detail: notification.qr.detail || "pending",
+                  }
+                : {
+                    ok: false,
+                    reason: notification.qr.reason || "send-failed",
+                    detail: notification.qr.detail || null,
+                    messageId: notification.qr.messageId || null,
+                    zaapId: notification.qr.zaapId || null,
                   },
             });
           }

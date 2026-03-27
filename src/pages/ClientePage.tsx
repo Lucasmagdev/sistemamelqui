@@ -68,7 +68,7 @@ type ModoVisualizacao = 'grid' | 'compact' | 'list';
 type Ordenacao = 'menor-maior' | 'maior-menor';
 type TipoCorte = 'piece' | 'steak' | 'cubes' | 'ground' | 'other';
 type EntregaModo = 'entrega' | 'retirada';
-type Pagamento = 'pix' | 'cartao' | 'dinheiro';
+type Pagamento = 'veo';
 
 interface ItemCarrinho {
   id: string;
@@ -346,7 +346,7 @@ export default function ClientePage() {
   const [modoEntrega, setModoEntrega] = useState<EntregaModo>('entrega');
   const [dataEntrega, setDataEntrega] = useState('');
   const [horarioEntrega, setHorarioEntrega] = useState('');
-  const [pagamento, setPagamento] = useState<Pagamento>('pix');
+  const [pagamento, setPagamento] = useState<Pagamento>('veo');
   const [trocoPara, setTrocoPara] = useState('');
 
   useEffect(() => {
@@ -555,11 +555,7 @@ export default function ClientePage() {
     }
 
     if (etapaCheckout === 2) {
-      // ValidaÃ§Ã£o dos dados de pagamento
-      if (pagamento === 'dinheiro' && !trocoPara.trim()) {
-        toast.error(ui.fillChangeAmount);
-        return false;
-      }
+      // pagamento fixo em veo, sem validacao adicional
     }
 
     return true;
@@ -1091,27 +1087,14 @@ export default function ClientePage() {
                 {etapaCheckout === 2 ? (
                   <div className="space-y-3">
                     <div className="flex flex-wrap gap-2">
-                      {([
-                        ['pix', 'Pix'],
-                        ['cartao', ui.card],
-                        ['dinheiro', ui.cash],
-                      ] as Array<[Pagamento, string]>).map(([valor, label]) => (
-                        <button
-                          key={valor}
-                          type="button"
-                          onClick={() => setPagamento(valor)}
-                          className={cn('rounded-md px-3 py-2 text-sm', pagamento === valor ? 'gold-gradient-bg text-accent-foreground' : 'border border-border')}
-                        >
-                          {label}
-                        </button>
-                      ))}
+                      <button
+                        type="button"
+                        onClick={() => setPagamento('veo')}
+                        className={cn('rounded-md px-3 py-2 text-sm', 'gold-gradient-bg text-accent-foreground')}
+                      >
+                        Veo
+                      </button>
                     </div>
-                    {pagamento === 'dinheiro' ? (
-                      <div>
-                        <label className="text-xs text-muted-foreground">{ui.changeFor}</label>
-                        <input value={trocoPara} onChange={(e) => setTrocoPara(e.target.value)} className="mt-1 h-10 w-full rounded-md border border-border bg-card px-3 text-sm" placeholder="Ex: 200,00" />
-                      </div>
-                    ) : null}
                   </div>
                 ) : null}
 
@@ -1123,7 +1106,7 @@ export default function ClientePage() {
                       ? `${ui.deliveryAt} ${enderecoRua}, ${enderecoNumero}${enderecoApt ? ' - ' + enderecoApt : ''}, ${enderecoCidade}, ${enderecoEstado}, ${enderecoZip}`
                       : ui.storePickup}</p>
                     <p><strong>{ui.schedule}:</strong> {dataEntrega || '-'} {isEn ? 'at' : 'as'} {horarioEntrega || '-'}</p>
-                    <p><strong>{ui.payment}:</strong> {pagamento === 'pix' ? 'Pix' : pagamento === 'cartao' ? ui.card : `${ui.cash} (${ui.changeFor} ${trocoPara})`}</p>
+                    <p><strong>{ui.payment}:</strong> Veo</p>
                     <p><strong>{ui.total}:</strong> <span className="text-primary font-semibold">{precoFormatado(resumoCarrinho.totalValor)}</span></p>
                   </div>
                 ) : null}

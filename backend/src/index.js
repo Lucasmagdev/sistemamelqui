@@ -297,6 +297,8 @@ const ZAPI_MESSAGE_SETTINGS_KEYS = {
   out_for_delivery: "zapi_template_out_for_delivery",
 };
 
+const VEO_QR_SETTING_KEY = "veo_qr_code_base64";
+
 const ZAPI_TEMPLATE_PLACEHOLDERS = [
   "{{nome}}",
   "{{codigo_pedido}}",
@@ -471,6 +473,35 @@ async function saveZapiMessageTemplates(tenantId, templates) {
       }
       throw createHttpError(500, "Erro ao criar configuracao da Z-API.", insertResult.error.message);
     }
+  }
+}
+
+async function loadVeoQrCode(tenantId = 1) {
+  const { data } = await supabase
+    .from("settings")
+    .select("valor, tenant_id")
+    .eq("chave", VEO_QR_SETTING_KEY)
+    .or(`tenant_id.eq.${tenantId},tenant_id.is.null`)
+    .order("tenant_id", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return data?.valor || null;
+}
+
+async function saveVeoQrCode(tenantId, base64) {
+  const existing = await supabase
+    .from("settings")
+    .select("id")
+    .eq("tenant_id", tenantId)
+    .eq("chave", VEO_QR_SETTING_KEY)
+    .limit(1);
+
+  if (existing.data?.[0]?.id) {
+    const result = await supabase.from("settings").update({ valor: base64 }).eq("id", existing.data[0].id);
+    if (result.error) throw createHttpError(500, "Erro ao salvar QR code Veo.", result.error.message);
+  } else {
+    const result = await supabase.from("settings").insert([{ tenant_id: tenantId, chave: VEO_QR_SETTING_KEY, valor: base64 }]);
+    if (result.error) throw createHttpError(500, "Erro ao salvar QR code Veo.", result.error.message);
   }
 }
 
@@ -1042,7 +1073,38 @@ async function sendWhatsAppViaZApi({ phone, message }) {
   };
 }
 
-async function sendStatusNotification({ previousStatus, newStatus, clientName, clientPhone, orderCode, orderItems, orderTotal, locale, deliveryAddress, tenantId }) {
+async function sendWhatsAppImageViaZApi({ phone, imageBase64, caption }) {
+  const instanceId = process.env.ZAPI_INSTANCE_ID;
+  const instanceToken = process.env.ZAPI_INSTANCE_TOKEN;
+  const clientToken = process.env.ZAPI_CLIENT_TOKEN;
+  const baseUrl = process.env.ZAPI_BASE_URL || "https://api.z-api.io";
+
+  if (!instanceId || !instanceToken || !imageBase64) {
+    return { ok: false, reason: "missing-zapi-config-or-image" };
+  }
+
+  const headers = { "Content-Type": "application/json" };
+  if (clientToken) headers["Client-Token"] = clientToken;
+
+  const image = imageBase64.startsWith("data:") ? imageBase64 : `data:image/png;base64,${imageBase64}`;
+  const endpoint = `${baseUrl}/instances/${instanceId}/token/${instanceToken}/send-image`;
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ phone, image, caption: caption || "" }),
+  });
+  const result = await readApiResponse(response);
+
+  if (!response.ok) {
+    return { ok: false, reason: `zapi-image-http-${response.status}`, detail: result.text || null };
+  }
+  if (result.data?.error) {
+    return { ok: false, reason: "zapi-image-send-error", detail: result.data?.message || result.text || null };
+  }
+  return { ok: true, messageId: result.data?.messageId || null, zaapId: result.data?.zaapId || null };
+}
+
+async function sendStatusNotification({ previousStatus, newStatus, clientName, clientPhone, orderCode, orderItems, orderTotal, locale, deliveryAddress, tenantId, paymentMethod }) {
   let type = null;
   if (previousStatus === STATUS.RECEBIDO && newStatus === STATUS.CONFIRMADO) type = "confirmed";
   if (previousStatus === STATUS.PRONTO && newStatus === STATUS.ENTREGA) type = "out_for_delivery";
@@ -1081,6 +1143,17 @@ async function sendStatusNotification({ previousStatus, newStatus, clientName, c
       eventType,
       messageText: message,
     };
+  }
+
+  if (type === "confirmed" && String(paymentMethod || "").toLowerCase() === "veo") {
+    const qrBase64 = await loadVeoQrCode(Number(tenantId || 1));
+    if (qrBase64 && sendResult.phone) {
+      await sendWhatsAppImageViaZApi({
+        phone: sendResult.phone,
+        imageBase64: qrBase64,
+        caption: "QR Code Veo para pagamento",
+      });
+    }
   }
 
   return {
@@ -3963,6 +4036,38 @@ app.get("/api/admin/zapi-instance-phone", async (req, res) => {
       error: error?.message || "Erro ao validar numero da instancia Z-API.",
       detail: error?.detail || null,
     });
+  }
+});
+
+app.get("/api/admin/veo-qr-code", async (req, res) => {
+  try {
+    const actor = await requireAssistantAdmin(req);
+    const base64 = await loadVeoQrCode(actor.tenantId);
+    return res.json({ ok: true, hasQrCode: Boolean(base64), base64: base64 || null });
+  } catch (error) {
+    return res.status(error?.status || 500).json({ error: error?.message || "Erro ao carregar QR code Veo." });
+  }
+});
+
+app.patch("/api/admin/veo-qr-code", async (req, res) => {
+  try {
+    const actor = await requireAssistantAdmin(req);
+    const base64 = String(req.body?.base64 || "").trim();
+    if (!base64) return res.status(400).json({ error: "Informe o campo base64 com a imagem do QR code." });
+    await saveVeoQrCode(actor.tenantId, base64);
+    return res.json({ ok: true, hasQrCode: true });
+  } catch (error) {
+    return res.status(error?.status || 500).json({ error: error?.message || "Erro ao salvar QR code Veo." });
+  }
+});
+
+app.delete("/api/admin/veo-qr-code", async (req, res) => {
+  try {
+    const actor = await requireAssistantAdmin(req);
+    await saveVeoQrCode(actor.tenantId, "");
+    return res.json({ ok: true, hasQrCode: false });
+  } catch (error) {
+    return res.status(error?.status || 500).json({ error: error?.message || "Erro ao remover QR code Veo." });
   }
 });
 

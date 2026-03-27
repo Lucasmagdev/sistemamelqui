@@ -30,12 +30,8 @@ const getAllowedSaleUnits = (stockUnit: string | undefined | null): Unit[] =>
 
 const paymentMethodLabel = (value: string | undefined | null) => {
   switch (value) {
-    case "pix":
-      return "Pix";
-    case "cartao":
-      return "Cartao";
-    case "dinheiro":
-      return "Dinheiro";
+    case "veo":
+      return "Veo";
     default:
       return "Nao informado";
   }
@@ -135,7 +131,7 @@ export default function VendasPage() {
   const [end, setEnd] = useState(today);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [saleDatetime, setSaleDatetime] = useState(new Date().toISOString().slice(0, 16));
-  const [paymentMethod, setPaymentMethod] = useState("pix");
+  const [paymentMethod, setPaymentMethod] = useState("veo");
   const [notes, setNotes] = useState("");
   const [draftItems, setDraftItems] = useState<SaleDraftItem[]>([createDraftItem()]);
   const [editingSaleId, setEditingSaleId] = useState<number | null>(null);
@@ -403,7 +399,7 @@ export default function VendasPage() {
   const startSaleEdit = (sale: any) => {
     setEditingSaleId(Number(sale.id));
     setSaleDatetime(sale.sale_datetime ? new Date(sale.sale_datetime).toISOString().slice(0, 16) : new Date().toISOString().slice(0, 16));
-    setPaymentMethod(sale.payment_method || "pix");
+    setPaymentMethod(sale.payment_method || "veo");
     setNotes(sale.notes || "");
     setDraftItems(
       (sale.items || []).map((item: any) => ({
@@ -501,10 +497,7 @@ export default function VendasPage() {
               <div>
                 <label className="mb-1.5 block text-sm font-medium text-zinc-300">Forma de pagamento</label>
                 <select value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value)} className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
-                  <option value="pix">Pix</option>
-                  <option value="cartao">Cartao</option>
-                  <option value="dinheiro">Dinheiro</option>
-                  <option value="nao_informado">Nao informado</option>
+                  <option value="veo">Veo</option>
                 </select>
               </div>
             </div>

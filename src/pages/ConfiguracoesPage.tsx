@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTenant } from '@/contexts/TenantContext';
 import { backendRequest } from '@/lib/backendClient';
 import { Button } from '@/components/ui/button';
@@ -7,7 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Check, Copy, MessageSquareText, Truck } from 'lucide-react';
+import { Check, Copy, MessageSquareText, QrCode, Trash2, Truck, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 
 type TemplateLocale = {
@@ -82,6 +82,69 @@ export default function ConfiguracoesPage() {
   const [activeTemplateType, setActiveTemplateType] = useState<keyof ZapiTemplates>('confirmed');
   const [activeLocale, setActiveLocale] = useState<keyof TemplateLocale>('pt');
   const [copiedPlaceholder, setCopiedPlaceholder] = useState<string | null>(null);
+  const [veoQrBase64, setVeoQrBase64] = useState<string | null>(null);
+  const [loadingVeoQr, setLoadingVeoQr] = useState(true);
+  const [savingVeoQr, setSavingVeoQr] = useState(false);
+  const veoFileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    let active = true;
+    const loadVeoQr = async () => {
+      try {
+        setLoadingVeoQr(true);
+        const res = await backendRequest<{ ok: true; hasQrCode: boolean; base64: string | null }>('/api/admin/veo-qr-code');
+        if (!active) return;
+        setVeoQrBase64(res.base64 || null);
+      } catch {
+        // silently ignore, qr can be unset
+      } finally {
+        if (active) setLoadingVeoQr(false);
+      }
+    };
+    void loadVeoQr();
+    return () => { active = false; };
+  }, []);
+
+  const handleVeoFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      setVeoQrBase64(result);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSaveVeoQr = async () => {
+    if (!veoQrBase64) return;
+    try {
+      setSavingVeoQr(true);
+      await backendRequest('/api/admin/veo-qr-code', {
+        method: 'PATCH',
+        body: JSON.stringify({ base64: veoQrBase64 }),
+      });
+      toast.success('QR code Veo salvo!');
+    } catch (error: any) {
+      toast.error(error.message || 'Erro ao salvar QR code Veo');
+    } finally {
+      setSavingVeoQr(false);
+    }
+  };
+
+  const handleRemoveVeoQr = async () => {
+    try {
+      setSavingVeoQr(true);
+      await backendRequest('/api/admin/veo-qr-code', { method: 'DELETE' });
+      setVeoQrBase64(null);
+      if (veoFileRef.current) veoFileRef.current.value = '';
+      toast.success('QR code Veo removido!');
+    } catch (error: any) {
+      toast.error(error.message || 'Erro ao remover QR code Veo');
+    } finally {
+      setSavingVeoQr(false);
+    }
+  };
 
   useEffect(() => {
     let active = true;
@@ -229,6 +292,57 @@ export default function ConfiguracoesPage() {
         <Button onClick={handleSaveBrand} className="gold-gradient-bg text-accent-foreground font-semibold hover:opacity-90 gold-shadow">
           Salvar configuracoes locais
         </Button>
+      </div>
+
+      <div className="rounded-xl border border-border bg-card p-6 card-elevated space-y-5">
+        <div className="flex items-center gap-3">
+          <div className="rounded-xl border border-border/70 bg-muted/40 p-2.5">
+            <QrCode className="h-5 w-5 text-primary" />
+          </div>
+          <div>
+            <h2 className="text-xl font-semibold text-foreground">QR Code Veo</h2>
+            <p className="text-sm text-muted-foreground">Imagem enviada automaticamente ao cliente quando o pedido for confirmado com pagamento Veo.</p>
+          </div>
+        </div>
+
+        {loadingVeoQr ? (
+          <p className="text-sm text-muted-foreground">Carregando...</p>
+        ) : (
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
+            <div className="flex flex-col gap-3 flex-1">
+              <Label>Imagem do QR code</Label>
+              <input
+                ref={veoFileRef}
+                type="file"
+                accept="image/*"
+                onChange={handleVeoFileChange}
+                className="block w-full text-sm text-muted-foreground file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-primary/10 file:text-primary hover:file:bg-primary/20 cursor-pointer"
+              />
+              <div className="flex gap-2">
+                <Button
+                  onClick={handleSaveVeoQr}
+                  disabled={savingVeoQr || !veoQrBase64}
+                  className="gold-gradient-bg text-accent-foreground font-semibold hover:opacity-90 gold-shadow"
+                >
+                  <Upload className="mr-2 h-4 w-4" />
+                  {savingVeoQr ? 'Salvando...' : 'Salvar QR code'}
+                </Button>
+                {veoQrBase64 && (
+                  <Button variant="outline" onClick={handleRemoveVeoQr} disabled={savingVeoQr} className="border-border/80">
+                    <Trash2 className="mr-2 h-4 w-4" />
+                    Remover
+                  </Button>
+                )}
+              </div>
+            </div>
+            {veoQrBase64 && (
+              <div className="flex flex-col items-center gap-2">
+                <p className="text-xs text-muted-foreground">Previa</p>
+                <img src={veoQrBase64} alt="QR Code Veo" className="h-40 w-40 rounded-xl border border-border object-contain bg-white p-2" />
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="rounded-xl border border-border bg-card p-6 card-elevated space-y-6">

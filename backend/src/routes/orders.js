@@ -291,6 +291,7 @@ export function createOrdersRouter(deps) {
             orderTotal,
             locale,
             deliveryAddress,
+            paymentMethod: order.payment_method || null,
           });
 
           if (expectedEventType && notification?.reason !== "no-notification-transition") {

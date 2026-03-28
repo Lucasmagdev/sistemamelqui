@@ -2,7 +2,7 @@ import DashboardBackground3D from '@/components/dashboard/DashboardBackground3D'
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { supabase } from '@/lib/supabaseClient';
-import { BarChart3, DollarSign, ShoppingCart, TrendingUp, Users } from 'lucide-react';
+import { BarChart3, DollarSign, Layers, ShoppingCart, TrendingUp } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import {
   Bar,
@@ -47,6 +47,15 @@ const STATUS_COLORS: Record<number, string> = {
   3: '#14b8a6',
   4: '#8b5cf6',
   5: '#22c55e',
+};
+
+const STATUS_BADGE: Record<number, string> = {
+  0: 'bg-amber-500/15 text-amber-400 border-amber-500/20',
+  1: 'bg-sky-500/15 text-sky-400 border-sky-500/20',
+  2: 'bg-violet-500/15 text-violet-400 border-violet-500/20',
+  3: 'bg-teal-500/15 text-teal-400 border-teal-500/20',
+  4: 'bg-purple-500/15 text-purple-400 border-purple-500/20',
+  5: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/20',
 };
 
 const formatCurrency = (value: number) =>
@@ -204,6 +213,37 @@ export default function DashboardPage() {
 
   const recentOrders = useMemo(() => orders.slice(0, 6), [orders]);
 
+  const kpiCards = [
+    {
+      label: 'Pedidos totais',
+      value: String(stats.totalOrders),
+      context: 'total acumulado',
+      icon: ShoppingCart,
+      iconClassName: 'bg-violet-500/15 text-violet-400',
+    },
+    {
+      label: 'Pedidos hoje',
+      value: String(stats.todayOrders),
+      context: 'hoje',
+      icon: BarChart3,
+      iconClassName: 'bg-sky-500/15 text-sky-400',
+    },
+    {
+      label: 'Faturamento 30 dias',
+      value: formatCurrency(stats.revenue30),
+      context: 'ultimos 30 dias',
+      icon: DollarSign,
+      iconClassName: 'bg-emerald-500/15 text-emerald-400',
+    },
+    {
+      label: 'Ticket medio',
+      value: formatCurrency(stats.ticketAvg),
+      context: 'ultimos 30 dias',
+      icon: TrendingUp,
+      iconClassName: 'bg-amber-500/15 text-amber-400',
+    },
+  ];
+
   return (
     <div className="relative space-y-6 pb-2">
       <DashboardBackground3D />
@@ -224,51 +264,39 @@ export default function DashboardPage() {
       </div>
 
       <section className="relative z-10 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <Card className="card-elevated">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm text-muted-foreground">Pedidos totais</CardTitle>
-          </CardHeader>
-          <CardContent className="flex items-center justify-between">
-            <span className="text-3xl font-bold">{stats.totalOrders}</span>
-            <ShoppingCart className="h-5 w-5 text-primary" />
-          </CardContent>
-        </Card>
-
-        <Card className="card-elevated">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm text-muted-foreground">Pedidos hoje</CardTitle>
-          </CardHeader>
-          <CardContent className="flex items-center justify-between">
-            <span className="text-3xl font-bold">{stats.todayOrders}</span>
-            <BarChart3 className="h-5 w-5 text-primary" />
-          </CardContent>
-        </Card>
-
-        <Card className="card-elevated">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm text-muted-foreground">Faturamento delivery concluido (30 dias)</CardTitle>
-          </CardHeader>
-          <CardContent className="flex items-center justify-between">
-            <span className="text-2xl font-bold">{formatCurrency(stats.revenue30)}</span>
-            <DollarSign className="h-5 w-5 text-primary" />
-          </CardContent>
-        </Card>
-
-        <Card className="card-elevated">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm text-muted-foreground">Ticket medio concluido (30 dias)</CardTitle>
-          </CardHeader>
-          <CardContent className="flex items-center justify-between">
-            <span className="text-2xl font-bold">{formatCurrency(stats.ticketAvg)}</span>
-            <TrendingUp className="h-5 w-5 text-primary" />
-          </CardContent>
-        </Card>
+        {kpiCards.map((item) => {
+          const Icon = item.icon;
+          return (
+            <Card key={item.label} className="card-elevated">
+              <div className="p-5 space-y-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="space-y-3">
+                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{item.label}</p>
+                    {loading ? (
+                      <div className="h-8 w-24 animate-pulse rounded-md bg-muted" />
+                    ) : (
+                      <p className="text-3xl font-extrabold text-foreground">{item.value}</p>
+                    )}
+                  </div>
+                  <div className={`rounded-xl p-3 ${item.iconClassName}`}>
+                    <Icon className="h-5 w-5" />
+                  </div>
+                </div>
+                {loading ? (
+                  <div className="h-3 w-16 animate-pulse rounded bg-muted" />
+                ) : (
+                  <p className="text-xs text-muted-foreground">{item.context}</p>
+                )}
+              </div>
+            </Card>
+          );
+        })}
       </section>
 
       <section className="relative z-10 grid gap-4 xl:grid-cols-3">
         <Card className="card-elevated xl:col-span-2">
           <CardHeader>
-            <CardTitle>Numero de pedidos nos ultimos 7 dias</CardTitle>
+            <CardTitle className="text-base font-semibold">Pedidos - ultimos 7 dias</CardTitle>
           </CardHeader>
           <CardContent className="h-[320px]">
             <ResponsiveContainer width="100%" height="100%">
@@ -292,7 +320,7 @@ export default function DashboardPage() {
 
         <Card className="card-elevated">
           <CardHeader>
-            <CardTitle>Pedidos por status</CardTitle>
+            <CardTitle className="text-base font-semibold">Distribuicao por status</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="h-[220px]">
@@ -327,7 +355,7 @@ export default function DashboardPage() {
       <section className="relative z-10 grid gap-4 xl:grid-cols-5">
         <Card className="card-elevated xl:col-span-3">
           <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle>Melhores clientes</CardTitle>
+            <CardTitle className="text-base font-semibold">Top clientes</CardTitle>
             <span className="text-xs text-muted-foreground">Top 5 por faturamento</span>
           </CardHeader>
           <CardContent>
@@ -335,15 +363,24 @@ export default function DashboardPage() {
               <table className="w-full text-sm">
                 <thead className="text-left text-muted-foreground">
                   <tr>
+                    <th className="pb-2 w-8">#</th>
                     <th className="pb-2">Cliente</th>
                     <th className="pb-2 text-right">Pedidos</th>
                     <th className="pb-2 text-right">Faturamento</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {topClients.map((client) => (
-                    <tr key={client.id} className="border-t border-border/70">
-                      <td className="py-3 font-medium">{client.nome}</td>
+                  {topClients.map((client, index) => (
+                    <tr key={client.id} className="border-t border-border/70 hover:bg-muted/30 transition-colors">
+                      <td className="py-3 text-xs font-bold text-muted-foreground w-8">#{index + 1}</td>
+                      <td className="py-3 font-medium">
+                        <span className="inline-flex items-center">
+                          <span className="mr-2 inline-flex h-7 w-7 items-center justify-center rounded-full bg-primary/20 text-[10px] font-bold text-primary">
+                            {client.nome.slice(0, 2).toUpperCase()}
+                          </span>
+                          {client.nome}
+                        </span>
+                      </td>
                       <td className="py-3 text-right">{client.pedidos}</td>
                       <td className="py-3 text-right font-semibold">{formatCurrency(client.valor)}</td>
                     </tr>
@@ -357,24 +394,21 @@ export default function DashboardPage() {
 
         <Card className="card-elevated xl:col-span-2">
           <CardHeader>
-            <CardTitle>Resumo rapido</CardTitle>
+            <CardTitle className="text-base font-semibold">Acesso rapido</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-3 text-sm">
-            <div className="flex items-center justify-between rounded-lg border border-border px-3 py-2">
-              <span className="inline-flex items-center gap-2 text-muted-foreground">
-                <Users className="h-4 w-4" />
-                Clientes com pedidos
-              </span>
-              <strong>{stats.totalClients}</strong>
-            </div>
-            <div className="flex items-center justify-between rounded-lg border border-border px-3 py-2">
-              <span className="text-muted-foreground">Pedidos pendentes (nao concluidos)</span>
-              <strong>{stats.pendingOrders}</strong>
-            </div>
-            <div className="flex items-center justify-between rounded-lg border border-border px-3 py-2">
-              <span className="text-muted-foreground">Pedidos cadastrados hoje</span>
-              <strong>{stats.todayOrders}</strong>
-            </div>
+          <CardContent className="space-y-3">
+            <Button variant="outline" className="h-11 w-full justify-start gap-3 text-sm" onClick={() => navigate('/admin/pedidos')}>
+              <ShoppingCart className="h-4 w-4" />
+              Ver todos os pedidos
+            </Button>
+            <Button variant="outline" className="h-11 w-full justify-start gap-3 text-sm" onClick={() => navigate('/admin/estoque')}>
+              <Layers className="h-4 w-4" />
+              Gerenciar estoque
+            </Button>
+            <Button variant="outline" className="h-11 w-full justify-start gap-3 text-sm" onClick={() => navigate('/admin/relatorios')}>
+              <BarChart3 className="h-4 w-4" />
+              Ver relatorios
+            </Button>
           </CardContent>
         </Card>
       </section>
@@ -382,7 +416,7 @@ export default function DashboardPage() {
       <section className="relative z-10">
         <Card className="card-elevated">
           <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle>Ultimos pedidos</CardTitle>
+            <CardTitle className="text-base font-semibold">Pedidos recentes</CardTitle>
             <span className="text-xs text-muted-foreground">Atualizado pelo banco</span>
           </CardHeader>
           <CardContent className="overflow-x-auto">
@@ -400,12 +434,16 @@ export default function DashboardPage() {
                 {recentOrders.map((order) => {
                   const status = typeof order.status === 'number' ? order.status : 0;
                   return (
-                    <tr key={order.id} className="border-t border-border/70">
-                      <td className="py-3 font-mono text-xs">IMP{order.id}</td>
+                    <tr key={order.id} className="border-t border-border/70 hover:bg-muted/30 transition-colors cursor-pointer">
+                      <td className="py-3 font-mono text-xs text-muted-foreground">IMP{order.id}</td>
                       <td className="py-3">{order.cliente_id ? clientsMap[order.cliente_id] || 'Cliente' : 'Cliente'}</td>
                       <td className="py-3 text-muted-foreground">{formatDate(order.data_pedido)}</td>
                       <td className="py-3 text-right font-semibold">{formatCurrency(order.valor_total || 0)}</td>
-                      <td className="py-3 text-right">{STATUS_LABELS[status] || `Status ${status}`}</td>
+                      <td className="py-3 text-right">
+                        <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold ${STATUS_BADGE[status] || 'bg-muted text-muted-foreground border-border'}`}>
+                          {STATUS_LABELS[status] || `Status ${status}`}
+                        </span>
+                      </td>
                     </tr>
                   );
                 })}

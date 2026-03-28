@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ChevronDown, ChevronUp, Download, Plus, Printer, Trash2 } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronUp, Download, DollarSign, Plus, Printer, ShoppingCart, Trash2, Truck } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -369,7 +369,7 @@ export default function VendasPage() {
       }),
     onSuccess: () => {
       setNotes("");
-      setPaymentMethod("pix");
+      setPaymentMethod("veo");
       setSaleDatetime(new Date().toISOString().slice(0, 16));
       setDraftItems([createDraftItem()]);
       setEditingSaleId(null);
@@ -415,7 +415,7 @@ export default function VendasPage() {
   const resetSaleForm = () => {
     setEditingSaleId(null);
     setNotes("");
-    setPaymentMethod("pix");
+    setPaymentMethod("veo");
     setSaleDatetime(new Date().toISOString().slice(0, 16));
     setDraftItems([createDraftItem()]);
   };
@@ -444,21 +444,36 @@ export default function VendasPage() {
       </div>
 
       <div className="grid gap-4 md:grid-cols-3">
-        <Card className="border-primary/20 bg-card p-5">
-          <div className="text-sm text-muted-foreground">Delivery concluido</div>
-          {reportQuery.isLoading && !reportQuery.data ? <Skeleton className="mt-3 h-8 w-28" /> : <div className="mt-2 text-3xl font-bold text-primary">{money(reportSummary?.delivery_sales_total)}</div>}
-          <div className="mt-2 text-xs text-muted-foreground">{reportSummary?.delivery_sales_count || 0} pedidos concluidos</div>
-        </Card>
-        <Card className="border-emerald-500/20 bg-card p-5">
-          <div className="text-sm text-muted-foreground">Presencial registrado</div>
-          {reportQuery.isLoading && !reportQuery.data ? <Skeleton className="mt-3 h-8 w-28" /> : <div className="mt-2 text-3xl font-bold text-emerald-400">{money(reportSummary?.store_sales_total)}</div>}
-          <div className="mt-2 text-xs text-muted-foreground">{reportSummary?.store_sales_count || 0} vendas lancadas</div>
-        </Card>
-        <Card className="border-yellow-500/20 bg-card p-5">
-          <div className="text-sm text-muted-foreground">Total consolidado</div>
-          {reportQuery.isLoading && !reportQuery.data ? <Skeleton className="mt-3 h-8 w-28" /> : <div className="mt-2 text-3xl font-bold text-yellow-400">{money(reportSummary?.total_sales)}</div>}
-          <div className="mt-2 text-xs text-muted-foreground">{reportQuery.isFetching ? "Atualizando..." : "Resumo operacional do periodo"}</div>
-        </Card>
+        <div className="rounded-xl border border-border bg-card card-elevated p-5 space-y-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="space-y-1">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Delivery concluido</p>
+              <p className="text-3xl font-extrabold text-primary">{reportQuery.isLoading && !reportQuery.data ? <span className="block h-8 w-28 animate-pulse rounded-md bg-muted" /> : money(reportSummary?.delivery_sales_total)}</p>
+            </div>
+            <div className="rounded-xl bg-blue-500/15 p-3 text-blue-400"><Truck className="h-5 w-5" /></div>
+          </div>
+          <p className="text-xs text-muted-foreground">{reportSummary?.delivery_sales_count || 0} pedidos concluidos</p>
+        </div>
+        <div className="rounded-xl border border-border bg-card card-elevated p-5 space-y-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="space-y-1">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Presencial registrado</p>
+              <p className="text-3xl font-extrabold text-emerald-400">{reportQuery.isLoading && !reportQuery.data ? <span className="block h-8 w-28 animate-pulse rounded-md bg-muted" /> : money(reportSummary?.store_sales_total)}</p>
+            </div>
+            <div className="rounded-xl bg-emerald-500/15 p-3 text-emerald-400"><ShoppingCart className="h-5 w-5" /></div>
+          </div>
+          <p className="text-xs text-muted-foreground">{reportSummary?.store_sales_count || 0} vendas lancadas</p>
+        </div>
+        <div className="rounded-xl border border-border bg-card card-elevated p-5 space-y-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="space-y-1">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Total consolidado</p>
+              <p className="text-3xl font-extrabold text-yellow-400">{reportQuery.isLoading && !reportQuery.data ? <span className="block h-8 w-28 animate-pulse rounded-md bg-muted" /> : money(reportSummary?.total_sales)}</p>
+            </div>
+            <div className="rounded-xl bg-yellow-500/15 p-3 text-yellow-400"><DollarSign className="h-5 w-5" /></div>
+          </div>
+          <p className="text-xs text-muted-foreground">{reportQuery.isFetching ? "Atualizando..." : "Resumo operacional do periodo"}</p>
+        </div>
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[560px,1fr]">
@@ -586,7 +601,7 @@ export default function VendasPage() {
               <textarea value={notes} onChange={(event) => setNotes(event.target.value)} className="min-h-[120px] w-full rounded-xl border border-input bg-background px-3 py-3 text-sm" placeholder="Opcional" />
             </div>
 
-            <Button type="submit" className="h-12 w-full rounded-xl text-base font-semibold" disabled={submitSaleMutation.isPending || productsQuery.isLoading}>
+            <Button type="submit" className="h-12 w-full rounded-xl text-base font-semibold gold-gradient-bg text-accent-foreground gold-shadow hover:opacity-90" disabled={submitSaleMutation.isPending || productsQuery.isLoading}>
               {submitSaleMutation.isPending ? "Salvando..." : editingSaleId ? "Salvar alteracoes da venda" : "Registrar venda com baixa de estoque"}
             </Button>
           </form>
@@ -664,7 +679,7 @@ export default function VendasPage() {
                         </thead>
                         <tbody>
                           {(sale.items || []).map((item: any) => (
-                            <tr key={item.id} className="border-t border-border/60">
+                            <tr key={item.id} className="border-t border-border/60 hover:bg-muted/20 transition-colors">
                               <td className="py-3">{item.product_name || item.product_id}</td>
                               <td className="py-3">{item.quantity} {item.unit || "UN"}</td>
                               <td className="py-3">{money(item.unit_price)}</td>

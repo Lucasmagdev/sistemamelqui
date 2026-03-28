@@ -1,7 +1,7 @@
 ﻿import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Plus, RefreshCcw, AlertTriangle } from "lucide-react";
+import { Plus, RefreshCcw, AlertTriangle, Package, CheckSquare, TrendingDown, Clock } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { backendRequest } from "@/lib/backendClient";
@@ -256,10 +256,46 @@ export default function EstoquePage() {
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <div className="rounded-xl border border-border bg-card p-4"><p className="text-xs text-muted-foreground">Produtos</p><p className="text-2xl font-bold">{totals.total_products}</p></div>
-        <div className="rounded-xl border border-border bg-card p-4"><p className="text-xs text-muted-foreground">Controle Ativo</p><p className="text-2xl font-bold">{totals.stock_enabled_products}</p></div>
-        <div className="rounded-xl border border-border bg-card p-4"><p className="text-xs text-muted-foreground">Estoque Baixo</p><p className="text-2xl font-bold text-red-400">{totals.low_stock_products}</p></div>
-        <div className="rounded-xl border border-border bg-card p-4"><p className="text-xs text-muted-foreground">Vencimento em 7 dias</p><p className="text-2xl font-bold text-yellow-400">{totals.expiring_7d_products}</p></div>
+        <div className="rounded-xl border border-border bg-card card-elevated p-5 space-y-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="space-y-1">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Produtos</p>
+              <p className="text-3xl font-extrabold text-foreground">{loading ? <span className="block h-8 w-16 animate-pulse rounded-md bg-muted" /> : totals.total_products}</p>
+            </div>
+            <div className="rounded-xl bg-violet-500/15 p-3 text-violet-400"><Package className="h-5 w-5" /></div>
+          </div>
+          <p className="text-xs text-muted-foreground">cadastrados no sistema</p>
+        </div>
+        <div className="rounded-xl border border-border bg-card card-elevated p-5 space-y-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="space-y-1">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Controle ativo</p>
+              <p className="text-3xl font-extrabold text-foreground">{loading ? <span className="block h-8 w-16 animate-pulse rounded-md bg-muted" /> : totals.stock_enabled_products}</p>
+            </div>
+            <div className="rounded-xl bg-emerald-500/15 p-3 text-emerald-400"><CheckSquare className="h-5 w-5" /></div>
+          </div>
+          <p className="text-xs text-muted-foreground">com controle habilitado</p>
+        </div>
+        <div className="rounded-xl border border-border bg-card card-elevated p-5 space-y-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="space-y-1">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Estoque baixo</p>
+              <p className="text-3xl font-extrabold text-red-400">{loading ? <span className="block h-8 w-16 animate-pulse rounded-md bg-muted" /> : totals.low_stock_products}</p>
+            </div>
+            <div className="rounded-xl bg-red-500/15 p-3 text-red-400"><TrendingDown className="h-5 w-5" /></div>
+          </div>
+          <p className="text-xs text-muted-foreground">abaixo do minimo</p>
+        </div>
+        <div className="rounded-xl border border-border bg-card card-elevated p-5 space-y-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="space-y-1">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Vencendo em 7 dias</p>
+              <p className="text-3xl font-extrabold text-yellow-400">{loading ? <span className="block h-8 w-16 animate-pulse rounded-md bg-muted" /> : totals.expiring_7d_products}</p>
+            </div>
+            <div className="rounded-xl bg-yellow-500/15 p-3 text-yellow-400"><Clock className="h-5 w-5" /></div>
+          </div>
+          <p className="text-xs text-muted-foreground">lotes proximos do vencimento</p>
+        </div>
       </div>
 
       <div className="rounded-xl border border-border bg-card p-4 card-elevated">
@@ -349,18 +385,26 @@ export default function EstoquePage() {
       </div>
 
       {alerts.length > 0 ? (
-        <div className="rounded-xl border border-red-500/50 bg-card p-4">
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <h2 className="flex items-center gap-2 text-sm font-semibold text-red-300"><AlertTriangle className="h-4 w-4" /> Alertas de estoque baixo</h2>
+        <div className="rounded-xl border border-red-500/40 bg-red-500/5 p-4">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <h2 className="flex items-center gap-2 text-sm font-semibold text-red-300">
+              <AlertTriangle className="h-4 w-4" />
+              Alertas de estoque baixo
+              <span className="ml-1 inline-flex items-center rounded-full bg-red-500/20 border border-red-500/30 px-2 py-0.5 text-xs font-bold text-red-300">
+                {alerts.length}
+              </span>
+            </h2>
             <Button variant="outline" size="sm" onClick={() => { setFocusFilter("low"); setStatusFilter("low"); }}>
               Ver somente alertas
             </Button>
           </div>
           <div className="space-y-2">
             {alerts.slice(0, 8).map((item) => (
-              <div key={item.product_id} className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/20 px-3 py-2 text-sm">
-                <span className="font-medium">{item.product_name}</span>
-                <span className="text-right text-red-300">Saldo {item.saldo_qty} {item.stock_unit} / Min {item.stock_min} {item.stock_unit}</span>
+              <div key={item.product_id} className="flex items-center justify-between gap-3 rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2 text-sm">
+                <span className="font-medium text-foreground">{item.product_name}</span>
+                <span className="text-right text-xs font-medium text-red-300">
+                  Saldo: {item.saldo_qty} {item.stock_unit} · Min: {item.stock_min} {item.stock_unit}
+                </span>
               </div>
             ))}
           </div>
@@ -389,15 +433,15 @@ export default function EstoquePage() {
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-border bg-muted/50">
-                <th className="px-3 py-3 text-left">Produto</th>
-                <th className="px-3 py-3 text-left">Categoria</th>
-                <th className="px-3 py-3 text-right">Saldo</th>
-                <th className="px-3 py-3 text-right">Min</th>
-                <th className="px-3 py-3 text-center">Status</th>
-                <th className="px-3 py-3 text-center">Vence 7d</th>
-                <th className="px-3 py-3 text-left">Ultima mov.</th>
-                <th className="px-3 py-3 text-left">Configuracao</th>
+              <tr className="border-b border-border bg-muted/40">
+                <th className="px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Produto</th>
+                <th className="px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Categoria</th>
+                <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Saldo</th>
+                <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Min</th>
+                <th className="px-3 py-3 text-center text-xs font-semibold uppercase tracking-wide text-muted-foreground">Status</th>
+                <th className="px-3 py-3 text-center text-xs font-semibold uppercase tracking-wide text-muted-foreground">Vence 7d</th>
+                <th className="px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Ultima mov.</th>
+                <th className="px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Configuracao</th>
               </tr>
             </thead>
             <tbody>
@@ -411,7 +455,7 @@ export default function EstoquePage() {
                 const dirty = isDraftDirty(row, draft);
 
                 return (
-                  <tr key={row.product_id} className="border-b border-border last:border-0">
+                  <tr key={row.product_id} className="border-b border-border last:border-0 hover:bg-muted/20 transition-colors">
                     <td className="px-3 py-3">
                       <div className="space-y-1">
                         <p className="font-medium">{row.product_name}</p>
@@ -422,11 +466,25 @@ export default function EstoquePage() {
                     <td className="px-3 py-3 text-right">{row.saldo_qty.toFixed(3)} {row.stock_unit}</td>
                     <td className="px-3 py-3 text-right">{row.stock_min.toFixed(3)} {row.stock_unit}</td>
                     <td className="px-3 py-3 text-center">
-                      <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs ${row.status === "low" ? "status-critical" : row.status === "ok" ? "status-ok" : "border-zinc-600 text-zinc-400"}`}>
+                      <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[10px] font-semibold ${
+                        row.status === "low"
+                          ? "bg-red-500/15 text-red-400 border-red-500/20"
+                          : row.status === "ok"
+                            ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/20"
+                            : "bg-zinc-500/15 text-zinc-400 border-zinc-500/20"
+                      }`}>
                         {row.status === "low" ? "Baixo" : row.status === "ok" ? "OK" : "Desativado"}
                       </span>
                     </td>
-                    <td className="px-3 py-3 text-center">{row.lots_expiring_7d}</td>
+                    <td className="px-3 py-3 text-center">
+                      {row.lots_expiring_7d > 0 ? (
+                        <span className="inline-flex items-center rounded-full border border-yellow-500/20 bg-yellow-500/10 px-2 py-0.5 text-[10px] font-semibold text-yellow-400">
+                          {row.lots_expiring_7d} lote{row.lots_expiring_7d > 1 ? "s" : ""}
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </td>
                     <td className="px-3 py-3 text-xs text-muted-foreground">{formatDateTime(row.last_movement_at)}</td>
                     <td className="px-3 py-3">
                       <div className="min-w-[300px] space-y-2">

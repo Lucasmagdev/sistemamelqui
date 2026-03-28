@@ -189,9 +189,9 @@ export default function ClientesAdminPage() {
 
   const cards = useMemo(
     () => [
-      { label: "VIPs", value: summary?.totalVips || 0, icon: <Star className="h-6 w-6 text-yellow-400" />, accent: "text-yellow-400" },
-      { label: "Clientes", value: summary?.totalClients || 0, icon: <Phone className="h-6 w-6 text-primary" />, accent: "text-primary" },
-      { label: "Pedidos", value: summary?.totalOrders || 0, icon: <Mail className="h-6 w-6 text-zinc-300" />, accent: "text-zinc-100" },
+      { label: "VIPs", value: summary?.totalVips || 0, icon: <Star className="h-5 w-5 text-yellow-400" />, iconBg: "bg-yellow-500/15", accent: "text-yellow-400", context: "marcados como VIP" },
+      { label: "Clientes", value: summary?.totalClients || 0, icon: <Phone className="h-5 w-5 text-violet-400" />, iconBg: "bg-violet-500/15", accent: "text-violet-400", context: "total na base" },
+      { label: "Pedidos", value: summary?.totalOrders || 0, icon: <Mail className="h-5 w-5 text-blue-400" />, iconBg: "bg-blue-500/15", accent: "text-blue-400", context: "dos clientes filtrados" },
     ],
     [summary],
   );
@@ -217,15 +217,18 @@ export default function ClientesAdminPage() {
 
   return (
     <div className="space-y-6">
-      <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(240px,1fr))]">
+      <div className="grid gap-4 sm:grid-cols-3">
         {cards.map((card) => (
-          <Card key={card.label} className="flex items-center gap-4 p-5">
-            <div className="rounded-xl border border-border/70 bg-muted/20 p-2.5">{card.icon}</div>
-            <div>
-              <div className="text-sm font-semibold uppercase tracking-wide text-zinc-300">{card.label}</div>
-              {isInitialLoading ? <Skeleton className="mt-2 h-8 w-16" /> : <div className={`text-3xl font-extrabold ${card.accent}`}>{card.value}</div>}
+          <div key={card.label} className="rounded-xl border border-border bg-card card-elevated p-5 space-y-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="space-y-1">
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{card.label}</p>
+                <p className={`text-3xl font-extrabold ${card.accent}`}>{isInitialLoading ? <span className="block h-8 w-16 animate-pulse rounded-md bg-muted" /> : card.value}</p>
+              </div>
+              <div className={`rounded-xl ${card.iconBg} p-3`}>{card.icon}</div>
             </div>
-          </Card>
+            <p className="text-xs text-muted-foreground">{card.context}</p>
+          </div>
         ))}
       </div>
 
@@ -315,7 +318,7 @@ export default function ClientesAdminPage() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <Button onClick={() => previewMutation.mutate()} disabled={previewMutation.isPending || !campaignMessage.trim()}>
+          <Button onClick={() => previewMutation.mutate()} disabled={previewMutation.isPending || !campaignMessage.trim()} className="gold-gradient-bg text-accent-foreground font-semibold gold-shadow hover:opacity-90">
             <MessageSquareText className="mr-2 h-4 w-4" />
             {previewMutation.isPending ? "Gerando previa..." : "Gerar previa"}
           </Button>
@@ -358,7 +361,7 @@ export default function ClientesAdminPage() {
                 </tr>
               ) : (
                 clients.map((client) => (
-                  <tr key={client.id} className="border-t border-border/50">
+                  <tr key={client.id} className="border-t border-border/50 hover:bg-muted/20 transition-colors">
                     <td className="px-5 py-4">
                       <div className="flex items-center gap-3">
                         <Avatar className="h-10 w-10 ring-1 ring-border/60">
@@ -374,7 +377,7 @@ export default function ClientesAdminPage() {
                     <td className="px-5 py-4">{client.telefone || "-"}</td>
                     <td className="px-5 py-4 max-w-[280px] text-muted-foreground">{enderecoCompleto(client)}</td>
                     <td className="px-5 py-4">
-                      {client.vip ? <span className="inline-flex rounded-full bg-yellow-300 px-2.5 py-1 text-xs font-bold text-yellow-900">VIP</span> : <span className="text-xs text-muted-foreground">Nao</span>}
+                      {client.vip ? <span className="inline-flex items-center rounded-full border border-yellow-500/20 bg-yellow-500/15 px-2.5 py-0.5 text-xs font-semibold text-yellow-400">VIP</span> : <span className="text-xs text-muted-foreground">Nao</span>}
                       {client.vip_observacao ? <div className="mt-1 text-xs text-muted-foreground">{client.vip_observacao}</div> : null}
                     </td>
                     <td className="px-5 py-4 font-bold text-yellow-400">{client.order_count}</td>
@@ -416,7 +419,7 @@ export default function ClientesAdminPage() {
                     <div className="font-semibold text-foreground">{client.nome}</div>
                     <div className="text-xs text-muted-foreground">{client.email || "-"}</div>
                   </div>
-                  {client.vip ? <span className="inline-flex rounded-full bg-yellow-300 px-2 py-1 text-[10px] font-bold text-yellow-900">VIP</span> : null}
+                  {client.vip ? <span className="inline-flex items-center rounded-full border border-yellow-500/20 bg-yellow-500/15 px-2 py-0.5 text-[10px] font-semibold text-yellow-400">VIP</span> : null}
                 </div>
                 <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
                   <div className="rounded-md bg-muted/20 p-2">
@@ -499,7 +502,7 @@ export default function ClientesAdminPage() {
               <div>Endereco: {enderecoCompleto(modalPerfil.cliente)}</div>
               <div>Pedidos: <span className="font-semibold text-primary">{modalPerfil.cliente.order_count}</span></div>
             </div>
-            {modalPerfil.cliente.vip ? <span className="inline-flex rounded-full bg-yellow-300 px-2.5 py-1 text-xs font-bold text-yellow-900">VIP</span> : null}
+            {modalPerfil.cliente.vip ? <span className="inline-flex items-center rounded-full border border-yellow-500/20 bg-yellow-500/15 px-2.5 py-0.5 text-xs font-semibold text-yellow-400">VIP</span> : null}
             {modalPerfil.cliente.vip_observacao ? <div className="text-xs text-muted-foreground">{modalPerfil.cliente.vip_observacao}</div> : null}
           </div>
         ) : null}
@@ -545,7 +548,7 @@ export default function ClientesAdminPage() {
 
           <div className="flex justify-end gap-2">
             <Button variant="outline" onClick={() => setCampaignPreviewOpen(false)}>Cancelar</Button>
-            <Button onClick={() => sendMutation.mutate()} disabled={sendMutation.isPending}>
+            <Button onClick={() => sendMutation.mutate()} disabled={sendMutation.isPending} className="gold-gradient-bg text-accent-foreground font-semibold gold-shadow hover:opacity-90">
               {sendMutation.isPending ? "Enviando..." : "Confirmar envio"}
             </Button>
           </div>

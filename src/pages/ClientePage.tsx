@@ -26,6 +26,7 @@ import { useEffect } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import { useTenant } from '@/contexts/TenantContext';
 import { Button } from '@/components/ui/button';
+import { Skeleton } from '@/components/ui/skeleton';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import { Link, useNavigate } from 'react-router-dom';
 import { useMemo, useState } from 'react';
@@ -394,14 +395,17 @@ export default function ClientePage() {
   }, []);
 
   const [produtosCatalogo, setProdutosCatalogo] = useState<any[]>([]);
+  const [carregandoProdutos, setCarregandoProdutos] = useState(true);
   useEffect(() => {
     async function fetchProdutos() {
+      setCarregandoProdutos(true);
       const { data, error } = await supabase
         .from('products')
         .select('*')
         .or('tenant_id.eq.1,tenant_id.is.null');
       if (error) {
         toast.error(ui.productsLoadError);
+        setCarregandoProdutos(false);
         return;
       }
       // Adiciona campos extras para manter compatibilidade visual
@@ -426,6 +430,7 @@ export default function ClientePage() {
         };
       });
       setProdutosCatalogo(produtos);
+      setCarregandoProdutos(false);
     }
     fetchProdutos();
   }, [config, isEn]);
@@ -894,7 +899,7 @@ export default function ClientePage() {
           </section>
 
           {produtoParaCompra ? (
-            <section id="form-compra-produto" className="relative overflow-hidden rounded-xl border border-primary/30 bg-background p-4">
+            <section id="form-compra-produto" className="relative overflow-hidden rounded-xl border border-primary/30 bg-background p-4 animate-in slide-in-from-top-2 fade-in-0 duration-200">
               <div className="absolute left-0 top-0 h-[2px] w-full" style={{ background: 'var(--gold-gradient)' }} />
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-sm font-semibold text-foreground">{ui.buyLabel} <span className="text-primary">{produtoParaCompra.nome}</span></p>
@@ -962,7 +967,7 @@ export default function ClientePage() {
           ) : null}
 
           {pedidoFinalizado ? (
-            <section className="relative overflow-hidden rounded-xl border border-primary/25 bg-primary/10 p-4">
+            <section className="relative overflow-hidden rounded-xl border border-primary/25 bg-primary/10 p-4 animate-in slide-in-from-top-2 fade-in-0 duration-300">
               <div className="absolute left-0 top-0 h-[2px] w-full" style={{ background: 'var(--gold-gradient)' }} />
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="inline-flex items-center gap-2 text-sm font-semibold text-primary">
@@ -975,7 +980,7 @@ export default function ClientePage() {
           ) : null}
 
           {carrinhoAberto ? (
-            <section className="relative overflow-hidden rounded-xl border border-primary/25 bg-background p-4">
+            <section className="relative overflow-hidden rounded-xl border border-primary/25 bg-background p-4 animate-in slide-in-from-top-2 fade-in-0 duration-200">
               <div className="absolute left-0 top-0 h-[2px] w-full" style={{ background: 'var(--gold-gradient)' }} />
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-sm font-semibold text-foreground">
@@ -1041,7 +1046,7 @@ export default function ClientePage() {
           ) : null}
 
           {checkoutAberto ? (
-            <section className="relative overflow-hidden rounded-xl border border-primary/25 bg-background p-4">
+            <section className="relative overflow-hidden rounded-xl border border-primary/25 bg-background p-4 animate-in slide-in-from-top-2 fade-in-0 duration-200">
               <div className="absolute left-0 top-0 h-[2px] w-full" style={{ background: 'var(--gold-gradient)' }} />
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-sm font-semibold text-foreground">{ui.checkout}</p>
@@ -1261,6 +1266,57 @@ export default function ClientePage() {
           </div>
 
           {/* Product grid */}
+          {carregandoProdutos ? (
+            <div className={cn(
+              modoVisualizacao === 'list'
+                ? 'grid grid-cols-1 gap-3'
+                : modoVisualizacao === 'compact'
+                  ? 'grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5'
+                  : 'grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4',
+            )}>
+              {Array.from({ length: showCount }).map((_, i) => (
+                <div key={i} className="overflow-hidden rounded-xl border border-border bg-card">
+                  <Skeleton className={cn('w-full', modoVisualizacao === 'compact' ? 'h-32 md:h-36' : 'h-44 md:h-52')} />
+                  <div className="space-y-2.5 p-4">
+                    <Skeleton className="h-4 w-3/4 rounded" />
+                    <Skeleton className="h-7 w-1/2 rounded" />
+                    <Skeleton className="h-9 w-full rounded-lg" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : produtosFiltrados.length === 0 ? (
+            <div className="flex flex-col items-center justify-center gap-4 rounded-xl border border-border bg-card py-16 text-center">
+              <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-muted">
+                {busca.trim() ? (
+                  <Search className="h-7 w-7 text-muted-foreground" />
+                ) : (
+                  <Beef className="h-7 w-7 text-muted-foreground" />
+                )}
+              </div>
+              <div>
+                <p className="font-semibold text-foreground">
+                  {busca.trim()
+                    ? (isEn ? 'No products found' : 'Nenhum produto encontrado')
+                    : (isEn ? 'No products in this category' : 'Nenhum produto nessa categoria')}
+                </p>
+                {busca.trim() && (
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {isEn ? `No results for "${busca}"` : `Sem resultados para "${busca}"`}
+                  </p>
+                )}
+              </div>
+              {(busca.trim() || categoriaAtiva !== 'all') && (
+                <button
+                  type="button"
+                  onClick={() => { setBusca(''); setCategoriaAtiva('all'); setMostrarApenasOfertas(false); }}
+                  className="rounded-lg border border-border px-4 py-2 text-sm text-muted-foreground transition hover:border-primary/40 hover:text-foreground"
+                >
+                  {isEn ? 'Clear filters' : 'Limpar filtros'}
+                </button>
+              )}
+            </div>
+          ) : (
           <div className={cn(
             modoVisualizacao === 'list'
               ? 'grid grid-cols-1 gap-3'
@@ -1331,8 +1387,9 @@ export default function ClientePage() {
               </article>
             ))}
           </div>
+          )}
 
-          {produtosFiltrados.length < produtosCatalogo.length && (
+          {!carregandoProdutos && produtosFiltrados.length < produtosCatalogo.length && (
             <div className="flex justify-center py-2">
               <Button
                 type="button"

@@ -139,54 +139,103 @@ export default function CadastroPage() {
     navigate('/login');
   }
 
+  const inputCls = "mt-1 h-10 w-full rounded-xl border border-border bg-background/80 px-3 text-sm text-foreground outline-none focus:border-primary/50";
+  const labelCls = "text-xs font-medium text-muted-foreground";
+
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background">
-      <form onSubmit={handleCadastro} className="w-full max-w-md rounded-xl border border-border bg-card p-8 shadow-xl space-y-5">
-        <h1 className="text-2xl font-bold mb-2 text-center">Criar Conta</h1>
-        <div>
-          <label className="text-xs text-muted-foreground">Nome completo</label>
-          <input value={nome} onChange={e => setNome(e.target.value)} className="mt-1 h-10 w-full rounded-md border border-border bg-background px-3 text-sm" required />
+    <div className="flex min-h-screen items-center justify-center bg-background px-4 py-10">
+      {/* Subtle radial background glow */}
+      <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(ellipse_at_top,hsl(var(--primary)/0.07),transparent_60%)]" />
+
+      <div className="relative w-full max-w-md animate-in fade-in-0 slide-in-from-bottom-4 duration-300">
+        <div className="overflow-hidden rounded-2xl border border-border bg-card">
+          {/* Gold signature line */}
+          <div className="h-[2px] w-full" style={{ background: 'var(--gold-gradient)' }} />
+
+          <form onSubmit={handleCadastro} className="space-y-6 px-7 py-7">
+            {/* Header */}
+            <div className="text-center">
+              <h1 className="text-2xl font-bold text-foreground">Criar Conta</h1>
+              <p className="mt-1 text-sm text-muted-foreground">Preencha seus dados para acessar a loja</p>
+            </div>
+
+            {/* Seção: Dados pessoais */}
+            <div className="space-y-3">
+              <p className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-widest text-primary">
+                <span className="inline-block h-px w-3 bg-primary" />
+                Dados pessoais
+                <span className="inline-block h-px w-3 bg-primary" />
+              </p>
+              <div>
+                <label className={labelCls}>Nome completo</label>
+                <input value={nome} onChange={e => setNome(e.target.value)} className={inputCls} required />
+              </div>
+              <div>
+                <label className={labelCls}>Telefone <span className="text-muted-foreground/60">(EUA: +1 XXX-XXX-XXXX)</span></label>
+                <input value={telefone} onChange={e => setTelefone(normalizePhoneInput(e.target.value))} className={inputCls} placeholder="+1 555-555-5555" required />
+              </div>
+              <div>
+                <label className={labelCls}>E-mail</label>
+                <input value={email} onChange={e => setEmail(e.target.value)} className={inputCls} type="email" required />
+              </div>
+              <div>
+                <label className={labelCls}>Senha</label>
+                <input value={senha} onChange={e => setSenha(e.target.value)} className={inputCls} type="password" placeholder="••••••••" required />
+              </div>
+            </div>
+
+            {/* Seção: Endereço */}
+            <div className="space-y-3">
+              <p className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-widest text-primary">
+                <span className="inline-block h-px w-3 bg-primary" />
+                Endereço de entrega
+                <span className="inline-block h-px w-3 bg-primary" />
+              </p>
+              <div>
+                <label className={labelCls}>Street Number + Street Name</label>
+                <div className="flex gap-2">
+                  <input value={enderecoNumero} onChange={e => setEnderecoNumero(e.target.value)} className="mt-1 h-10 w-24 rounded-xl border border-border bg-background/80 px-3 text-sm text-foreground outline-none focus:border-primary/50" placeholder="350" required />
+                  <input value={enderecoRua} onChange={e => setEnderecoRua(e.target.value)} className="mt-1 h-10 flex-1 rounded-xl border border-border bg-background/80 px-3 text-sm text-foreground outline-none focus:border-primary/50" placeholder="5th Ave" required />
+                </div>
+              </div>
+              <div>
+                <label className={labelCls}>Apt / Suite / Unit <span className="text-muted-foreground/60">(opcional)</span></label>
+                <input value={enderecoApt} onChange={e => setEnderecoApt(e.target.value)} className={inputCls} placeholder="Apt 12..." />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className={labelCls}>City</label>
+                  <input value={enderecoCidade} onChange={e => setEnderecoCidade(e.target.value)} className={inputCls} required />
+                </div>
+                <div>
+                  <label className={labelCls}>State</label>
+                  <input value={enderecoEstado} onChange={e => setEnderecoEstado(e.target.value.toUpperCase().slice(0,2))} className={inputCls + ' uppercase'} maxLength={2} placeholder="NY" required />
+                </div>
+              </div>
+              <div>
+                <label className={labelCls}>ZIP Code</label>
+                <input value={enderecoZip} onChange={e => setEnderecoZip(e.target.value)} className={inputCls} placeholder="10118" required />
+              </div>
+            </div>
+
+            <Button
+              type="submit"
+              className="gold-gradient-bg h-11 w-full rounded-xl font-semibold text-accent-foreground hover:opacity-90"
+              disabled={loading}
+              style={{ boxShadow: loading ? 'none' : 'var(--gold-shadow)' }}
+            >
+              {loading ? 'Cadastrando...' : 'Criar conta'}
+            </Button>
+
+            <p className="text-center text-xs text-muted-foreground">
+              Já tem conta?{' '}
+              <a href="/login" className="font-medium text-primary transition hover:text-primary/80">
+                Entrar
+              </a>
+            </p>
+          </form>
         </div>
-        <div>
-          <label className="text-xs text-muted-foreground">Telefone (EUA: +1 XXX-XXX-XXXX)</label>
-          <input value={telefone} onChange={e => setTelefone(normalizePhoneInput(e.target.value))} className="mt-1 h-10 w-full rounded-md border border-border bg-background px-3 text-sm" placeholder="+55 31 99999-9999" required />
-        </div>
-        <div>
-          <label className="text-xs text-muted-foreground">E-mail</label>
-          <input value={email} onChange={e => setEmail(e.target.value)} className="mt-1 h-10 w-full rounded-md border border-border bg-background px-3 text-sm" type="email" required />
-        </div>
-        <div>
-          <label className="text-xs text-muted-foreground">Senha</label>
-          <input value={senha} onChange={e => setSenha(e.target.value)} className="mt-1 h-10 w-full rounded-md border border-border bg-background px-3 text-sm" type="password" required />
-        </div>
-        <div>
-          <label className="text-xs text-muted-foreground">Street Number + Street Name</label>
-          <div className="flex gap-2">
-            <input value={enderecoNumero} onChange={e => setEnderecoNumero(e.target.value)} className="mt-1 h-10 w-24 rounded-md border border-border bg-background px-3 text-sm" placeholder="350" required />
-            <input value={enderecoRua} onChange={e => setEnderecoRua(e.target.value)} className="mt-1 h-10 flex-1 rounded-md border border-border bg-background px-3 text-sm" placeholder="5th Ave" required />
-          </div>
-        </div>
-        <div>
-          <label className="text-xs text-muted-foreground">Apt / Suite / Unit (opcional)</label>
-          <input value={enderecoApt} onChange={e => setEnderecoApt(e.target.value)} className="mt-1 h-10 w-full rounded-md border border-border bg-background px-3 text-sm" placeholder="Apt 12, Suite 8..." />
-        </div>
-        <div>
-          <label className="text-xs text-muted-foreground">City</label>
-          <input value={enderecoCidade} onChange={e => setEnderecoCidade(e.target.value)} className="mt-1 h-10 w-full rounded-md border border-border bg-background px-3 text-sm" required />
-        </div>
-        <div>
-          <label className="text-xs text-muted-foreground">State (2 letras)</label>
-          <input value={enderecoEstado} onChange={e => setEnderecoEstado(e.target.value.toUpperCase().slice(0,2))} className="mt-1 h-10 w-full rounded-md border border-border bg-background px-3 text-sm uppercase" maxLength={2} required />
-        </div>
-        <div>
-          <label className="text-xs text-muted-foreground">ZIP Code</label>
-          <input value={enderecoZip} onChange={e => setEnderecoZip(e.target.value)} className="mt-1 h-10 w-full rounded-md border border-border bg-background px-3 text-sm" placeholder="10118" required />
-        </div>
-        <Button type="submit" className="w-full mt-4" disabled={loading}>Cadastrar</Button>
-        <div className="text-center text-xs text-muted-foreground mt-2">
-          Já tem conta? <a href="/login" className="text-primary underline">Entrar</a>
-        </div>
-      </form>
+      </div>
     </div>
   );
 }

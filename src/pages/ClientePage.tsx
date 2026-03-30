@@ -672,11 +672,19 @@ export default function ClientePage() {
   return (
     <div className="min-h-screen bg-background p-0 pb-[calc(7.5rem+env(safe-area-inset-bottom))] md:p-2 md:pb-2 xl:p-3">
       <div className="w-full overflow-hidden border-y border-border bg-card md:rounded-2xl md:border">
-        <div className="flex items-center justify-between gap-3 border-b border-border bg-primary/15 px-4 py-2.5 text-xs text-primary md:px-6 md:text-sm">
-          <p className="font-medium">{ui.shopTitle}</p>
-          <div className="hidden items-center gap-4 md:flex">
-            <span className="inline-flex items-center gap-1"><Truck className="h-3.5 w-3.5" /> {ui.sameDay}</span>
-            <span className="inline-flex items-center gap-1"><Beef className="h-3.5 w-3.5" /> {ui.selectedCuts}</span>
+        {/* Signature gold accent line */}
+        <div className="h-[2px] w-full" style={{ background: 'var(--gold-gradient)' }} />
+
+        {/* Announcement bar */}
+        <div className="flex items-center justify-between gap-3 border-b border-border/60 bg-primary/15 px-4 py-2 text-xs text-primary md:px-6 md:text-sm">
+          <p className="font-semibold tracking-wide">{ui.shopTitle}</p>
+          <div className="hidden items-center gap-5 md:flex">
+            <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+              <Truck className="h-3.5 w-3.5 text-primary" /> {ui.sameDay}
+            </span>
+            <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+              <Beef className="h-3.5 w-3.5 text-primary" /> {ui.selectedCuts}
+            </span>
           </div>
         </div>
 
@@ -684,41 +692,49 @@ export default function ClientePage() {
           <div className="flex flex-wrap items-center gap-4 px-4 py-3 md:px-6 md:py-4">
             <div className="flex w-full items-center justify-between text-primary md:w-auto">
               <div className="flex items-center gap-3">
-                <img
-                  src={config.logoUrl}
-                  alt={config.nomeEmpresa}
-                  className="h-12 w-12 rounded-md border border-border object-cover md:h-14 md:w-14"
-                />
-                <span className="text-lg font-semibold text-foreground md:text-xl">{config.nomeEmpresa}</span>
+                <div className="relative">
+                  <img
+                    src={config.logoUrl}
+                    alt={config.nomeEmpresa}
+                    className="h-12 w-12 rounded-xl border border-border object-cover md:h-14 md:w-14"
+                  />
+                  <div className="absolute inset-0 rounded-xl ring-1 ring-primary/20" />
+                </div>
+                <div>
+                  <span className="block text-lg font-bold text-foreground md:text-xl">{config.nomeEmpresa}</span>
+                  <span className="hidden text-[11px] text-primary md:block">{ui.selectedCuts}</span>
+                </div>
               </div>
               <div className="flex items-center gap-2 md:hidden">
                 <button
                   type="button"
                   onClick={() => setCarrinhoAberto((estadoAtual) => !estadoAtual)}
-                  className="relative rounded-full border border-border bg-background p-2.5 text-primary"
+                  className="relative rounded-xl border border-border bg-background p-2.5 text-primary"
                   aria-label={ui.cart}
                 >
-                  <ShoppingCart className="h-6 w-6" />
-                  <span className="absolute -right-1 -top-1 rounded-full bg-primary px-1.5 text-[10px] font-bold text-primary-foreground">
-                    {resumoCarrinho.totalItens}
-                  </span>
+                  <ShoppingCart className="h-5 w-5" />
+                  {resumoCarrinho.totalItens > 0 && (
+                    <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[9px] font-bold text-primary-foreground">
+                      {resumoCarrinho.totalItens}
+                    </span>
+                  )}
                 </button>
                 <button
                   type="button"
                   onClick={() => setMenuAberto((estadoAtual) => !estadoAtual)}
-                  className="rounded-lg border border-border bg-background p-2.5 text-foreground"
+                  className="rounded-xl border border-border bg-background p-2.5 text-foreground"
                   aria-label={ui.menu}
                 >
-                  <Menu className="h-6 w-6" />
+                  <Menu className="h-5 w-5" />
                 </button>
               </div>
             </div>
 
             <div className="order-3 w-full md:order-none md:mx-6 md:flex-1">
-              <div className="flex h-12 items-center rounded-full border border-border bg-background px-4 md:h-14 md:px-5">
-                <Search className="mr-2 h-5 w-5 text-muted-foreground" />
+              <div className="flex h-11 items-center rounded-xl border border-border bg-background/80 px-4 transition focus-within:border-primary/50 focus-within:bg-background md:h-12">
+                <Search className="mr-2.5 h-4 w-4 shrink-0 text-muted-foreground" />
                 <input
-                  className="w-full bg-transparent text-base text-foreground outline-none placeholder:text-muted-foreground"
+                  className="w-full bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
                   placeholder={ui.searchPlaceholder}
                   value={busca}
                   onChange={(e) => setBusca(e.target.value)}
@@ -731,11 +747,9 @@ export default function ClientePage() {
                 <>
                   <Popover>
                     <PopoverTrigger asChild>
-                      <button type="button" aria-label={ui.openProfile} className="flex w-full items-center justify-center gap-2 rounded-md border border-border bg-background px-4 py-2 transition hover:bg-accent focus:outline-none focus:ring-2 focus:ring-primary md:w-auto">
-                        <CircleUserRound className="h-5 w-5 text-primary" />
-                        <span className="font-semibold text-foreground text-sm md:text-base">
-                          {nomeLogado}
-                        </span>
+                      <button type="button" aria-label={ui.openProfile} className="flex w-full items-center justify-center gap-2 rounded-xl border border-border bg-background px-4 py-2 text-sm transition hover:border-primary/40 hover:bg-accent focus:outline-none focus:ring-2 focus:ring-primary md:w-auto">
+                        <CircleUserRound className="h-4 w-4 text-primary" />
+                        <span className="font-medium text-foreground">{nomeLogado}</span>
                       </button>
                     </PopoverTrigger>
                     <PopoverContent align="end" className="w-56 p-3">
@@ -770,15 +784,15 @@ export default function ClientePage() {
                 </>
               ) : (
                 <div className="grid w-full grid-cols-2 gap-2 md:flex md:w-auto md:items-center">
-                  <Button asChild variant="outline" className="h-11 w-full gap-2 px-4 text-sm md:h-12 md:w-auto md:text-base">
+                  <Button asChild variant="outline" className="h-10 w-full gap-2 rounded-xl px-4 text-sm md:w-auto">
                     <Link to="/login">
-                      <CircleUserRound className="h-5 w-5" />
+                      <CircleUserRound className="h-4 w-4" />
                       {ui.doLogin}
                     </Link>
                   </Button>
-                  <Button asChild variant="ghost" className="h-11 w-full gap-2 px-4 text-sm md:h-12 md:w-auto md:text-base">
+                  <Button asChild variant="ghost" className="h-10 w-full gap-2 rounded-xl px-4 text-sm md:w-auto">
                     <Link to="/cadastro">
-                      <Plus className="h-5 w-5" />
+                      <Plus className="h-4 w-4" />
                       {ui.signUp}
                     </Link>
                   </Button>
@@ -788,21 +802,23 @@ export default function ClientePage() {
                 <button
                   type="button"
                   onClick={() => setCarrinhoAberto((estadoAtual) => !estadoAtual)}
-                  className="relative rounded-full border border-border bg-background p-2.5 text-primary md:p-3"
+                  className="relative rounded-xl border border-border bg-background p-2.5 text-primary transition hover:border-primary/40"
                   aria-label={ui.cart}
                 >
-                  <ShoppingCart className="h-6 w-6" />
-                  <span className="absolute -right-1 -top-1 rounded-full bg-primary px-1.5 text-[10px] font-bold text-primary-foreground">
-                    {resumoCarrinho.totalItens}
-                  </span>
+                  <ShoppingCart className="h-5 w-5" />
+                  {resumoCarrinho.totalItens > 0 && (
+                    <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[9px] font-bold text-primary-foreground">
+                      {resumoCarrinho.totalItens}
+                    </span>
+                  )}
                 </button>
                 <button
                   type="button"
                   onClick={() => setMenuAberto((estadoAtual) => !estadoAtual)}
-                  className="rounded-lg border border-border bg-background p-2.5 text-foreground md:p-3"
+                  className="rounded-xl border border-border bg-background p-2.5 text-foreground transition hover:border-primary/40 md:p-3"
                   aria-label={ui.menu}
                 >
-                  <Menu className="h-6 w-6" />
+                  <Menu className="h-5 w-5" />
                 </button>
               </div>
             </div>
@@ -819,7 +835,7 @@ export default function ClientePage() {
                       selecionarCategoria(categoria);
                       setMenuAberto(false);
                     }}
-                    className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:border-primary/40"
+                    className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:border-primary/40 hover:text-primary"
                   >
                     {categoryLabel(categoria)}
                   </button>
@@ -828,18 +844,19 @@ export default function ClientePage() {
             </div>
           ) : null}
 
-          <div className="border-t border-border px-3 py-2 md:px-6">
-            <div className="flex flex-wrap gap-1.5">
+          <div className="border-t border-border px-3 py-2.5 md:px-6">
+            <div className="flex gap-1.5 overflow-x-auto pb-0.5">
               {menuCategorias.map((categoria) => (
                 <button
                   key={categoria}
                   type="button"
                   onClick={() => selecionarCategoria(categoria)}
-                  className={`rounded-md px-3 py-2 text-xs font-semibold uppercase tracking-wide md:text-sm ${
+                  className={cn(
+                    'shrink-0 rounded-lg px-3.5 py-1.5 text-xs font-semibold uppercase tracking-wide transition',
                     categoria === categoriaAtiva
-                      ? 'gold-gradient-bg text-accent-foreground'
-                      : 'bg-muted text-muted-foreground'
-                  }`}
+                      ? 'gold-gradient-bg text-accent-foreground shadow-sm'
+                      : 'bg-muted/80 text-muted-foreground hover:bg-muted hover:text-foreground',
+                  )}
                 >
                   {categoryLabel(categoria)}
                 </button>
@@ -848,54 +865,64 @@ export default function ClientePage() {
           </div>
         </header>
 
-        <main className="space-y-5 px-4 py-4 md:px-6 md:py-5">
-          <section className="rounded-xl border border-border bg-background p-4 md:p-5">
+        <main className="space-y-4 px-4 py-4 md:px-6 md:py-5">
+          {/* Hero */}
+          <section className="relative overflow-hidden rounded-xl border border-border bg-card p-5 md:p-6">
+            <div className="absolute left-0 top-0 h-[2px] w-full" style={{ background: 'var(--gold-gradient)' }} />
             {usuarioLogado && (
               <div className="mb-4 flex justify-end">
-                <Button onClick={repetirUltimoPedido} className="gold-gradient-bg text-accent-foreground font-semibold">{ui.repeatOrder}</Button>
+                <Button onClick={repetirUltimoPedido} size="sm" className="gold-gradient-bg text-accent-foreground font-semibold gap-2">
+                  <Clock3 className="h-3.5 w-3.5" />
+                  {ui.repeatOrder}
+                </Button>
               </div>
             )}
-            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-wider text-primary">{ui.showcase}</p>
-                <h1 className="mt-1 text-2xl font-bold text-foreground md:text-3xl">{ui.heroTitle}</h1>
-                
+                <p className="inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-widest text-primary">
+                  <span className="inline-block h-px w-4 bg-primary" />
+                  {ui.showcase}
+                  <span className="inline-block h-px w-4 bg-primary" />
+                </p>
+                <h1 className="mt-2 text-2xl font-bold leading-tight text-foreground md:text-3xl">{ui.heroTitle}</h1>
               </div>
-              <Button type="button" onClick={() => setCarrinhoAberto(true)} className="w-full gold-gradient-bg text-accent-foreground font-semibold md:w-auto">
-                {ui.viewCart} ({precoFormatado(resumoCarrinho.totalValor)})
+              <Button type="button" onClick={() => setCarrinhoAberto(true)} className="w-full gold-gradient-bg font-semibold text-accent-foreground md:w-auto">
+                <ShoppingCart className="mr-2 h-4 w-4" />
+                {ui.viewCart} · {precoFormatado(resumoCarrinho.totalValor)}
               </Button>
             </div>
           </section>
 
           {produtoParaCompra ? (
-            <section id="form-compra-produto" className="rounded-xl border border-primary/35 bg-background p-4">
+            <section id="form-compra-produto" className="relative overflow-hidden rounded-xl border border-primary/30 bg-background p-4">
+              <div className="absolute left-0 top-0 h-[2px] w-full" style={{ background: 'var(--gold-gradient)' }} />
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-sm font-semibold text-foreground">{ui.buyLabel} {produtoParaCompra.nome}</p>
+                <p className="text-sm font-semibold text-foreground">{ui.buyLabel} <span className="text-primary">{produtoParaCompra.nome}</span></p>
                 <Button size="sm" variant="outline" onClick={() => setProdutoParaCompra(null)}>{ui.cancel}</Button>
               </div>
 
               <div className="mt-3 grid gap-3 grid-cols-1 sm:grid-cols-2 md:grid-cols-4">
                 <div className="min-w-0">
-                  <label className="text-xs text-muted-foreground">{ui.quantityLb}</label>
+                  <label className="text-xs font-medium text-muted-foreground">{ui.quantityLb}</label>
                   <input
                     type="number"
                     min="0.3"
                     step="0.1"
                     value={compraLb}
                     onChange={(e) => setCompraLb(e.target.value)}
-                    className="mt-1 h-10 w-full rounded-md border border-border bg-card px-3 text-sm"
+                    className="mt-1 h-10 w-full rounded-lg border border-border bg-card px-3 text-sm text-foreground outline-none focus:border-primary/50"
                   />
                 </div>
 
                 <div className="min-w-0">
-                  <label className="text-xs text-muted-foreground">{ui.cutType}</label>
+                  <label className="text-xs font-medium text-muted-foreground">{ui.cutType}</label>
                   <select
                     value={compraTipoCorte}
                     onChange={(e) => {
                       setCompraTipoCorte(e.target.value as TipoCorte);
                       if (e.target.value !== 'other') setCompraOutroTipoCorte('');
                     }}
-                    className="mt-1 h-10 w-full min-w-0 rounded-md border border-border bg-card px-3 text-sm"
+                    className="mt-1 h-10 w-full min-w-0 rounded-lg border border-border bg-card px-3 text-sm text-foreground"
                   >
                     {(['piece', 'steak', 'cubes', 'ground', 'other'] as TipoCorte[]).map((tipo) => (
                       <option key={tipo} value={tipo}>{tipo === 'other' ? ui.otherSpecify : cutTypeLabel(tipo)}</option>
@@ -907,28 +934,27 @@ export default function ClientePage() {
                       value={compraOutroTipoCorte}
                       onChange={e => setCompraOutroTipoCorte(e.target.value)}
                       placeholder={ui.describeCutType}
-                      className="mt-2 h-10 w-full min-w-0 rounded-md border border-border bg-card px-3 text-sm"
-                      style={{maxWidth: '100%'}}
+                      className="mt-2 h-10 w-full min-w-0 rounded-lg border border-border bg-card px-3 text-sm"
                     />
                   )}
                 </div>
 
                 <div className="md:col-span-2">
-                  <label className="text-xs text-muted-foreground">{ui.optionalNotes}</label>
+                  <label className="text-xs font-medium text-muted-foreground">{ui.optionalNotes}</label>
                   <input
                     value={compraObservacoes}
                     onChange={(e) => setCompraObservacoes(e.target.value)}
                     placeholder={ui.notesExample}
-                    className="mt-1 h-10 w-full rounded-md border border-border bg-card px-3 text-sm"
+                    className="mt-1 h-10 w-full rounded-lg border border-border bg-card px-3 text-sm text-foreground outline-none focus:border-primary/50"
                   />
                 </div>
               </div>
 
-              <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
                 <p className="text-sm text-muted-foreground">
-                  {ui.subtotal}: <span className="font-semibold text-primary">{precoFormatado((Number(compraLb) || 0) * produtoParaCompra.preco)}</span>
+                  {ui.subtotal}: <span className="text-base font-bold text-primary">{precoFormatado((Number(compraLb) || 0) * produtoParaCompra.preco)}</span>
                 </p>
-                <Button type="button" className="gold-gradient-bg text-accent-foreground" onClick={confirmarCompra}>
+                <Button type="button" className="gold-gradient-bg font-semibold text-accent-foreground" onClick={confirmarCompra}>
                   {ui.addToCart}
                 </Button>
               </div>
@@ -936,10 +962,11 @@ export default function ClientePage() {
           ) : null}
 
           {pedidoFinalizado ? (
-            <section className="rounded-xl border border-primary/30 bg-primary/10 p-4">
+            <section className="relative overflow-hidden rounded-xl border border-primary/25 bg-primary/10 p-4">
+              <div className="absolute left-0 top-0 h-[2px] w-full" style={{ background: 'var(--gold-gradient)' }} />
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="inline-flex items-center gap-2 text-sm font-semibold text-primary">
-                  <BadgeCheck className="h-4 w-4" /> {ui.orderConfirmed}: {pedidoFinalizado.numero}
+                  <BadgeCheck className="h-4 w-4" /> {ui.orderConfirmed}: #{pedidoFinalizado.numero}
                 </p>
                 <p className="text-sm font-semibold text-foreground">{ui.total}: {precoFormatado(pedidoFinalizado.total)}</p>
               </div>
@@ -948,14 +975,17 @@ export default function ClientePage() {
           ) : null}
 
           {carrinhoAberto ? (
-            <section className="rounded-xl border border-primary/35 bg-background p-4">
+            <section className="relative overflow-hidden rounded-xl border border-primary/25 bg-background p-4">
+              <div className="absolute left-0 top-0 h-[2px] w-full" style={{ background: 'var(--gold-gradient)' }} />
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-sm font-semibold text-foreground">{ui.cart} ({resumoCarrinho.totalItens} {ui.cartItems} • {resumoCarrinho.totalLb.toFixed(1)}kg)</p>
+                <p className="text-sm font-semibold text-foreground">
+                  {ui.cart} <span className="font-normal text-muted-foreground">({resumoCarrinho.totalItens} {ui.cartItems} · {resumoCarrinho.totalLb.toFixed(1)} LB)</span>
+                </p>
                 <div className="flex gap-2">
                   <Button size="sm" variant="outline" onClick={() => setCarrinhoAberto(false)}>{ui.close}</Button>
                   <Button
                     size="sm"
-                    className="gold-gradient-bg text-accent-foreground"
+                    className="gold-gradient-bg font-semibold text-accent-foreground"
                     onClick={() => {
                       if (!itensCarrinho.length) {
                         toast.error(ui.addCartToContinue);
@@ -972,68 +1002,92 @@ export default function ClientePage() {
               {itensCarrinho.length ? (
                 <div className="mt-3 space-y-2">
                   {itensCarrinho.map((item) => (
-                    <div key={item.id} className="rounded-lg border border-border bg-card p-3">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div>
+                    <div key={item.id} className="rounded-xl border border-border bg-card p-3">
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
                           <p className="text-sm font-semibold text-foreground">{item.nome}</p>
-                          <p className="text-xs text-muted-foreground">{cutTypeLabel(item.tipoCorte)} • {precoFormatado(item.precoKg)}/LB</p>
-                          {item.observacoes ? <p className="text-xs text-muted-foreground">Obs: {item.observacoes}</p> : null}
+                          <p className="mt-0.5 text-xs text-muted-foreground">{cutTypeLabel(item.tipoCorte)} · {precoFormatado(item.precoKg)}/LB</p>
+                          {item.observacoes ? <p className="mt-0.5 text-xs text-muted-foreground/70">Obs: {item.observacoes}</p> : null}
                         </div>
-                        <button type="button" onClick={() => removerItem(item.id)} className="text-muted-foreground hover:text-destructive">
+                        <button type="button" onClick={() => removerItem(item.id)} className="shrink-0 rounded-md p-1 text-muted-foreground transition hover:text-destructive">
                           <Trash2 className="h-4 w-4" />
                         </button>
                       </div>
 
-                      <div className="mt-2 flex items-center justify-between">
-                        <div className="flex items-center gap-1">
-                          <button type="button" onClick={() => alterarKgItem(item.id, -0.1)} className="rounded border border-border p-1">
-                            <Minus className="h-3.5 w-3.5" />
+                      <div className="mt-2.5 flex items-center justify-between">
+                        <div className="flex items-center gap-1.5">
+                          <button type="button" onClick={() => alterarKgItem(item.id, -0.1)} className="flex h-7 w-7 items-center justify-center rounded-lg border border-border bg-background transition hover:border-primary/40">
+                            <Minus className="h-3 w-3" />
                           </button>
-                          <span className="min-w-20 text-center text-sm text-foreground">{item.kg.toFixed(1)} LB</span>
-                          <button type="button" onClick={() => alterarKgItem(item.id, 0.1)} className="rounded border border-border p-1">
-                            <Plus className="h-3.5 w-3.5" />
+                          <span className="min-w-[4.5rem] text-center text-sm font-medium text-foreground">{item.kg.toFixed(1)} LB</span>
+                          <button type="button" onClick={() => alterarKgItem(item.id, 0.1)} className="flex h-7 w-7 items-center justify-center rounded-lg border border-border bg-background transition hover:border-primary/40">
+                            <Plus className="h-3 w-3" />
                           </button>
                         </div>
-                        <p className="text-sm font-semibold text-primary">{precoFormatado(item.kg * item.precoKg)}</p>
+                        <p className="text-sm font-bold text-primary">{precoFormatado(item.kg * item.precoKg)}</p>
                       </div>
                     </div>
                   ))}
                 </div>
               ) : (
-                <p className="mt-2 text-sm text-muted-foreground">{ui.emptyCart}</p>
+                <p className="mt-3 text-sm text-muted-foreground">{ui.emptyCart}</p>
               )}
 
-              <p className="mt-3 text-sm text-muted-foreground">{ui.total}: <span className="font-semibold text-primary">{precoFormatado(resumoCarrinho.totalValor)}</span></p>
+              <div className="mt-4 flex items-center justify-between border-t border-border pt-3">
+                <p className="text-sm text-muted-foreground">{ui.total}</p>
+                <p className="text-lg font-bold text-primary">{precoFormatado(resumoCarrinho.totalValor)}</p>
+              </div>
             </section>
           ) : null}
 
           {checkoutAberto ? (
-            <section className="rounded-xl border border-primary/35 bg-background p-4">
+            <section className="relative overflow-hidden rounded-xl border border-primary/25 bg-background p-4">
+              <div className="absolute left-0 top-0 h-[2px] w-full" style={{ background: 'var(--gold-gradient)' }} />
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-sm font-semibold text-foreground">{ui.checkout} • {ui.step} {etapaCheckout} {ui.of} 3</p>
+                <p className="text-sm font-semibold text-foreground">{ui.checkout}</p>
                 <Button size="sm" variant="outline" onClick={() => setCheckoutAberto(false)}>{ui.close}</Button>
               </div>
 
-              <div className="mt-3 space-y-4">
+              {/* Step progress */}
+              <div className="mt-3 flex items-center gap-2">
+                {[1, 2, 3].map((step) => (
+                  <div key={step} className="flex items-center gap-2">
+                    <div className={cn(
+                      'flex h-6 w-6 items-center justify-center rounded-full text-xs font-bold transition',
+                      step < etapaCheckout ? 'bg-primary text-primary-foreground' :
+                      step === etapaCheckout ? 'bg-primary text-primary-foreground ring-2 ring-primary/30' :
+                      'bg-muted text-muted-foreground',
+                    )}>
+                      {step < etapaCheckout ? <BadgeCheck className="h-3.5 w-3.5" /> : step}
+                    </div>
+                    {step < 3 && (
+                      <div className={cn('h-px w-8 transition', step < etapaCheckout ? 'bg-primary' : 'bg-border')} />
+                    )}
+                  </div>
+                ))}
+                <span className="ml-1 text-xs text-muted-foreground">{ui.step} {etapaCheckout} {ui.of} 3</span>
+              </div>
+
+              <div className="mt-4 space-y-4">
                 {etapaCheckout === 1 ? (
                   <div className="space-y-4">
-                                        <div className="mb-2 flex items-center gap-2 text-xs text-primary">
-                                          <BadgeCheck className="h-4 w-4" />
-                                          {ui.profileAutoFill}
-                                        </div>
-                    <h2 className="text-lg font-bold text-foreground mb-2">{ui.identification}</h2>
+                    <div className="flex items-center gap-2 rounded-lg bg-primary/10 px-3 py-2 text-xs text-primary">
+                      <BadgeCheck className="h-4 w-4 shrink-0" />
+                      {ui.profileAutoFill}
+                    </div>
+                    <h2 className="text-base font-bold text-foreground">{ui.identification}</h2>
                     <div className="grid gap-3 md:grid-cols-2">
                       <div>
-                        <label className="text-xs text-muted-foreground">{ui.fullName}</label>
-                        <input value={clienteNome} onChange={(e) => setClienteNome(e.target.value)} className="mt-1 h-10 w-full rounded-md border border-border bg-card px-3 text-sm" required />
+                        <label className="text-xs font-medium text-muted-foreground">{ui.fullName}</label>
+                        <input value={clienteNome} onChange={(e) => setClienteNome(e.target.value)} className="mt-1 h-10 w-full rounded-lg border border-border bg-card px-3 text-sm text-foreground outline-none focus:border-primary/50" required />
                       </div>
                       <div>
-                        <label className="text-xs text-muted-foreground">{ui.phone} <span className="text-muted-foreground">{ui.phoneHint}</span></label>
+                        <label className="text-xs font-medium text-muted-foreground">{ui.phone} <span className="text-muted-foreground/60">{ui.phoneHint}</span></label>
                         <input
                           value={clienteTelefone}
                           onChange={(e) => setClienteTelefone(normalizePhoneInput(e.target.value))}
                           onBlur={(e) => setClienteTelefone(formatPhoneForDisplay(e.target.value))}
-                          className="mt-1 h-10 w-full rounded-md border border-border bg-card px-3 text-sm"
+                          className="mt-1 h-10 w-full rounded-lg border border-border bg-card px-3 text-sm text-foreground outline-none focus:border-primary/50"
                           placeholder="+1 555-555-5555"
                           type="tel"
                           inputMode="tel"
@@ -1043,40 +1097,40 @@ export default function ClientePage() {
                       </div>
                       {usuarioLogado ? (
                         <div className="md:col-span-2">
-                          <label className="text-xs text-muted-foreground">{ui.email} <span className="text-muted-foreground">{ui.optional}</span></label>
+                          <label className="text-xs font-medium text-muted-foreground">{ui.email} <span className="text-muted-foreground/60">{ui.optional}</span></label>
                           <input
                             value={clienteEmail}
                             onChange={(e) => setClienteEmail(e.target.value)}
-                            className="mt-1 h-10 w-full rounded-md border border-border bg-card px-3 text-sm"
+                            className="mt-1 h-10 w-full rounded-lg border border-border bg-card px-3 text-sm text-foreground outline-none focus:border-primary/50"
                             type="email"
                           />
                         </div>
                       ) : null}
                     </div>
-                    <h2 className="text-lg font-bold text-foreground mt-6 mb-2">{ui.deliveryAddress}</h2>
+                    <h2 className="mt-4 text-base font-bold text-foreground">{ui.deliveryAddress}</h2>
                     <div className="grid gap-3 md:grid-cols-2">
                       <div>
-                        <label className="text-xs text-muted-foreground">{ui.streetNumberName}</label>
+                        <label className="text-xs font-medium text-muted-foreground">{ui.streetNumberName}</label>
                         <div className="flex gap-2">
-                          <input value={enderecoNumero} onChange={(e) => setEnderecoNumero(e.target.value)} className="mt-1 h-10 w-24 rounded-md border border-border bg-card px-3 text-sm" placeholder="350" required />
-                          <input value={enderecoRua} onChange={(e) => setEnderecoRua(e.target.value)} className="mt-1 h-10 flex-1 rounded-md border border-border bg-card px-3 text-sm" placeholder="5th Ave" required />
+                          <input value={enderecoNumero} onChange={(e) => setEnderecoNumero(e.target.value)} className="mt-1 h-10 w-24 rounded-lg border border-border bg-card px-3 text-sm text-foreground outline-none focus:border-primary/50" placeholder="350" required />
+                          <input value={enderecoRua} onChange={(e) => setEnderecoRua(e.target.value)} className="mt-1 h-10 flex-1 rounded-lg border border-border bg-card px-3 text-sm text-foreground outline-none focus:border-primary/50" placeholder="5th Ave" required />
                         </div>
                       </div>
                       <div>
-                        <label className="text-xs text-muted-foreground">{ui.aptSuiteUnit} <span className="text-muted-foreground">{ui.optional}</span></label>
-                        <input value={enderecoApt} onChange={(e) => setEnderecoApt(e.target.value)} className="mt-1 h-10 w-full rounded-md border border-border bg-card px-3 text-sm" placeholder="Apt 12, Suite 8..." />
+                        <label className="text-xs font-medium text-muted-foreground">{ui.aptSuiteUnit} <span className="text-muted-foreground/60">{ui.optional}</span></label>
+                        <input value={enderecoApt} onChange={(e) => setEnderecoApt(e.target.value)} className="mt-1 h-10 w-full rounded-lg border border-border bg-card px-3 text-sm text-foreground outline-none focus:border-primary/50" placeholder="Apt 12..." />
                       </div>
                       <div>
-                        <label className="text-xs text-muted-foreground">{ui.city}</label>
-                        <input value={enderecoCidade} onChange={(e) => setEnderecoCidade(e.target.value)} className="mt-1 h-10 w-full rounded-md border border-border bg-card px-3 text-sm" required />
+                        <label className="text-xs font-medium text-muted-foreground">{ui.city}</label>
+                        <input value={enderecoCidade} onChange={(e) => setEnderecoCidade(e.target.value)} className="mt-1 h-10 w-full rounded-lg border border-border bg-card px-3 text-sm text-foreground outline-none focus:border-primary/50" required />
                       </div>
                       <div>
-                        <label className="text-xs text-muted-foreground">{ui.state2Letters}</label>
-                        <input value={enderecoEstado} onChange={(e) => setEnderecoEstado(e.target.value.toUpperCase().slice(0,2))} className="mt-1 h-10 w-full rounded-md border border-border bg-card px-3 text-sm uppercase" maxLength={2} required />
+                        <label className="text-xs font-medium text-muted-foreground">{ui.state2Letters}</label>
+                        <input value={enderecoEstado} onChange={(e) => setEnderecoEstado(e.target.value.toUpperCase().slice(0,2))} className="mt-1 h-10 w-full rounded-lg border border-border bg-card px-3 text-sm uppercase text-foreground outline-none focus:border-primary/50" maxLength={2} required />
                       </div>
                       <div className="md:col-span-2">
-                        <label className="text-xs text-muted-foreground">{ui.zipCode}</label>
-                        <input value={enderecoZip} onChange={(e) => setEnderecoZip(e.target.value)} className="mt-1 h-10 w-full rounded-md border border-border bg-card px-3 text-sm" placeholder="10118" required />
+                        <label className="text-xs font-medium text-muted-foreground">{ui.zipCode}</label>
+                        <input value={enderecoZip} onChange={(e) => setEnderecoZip(e.target.value)} className="mt-1 h-10 w-full rounded-lg border border-border bg-card px-3 text-sm text-foreground outline-none focus:border-primary/50" placeholder="10118" required />
                       </div>
                     </div>
                   </div>
@@ -1090,7 +1144,7 @@ export default function ClientePage() {
                       <button
                         type="button"
                         onClick={() => setPagamento('veo')}
-                        className={cn('rounded-md px-3 py-2 text-sm', 'gold-gradient-bg text-accent-foreground')}
+                        className={cn('rounded-lg px-4 py-2 text-sm font-semibold', 'gold-gradient-bg text-accent-foreground')}
                       >
                         Veo
                       </button>
@@ -1099,15 +1153,34 @@ export default function ClientePage() {
                 ) : null}
 
                 {etapaCheckout === 3 ? (
-                  <div className="space-y-2 rounded-lg border border-border bg-card p-3 text-sm">
-                    <h2 className="text-lg font-bold text-foreground mb-2">{ui.confirmOrder}</h2>
-                    <p><strong>{ui.customer}:</strong> {clienteNome} • {clienteTelefone}</p>
-                    <p><strong>{ui.delivery}:</strong> {modoEntrega === 'entrega'
-                      ? `${ui.deliveryAt} ${enderecoRua}, ${enderecoNumero}${enderecoApt ? ' - ' + enderecoApt : ''}, ${enderecoCidade}, ${enderecoEstado}, ${enderecoZip}`
-                      : ui.storePickup}</p>
-                    <p><strong>{ui.schedule}:</strong> {dataEntrega || '-'} {isEn ? 'at' : 'as'} {horarioEntrega || '-'}</p>
-                    <p><strong>{ui.payment}:</strong> Veo</p>
-                    <p><strong>{ui.total}:</strong> <span className="text-primary font-semibold">{precoFormatado(resumoCarrinho.totalValor)}</span></p>
+                  <div className="rounded-xl border border-border bg-card p-4 text-sm">
+                    <h2 className="mb-3 text-base font-bold text-foreground">{ui.confirmOrder}</h2>
+                    <div className="space-y-0 divide-y divide-border">
+                      <div className="flex justify-between py-2">
+                        <span className="text-muted-foreground">{ui.customer}</span>
+                        <span className="text-right font-medium text-foreground">{clienteNome} · {clienteTelefone}</span>
+                      </div>
+                      <div className="flex justify-between gap-4 py-2">
+                        <span className="shrink-0 text-muted-foreground">{ui.delivery}</span>
+                        <span className="text-right font-medium text-foreground">
+                          {modoEntrega === 'entrega'
+                            ? `${enderecoRua}, ${enderecoNumero}${enderecoApt ? ' - ' + enderecoApt : ''}, ${enderecoCidade}, ${enderecoEstado}, ${enderecoZip}`
+                            : ui.storePickup}
+                        </span>
+                      </div>
+                      <div className="flex justify-between py-2">
+                        <span className="text-muted-foreground">{ui.schedule}</span>
+                        <span className="font-medium text-foreground">{dataEntrega || '-'} {isEn ? 'at' : 'às'} {horarioEntrega || '-'}</span>
+                      </div>
+                      <div className="flex justify-between py-2">
+                        <span className="text-muted-foreground">{ui.payment}</span>
+                        <span className="font-medium text-foreground">Veo</span>
+                      </div>
+                      <div className="flex justify-between py-2">
+                        <span className="font-semibold text-muted-foreground">{ui.total}</span>
+                        <span className="text-lg font-bold text-primary">{precoFormatado(resumoCarrinho.totalValor)}</span>
+                      </div>
+                    </div>
                   </div>
                 ) : null}
               </div>
@@ -1116,13 +1189,12 @@ export default function ClientePage() {
                 <Button type="button" variant="outline" onClick={() => setEtapaCheckout((v) => Math.max(1, v - 1))} disabled={etapaCheckout === 1}>
                   {ui.back}
                 </Button>
-
                 {etapaCheckout < 3 ? (
-                  <Button type="button" onClick={avancarEtapa} className="gold-gradient-bg text-accent-foreground">
+                  <Button type="button" onClick={avancarEtapa} className="gold-gradient-bg font-semibold text-accent-foreground">
                     {ui.continue}
                   </Button>
                 ) : (
-                  <Button type="button" onClick={finalizarPedido} className="gold-gradient-bg text-accent-foreground">
+                  <Button type="button" onClick={finalizarPedido} className="gold-gradient-bg font-semibold text-accent-foreground">
                     {ui.confirmOrder}
                   </Button>
                 )}
@@ -1130,64 +1202,80 @@ export default function ClientePage() {
             </section>
           ) : null}
 
-          <div className="flex flex-col gap-2 rounded-lg border border-border bg-background px-3 py-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between md:px-4">
+          {/* Filters bar */}
+          <div className="flex flex-col gap-2 rounded-xl border border-border bg-background px-3 py-2.5 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between md:px-4">
             <button
               type="button"
               onClick={() => setMostrarApenasOfertas((estadoAtual) => !estadoAtual)}
               className={cn(
-                'inline-flex items-center gap-2 self-start rounded-md px-2 py-1 text-sm',
-                mostrarApenasOfertas ? 'bg-primary/15 text-primary' : 'text-foreground',
+                'inline-flex items-center gap-2 self-start rounded-lg px-2.5 py-1.5 text-xs font-medium transition',
+                mostrarApenasOfertas ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:text-foreground',
               )}
             >
-              <ListFilter className="h-4 w-4 text-primary" />
+              <ListFilter className="h-3.5 w-3.5" />
               {mostrarApenasOfertas ? ui.onlyOffers : ui.filters}
             </button>
-            <div className="max-w-full overflow-x-auto whitespace-nowrap text-sm text-muted-foreground">
+            <div className="max-w-full overflow-x-auto whitespace-nowrap text-xs text-muted-foreground">
               Show:{' '}
               {[9, 12, 18, 24].map((valor) => (
                 <button
                   key={valor}
                   type="button"
                   onClick={() => setShowCount(valor)}
-                  className={cn('mx-1', showCount === valor ? 'font-semibold text-foreground' : 'hover:text-foreground')}
+                  className={cn('mx-1.5 transition', showCount === valor ? 'font-semibold text-foreground' : 'hover:text-foreground')}
                 >
                   {valor}
                 </button>
               ))}
             </div>
-            <div className="flex items-center gap-2 text-muted-foreground">
-              <button type="button" onClick={() => setModoVisualizacao('grid')} className={cn(modoVisualizacao === 'grid' ? 'text-primary' : 'hover:text-foreground')}>
-                <LayoutGrid className="h-4 w-4" />
-              </button>
-              <button type="button" onClick={() => setModoVisualizacao('compact')} className={cn(modoVisualizacao === 'compact' ? 'text-primary' : 'hover:text-foreground')}>
-                <Grid2x2 className="h-4 w-4" />
-              </button>
-              <button type="button" onClick={() => setModoVisualizacao('list')} className={cn(modoVisualizacao === 'list' ? 'text-primary' : 'hover:text-foreground')}>
-                <List className="h-4 w-4" />
-              </button>
+            <div className="flex items-center gap-1.5">
+              {([
+                { mode: 'grid' as ModoVisualizacao, icon: <LayoutGrid className="h-4 w-4" /> },
+                { mode: 'compact' as ModoVisualizacao, icon: <Grid2x2 className="h-4 w-4" /> },
+                { mode: 'list' as ModoVisualizacao, icon: <List className="h-4 w-4" /> },
+              ] as const).map(({ mode, icon }) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => setModoVisualizacao(mode)}
+                  className={cn(
+                    'flex h-7 w-7 items-center justify-center rounded-lg transition',
+                    modoVisualizacao === mode ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  {icon}
+                </button>
+              ))}
             </div>
             <button
               type="button"
               onClick={() => setOrdenacao((ordemAtual) => (ordemAtual === 'menor-maior' ? 'maior-menor' : 'menor-maior'))}
-              className="inline-flex items-center gap-1 self-start text-sm text-muted-foreground hover:text-foreground sm:self-auto"
+              className="inline-flex items-center gap-1 self-start text-xs text-muted-foreground hover:text-foreground sm:self-auto"
             >
               <span className="sm:hidden">{ordenacao === 'menor-maior' ? ui.lowerPrice : ui.higherPrice}</span>
               <span className="hidden sm:inline">
                 {ui.orderByPrice}: <span className="text-foreground">{ordenacao === 'menor-maior' ? ui.lowToHigh : ui.highToLow}</span>
               </span>
-              <ChevronDown className="h-4 w-4" />
+              <ChevronDown className="h-3.5 w-3.5" />
             </button>
           </div>
 
+          {/* Product grid */}
           <div className={cn(
             modoVisualizacao === 'list'
               ? 'grid grid-cols-1 gap-3'
               : modoVisualizacao === 'compact'
-                ? 'grid grid-cols-1 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5'
+                ? 'grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5'
                 : 'grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4',
           )}>
             {produtosFiltrados.map((produto, index) => (
-              <article key={produto.id} className="overflow-hidden rounded-xl border border-border bg-card card-elevated">
+              <article
+                key={produto.id}
+                className="group overflow-hidden rounded-xl border border-border bg-card transition-all duration-200 hover:border-primary/25"
+                style={{ boxShadow: 'var(--card-shadow)' }}
+                onMouseEnter={e => (e.currentTarget.style.boxShadow = 'var(--card-shadow-hover)')}
+                onMouseLeave={e => (e.currentTarget.style.boxShadow = 'var(--card-shadow)')}
+              >
                 <div className={cn(
                   'relative bg-[linear-gradient(160deg,hsl(var(--muted))_0%,hsl(var(--background))_65%,hsl(var(--muted))_100%)]',
                   modoVisualizacao === 'compact' ? 'h-32 md:h-36' : 'h-44 md:h-52',
@@ -1195,37 +1283,47 @@ export default function ClientePage() {
                   <img
                     src={produto.imagem || ''}
                     alt={produto.nome}
-                    className={produto.imagem ? "h-full w-full object-cover" : "hidden"}
+                    className={produto.imagem ? "h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.02]" : "hidden"}
                     loading={index === 0 ? "eager" : "lazy"}
                     fetchPriority={index === 0 ? "high" : "auto"}
                     decoding="async"
                     width={modoVisualizacao === 'compact' ? 320 : 420}
                     height={modoVisualizacao === 'compact' ? 144 : 208}
                   />
-                  <div className="absolute inset-0 bg-[linear-gradient(to_top,hsl(var(--background)/0.56),transparent_45%)]" />
-                  <span className="absolute left-3 top-3 rounded-full bg-primary px-2.5 py-1 text-[10px] font-bold text-primary-foreground">
-                    {produto.selo}
-                  </span>
+                  <div className="absolute inset-0 bg-[linear-gradient(to_top,hsl(var(--background)/0.75)_0%,transparent_50%)]" />
+                  {produto.selo ? (
+                    <span className="absolute left-3 top-3 rounded-full bg-primary px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-primary-foreground">
+                      {produto.selo}
+                    </span>
+                  ) : null}
                 </div>
-                <div className="space-y-3 p-4">
-                  <h3 className="line-clamp-2 text-lg font-semibold text-foreground">{produto.nome}</h3>
+                <div className="space-y-2.5 p-4">
+                  <h3 className={cn(
+                    'font-semibold text-foreground',
+                    modoVisualizacao === 'compact' ? 'line-clamp-1 text-sm' : 'line-clamp-2 text-base',
+                  )}>{produto.nome}</h3>
                   {produto.destaque ? (
-                    <div className="flex items-center gap-1 text-primary">
+                    <div className="flex items-center gap-0.5">
                       {Array.from({ length: 5 }).map((_, idx) => (
-                        <Star key={idx} className="h-3.5 w-3.5 fill-current" />
+                        <Star key={idx} className="h-3 w-3 fill-primary text-primary" />
                       ))}
                     </div>
                   ) : null}
                   <div>
-                    <p className="text-xs text-muted-foreground line-through">de {precoFormatado(produto.precoAnterior)}</p>
-                    <p className="text-2xl font-bold text-primary md:text-3xl">{precoFormatado(produto.preco)}</p>
-                    <p className="text-xs text-muted-foreground">{ui.pricePerLb}</p>
+                    {produto.precoAnterior ? (
+                      <p className="text-xs text-muted-foreground/70 line-through">{precoFormatado(produto.precoAnterior)}</p>
+                    ) : null}
+                    <p className={cn(
+                      'font-bold leading-none text-primary',
+                      modoVisualizacao === 'compact' ? 'text-xl' : 'text-2xl md:text-3xl',
+                    )}>{precoFormatado(produto.preco)}</p>
+                    <p className="mt-0.5 text-[11px] text-muted-foreground">{ui.pricePerLb}</p>
                   </div>
 
                   <Button
                     type="button"
                     onClick={() => abrirCompra({ id: produto.id, nome: produto.nome, imagem: produto.imagem, preco: produto.preco })}
-                    className="w-full gold-gradient-bg text-accent-foreground"
+                    className={cn('w-full gold-gradient-bg font-semibold text-accent-foreground', modoVisualizacao === 'compact' ? 'h-8 text-xs' : '')}
                   >
                     {ui.buy}
                   </Button>
@@ -1233,13 +1331,14 @@ export default function ClientePage() {
               </article>
             ))}
           </div>
+
           {produtosFiltrados.length < produtosCatalogo.length && (
-            <div className="flex justify-center mt-6">
+            <div className="flex justify-center py-2">
               <Button
                 type="button"
                 variant="outline"
                 onClick={() => setShowCount((prev) => prev + 12)}
-                className="px-6 py-2 text-base font-semibold"
+                className="rounded-xl px-8 text-sm font-semibold"
               >
                 {ui.loadMore}
               </Button>
@@ -1247,27 +1346,46 @@ export default function ClientePage() {
           )}
         </main>
 
-        <footer className="border-t border-border bg-muted/70 px-4 py-3 md:px-6">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <button type="button" onClick={() => setCarrinhoAberto(true)} className="rounded-lg gold-gradient-bg px-4 py-2.5 text-sm font-bold text-accent-foreground">
-              {ui.viewCart.toUpperCase()} ({precoFormatado(resumoCarrinho.totalValor)})
+        <footer className="border-t border-border bg-card px-4 py-3 md:px-6">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <button
+              type="button"
+              onClick={() => setCarrinhoAberto(true)}
+              className="rounded-xl gold-gradient-bg px-5 py-2.5 text-sm font-bold text-accent-foreground"
+            >
+              {ui.viewCart.toUpperCase()} · {precoFormatado(resumoCarrinho.totalValor)}
             </button>
-            <div className="flex items-center gap-3 text-xs text-muted-foreground">
-              <button type="button" onClick={() => toast.info(pedidoFinalizado ? `${ui.orderConfirmed}: ${pedidoFinalizado.numero}` : ui.noFinishedOrders)}>{ui.followOrder}</button>
-              <button type="button" onClick={() => navigate('/login')} className="text-primary">{ui.doLogin}</button>
+            <div className="flex items-center gap-4 text-xs text-muted-foreground">
+              <button
+                type="button"
+                onClick={() => toast.info(pedidoFinalizado ? `${ui.orderConfirmed}: ${pedidoFinalizado.numero}` : ui.noFinishedOrders)}
+                className="inline-flex items-center gap-1.5 transition hover:text-foreground"
+              >
+                <PackageCheck className="h-3.5 w-3.5" />
+                {ui.followOrder}
+              </button>
+              <button
+                type="button"
+                onClick={() => navigate('/login')}
+                className="inline-flex items-center gap-1.5 text-primary transition hover:text-primary/80"
+              >
+                <LogIn className="h-3.5 w-3.5" />
+                {ui.doLogin}
+              </button>
             </div>
           </div>
         </footer>
       </div>
 
-      <nav className="fixed bottom-[max(1rem,env(safe-area-inset-bottom))] left-1/2 z-40 w-[min(92vw,520px)] -translate-x-1/2 rounded-3xl border border-border/70 bg-card/95 p-2 shadow-2xl backdrop-blur md:hidden">
+      {/* Bottom mobile nav */}
+      <nav className="fixed bottom-[max(1rem,env(safe-area-inset-bottom))] left-1/2 z-40 w-[min(92vw,520px)] -translate-x-1/2 rounded-3xl border border-border/60 bg-card/95 p-2 shadow-2xl backdrop-blur md:hidden">
         <div className="grid grid-cols-3 gap-2">
           <button
             type="button"
             onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
-            className="flex flex-col items-center justify-center gap-1 rounded-2xl py-2 text-[11px] font-medium text-foreground/80 transition hover:bg-muted"
+            className="flex flex-col items-center justify-center gap-1 rounded-2xl py-2 text-[11px] font-medium text-foreground/70 transition hover:bg-muted"
           >
-            <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-muted text-foreground">
+            <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-muted text-foreground">
               <House className="h-5 w-5" />
             </span>
             {ui.home}
@@ -1276,10 +1394,15 @@ export default function ClientePage() {
           <button
             type="button"
             onClick={() => setCarrinhoAberto(true)}
-            className="flex flex-col items-center justify-center gap-1 rounded-2xl py-2 text-[11px] font-semibold text-primary"
+            className="flex flex-col items-center justify-center gap-1 rounded-2xl py-2 text-[11px] font-bold text-primary"
           >
-            <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-md">
+            <span className="relative flex h-10 w-10 items-center justify-center rounded-2xl bg-primary text-primary-foreground" style={{ boxShadow: 'var(--gold-shadow)' }}>
               <ShoppingCart className="h-5 w-5" />
+              {resumoCarrinho.totalItens > 0 && (
+                <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full border border-border bg-background text-[9px] font-bold text-primary">
+                  {resumoCarrinho.totalItens}
+                </span>
+              )}
             </span>
             {ui.cart}
           </button>
@@ -1287,9 +1410,9 @@ export default function ClientePage() {
           <button
             type="button"
             onClick={() => navigate('/login')}
-            className="flex flex-col items-center justify-center gap-1 rounded-2xl py-2 text-[11px] font-medium text-foreground/80 transition hover:bg-muted"
+            className="flex flex-col items-center justify-center gap-1 rounded-2xl py-2 text-[11px] font-medium text-foreground/70 transition hover:bg-muted"
           >
-            <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-muted text-foreground">
+            <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-muted text-foreground">
               <LogIn className="h-5 w-5" />
             </span>
             {ui.doLogin}

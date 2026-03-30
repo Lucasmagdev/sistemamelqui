@@ -283,7 +283,7 @@ export default function DashboardPage() {
                   </div>
                 </div>
                 {loading ? (
-                  <div className="h-3 w-16 animate-pulse rounded bg-muted" />
+                  <div className="h-3 w-16 animate-pulse rounded-md bg-muted" />
                 ) : (
                   <p className="text-xs text-muted-foreground">{item.context}</p>
                 )}

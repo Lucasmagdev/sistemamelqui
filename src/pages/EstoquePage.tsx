@@ -280,9 +280,9 @@ export default function EstoquePage() {
           <div className="flex items-start justify-between gap-3">
             <div className="space-y-1">
               <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Estoque baixo</p>
-              <p className="text-3xl font-extrabold text-red-400">{loading ? <span className="block h-8 w-16 animate-pulse rounded-md bg-muted" /> : totals.low_stock_products}</p>
+              <p className="text-3xl font-extrabold text-status-critical">{loading ? <span className="block h-8 w-16 animate-pulse rounded-md bg-muted" /> : totals.low_stock_products}</p>
             </div>
-            <div className="rounded-xl bg-red-500/15 p-3 text-red-400"><TrendingDown className="h-5 w-5" /></div>
+            <div className="rounded-xl bg-status-critical/15 p-3 text-status-critical"><TrendingDown className="h-5 w-5" /></div>
           </div>
           <p className="text-xs text-muted-foreground">abaixo do minimo</p>
         </div>
@@ -290,9 +290,9 @@ export default function EstoquePage() {
           <div className="flex items-start justify-between gap-3">
             <div className="space-y-1">
               <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Vencendo em 7 dias</p>
-              <p className="text-3xl font-extrabold text-yellow-400">{loading ? <span className="block h-8 w-16 animate-pulse rounded-md bg-muted" /> : totals.expiring_7d_products}</p>
+              <p className="text-3xl font-extrabold text-status-warning">{loading ? <span className="block h-8 w-16 animate-pulse rounded-md bg-muted" /> : totals.expiring_7d_products}</p>
             </div>
-            <div className="rounded-xl bg-yellow-500/15 p-3 text-yellow-400"><Clock className="h-5 w-5" /></div>
+            <div className="rounded-xl bg-status-warning/15 p-3 text-status-warning"><Clock className="h-5 w-5" /></div>
           </div>
           <p className="text-xs text-muted-foreground">lotes proximos do vencimento</p>
         </div>
@@ -369,13 +369,13 @@ export default function EstoquePage() {
         </div>
 
         <div className="mt-4 flex flex-wrap items-center gap-2 text-xs">
-          <button type="button" className={`rounded-full border px-3 py-1 ${focusFilter === "low" ? "border-red-500/70 bg-red-500/10 text-red-300" : "border-border text-muted-foreground"}`} onClick={() => setFocusFilter((current) => (current === "low" ? "all" : "low"))}>
+          <button type="button" className={`rounded-full border px-3 py-1 ${focusFilter === "low" ? "border-status-critical/70 bg-red-500/10 text-status-critical" : "border-border text-muted-foreground"}`} onClick={() => setFocusFilter((current) => (current === "low" ? "all" : "low"))}>
             Baixo ({totals.low_stock_products})
           </button>
-          <button type="button" className={`rounded-full border px-3 py-1 ${focusFilter === "expiring" ? "border-yellow-500/70 bg-yellow-500/10 text-yellow-300" : "border-border text-muted-foreground"}`} onClick={() => setFocusFilter((current) => (current === "expiring" ? "all" : "expiring"))}>
+          <button type="button" className={`rounded-full border px-3 py-1 ${focusFilter === "expiring" ? "border-status-warning/70 bg-status-warning/10 text-status-warning" : "border-border text-muted-foreground"}`} onClick={() => setFocusFilter((current) => (current === "expiring" ? "all" : "expiring"))}>
             Vencendo em 7 dias ({totals.expiring_7d_products})
           </button>
-          <button type="button" className={`rounded-full border px-3 py-1 ${focusFilter === "disabled" ? "border-zinc-500/70 bg-zinc-500/10 text-zinc-200" : "border-border text-muted-foreground"}`} onClick={() => setFocusFilter((current) => (current === "disabled" ? "all" : "disabled"))}>
+          <button type="button" className={`rounded-full border px-3 py-1 ${focusFilter === "disabled" ? "border-border bg-muted text-foreground" : "border-border text-muted-foreground"}`} onClick={() => setFocusFilter((current) => (current === "disabled" ? "all" : "disabled"))}>
             Desativados ({rows.filter((row) => !row.stock_enabled).length})
           </button>
           <span className="ml-auto text-muted-foreground">
@@ -385,12 +385,12 @@ export default function EstoquePage() {
       </div>
 
       {alerts.length > 0 ? (
-        <div className="rounded-xl border border-red-500/40 bg-red-500/5 p-4">
+        <div className="rounded-xl border border-status-critical/40 bg-status-critical/5 p-4">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <h2 className="flex items-center gap-2 text-sm font-semibold text-red-300">
+            <h2 className="flex items-center gap-2 text-sm font-semibold text-status-critical">
               <AlertTriangle className="h-4 w-4" />
               Alertas de estoque baixo
-              <span className="ml-1 inline-flex items-center rounded-full bg-red-500/20 border border-red-500/30 px-2 py-0.5 text-xs font-bold text-red-300">
+              <span className="ml-1 inline-flex items-center rounded-full bg-status-critical/20 border border-status-critical/30 px-2 py-0.5 text-xs font-bold text-status-critical">
                 {alerts.length}
               </span>
             </h2>
@@ -400,9 +400,9 @@ export default function EstoquePage() {
           </div>
           <div className="space-y-2">
             {alerts.slice(0, 8).map((item) => (
-              <div key={item.product_id} className="flex items-center justify-between gap-3 rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2 text-sm">
+              <div key={item.product_id} className="flex items-center justify-between gap-3 rounded-lg border border-status-critical/20 bg-status-critical/5 px-3 py-2 text-sm">
                 <span className="font-medium text-foreground">{item.product_name}</span>
-                <span className="text-right text-xs font-medium text-red-300">
+                <span className="text-right text-xs font-medium text-status-critical">
                   Saldo: {item.saldo_qty} {item.stock_unit} · Min: {item.stock_min} {item.stock_unit}
                 </span>
               </div>
@@ -423,11 +423,11 @@ export default function EstoquePage() {
           </div>
           <div>
             <p className="text-xs text-muted-foreground">Baixo na visao</p>
-            <p className="font-semibold text-red-300">{filteredSummary.low}</p>
+            <p className="font-semibold text-status-critical">{filteredSummary.low}</p>
           </div>
           <div>
             <p className="text-xs text-muted-foreground">Vencendo em 7 dias</p>
-            <p className="font-semibold text-yellow-300">{filteredSummary.expiring}</p>
+            <p className="font-semibold text-status-warning">{filteredSummary.expiring}</p>
           </div>
         </div>
         <div className="overflow-x-auto">
@@ -468,17 +468,17 @@ export default function EstoquePage() {
                     <td className="px-3 py-3 text-center">
                       <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[10px] font-semibold ${
                         row.status === "low"
-                          ? "bg-red-500/15 text-red-400 border-red-500/20"
+                          ? "bg-status-critical/15 text-status-critical border-status-critical/20"
                           : row.status === "ok"
                             ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/20"
-                            : "bg-zinc-500/15 text-zinc-400 border-zinc-500/20"
+                            : "bg-muted text-muted-foreground border-border"
                       }`}>
                         {row.status === "low" ? "Baixo" : row.status === "ok" ? "OK" : "Desativado"}
                       </span>
                     </td>
                     <td className="px-3 py-3 text-center">
                       {row.lots_expiring_7d > 0 ? (
-                        <span className="inline-flex items-center rounded-full border border-yellow-500/20 bg-yellow-500/10 px-2 py-0.5 text-[10px] font-semibold text-yellow-400">
+                        <span className="inline-flex items-center rounded-full border border-status-warning/20 bg-status-warning/10 px-2 py-0.5 text-[10px] font-semibold text-status-warning">
                           {row.lots_expiring_7d} lote{row.lots_expiring_7d > 1 ? "s" : ""}
                         </span>
                       ) : (

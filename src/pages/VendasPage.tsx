@@ -450,7 +450,7 @@ export default function VendasPage() {
               <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Delivery concluido</p>
               <p className="text-3xl font-extrabold text-primary">{reportQuery.isLoading && !reportQuery.data ? <span className="block h-8 w-28 animate-pulse rounded-md bg-muted" /> : money(reportSummary?.delivery_sales_total)}</p>
             </div>
-            <div className="rounded-xl bg-blue-500/15 p-3 text-blue-400"><Truck className="h-5 w-5" /></div>
+            <div className="rounded-xl bg-primary/15 p-3 text-primary"><Truck className="h-5 w-5" /></div>
           </div>
           <p className="text-xs text-muted-foreground">{reportSummary?.delivery_sales_count || 0} pedidos concluidos</p>
         </div>
@@ -468,9 +468,9 @@ export default function VendasPage() {
           <div className="flex items-start justify-between gap-3">
             <div className="space-y-1">
               <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Total consolidado</p>
-              <p className="text-3xl font-extrabold text-yellow-400">{reportQuery.isLoading && !reportQuery.data ? <span className="block h-8 w-28 animate-pulse rounded-md bg-muted" /> : money(reportSummary?.total_sales)}</p>
+              <p className="text-3xl font-extrabold text-primary">{reportQuery.isLoading && !reportQuery.data ? <span className="block h-8 w-28 animate-pulse rounded-md bg-muted" /> : money(reportSummary?.total_sales)}</p>
             </div>
-            <div className="rounded-xl bg-yellow-500/15 p-3 text-yellow-400"><DollarSign className="h-5 w-5" /></div>
+            <div className="rounded-xl bg-primary/15 p-3 text-primary"><DollarSign className="h-5 w-5" /></div>
           </div>
           <p className="text-xs text-muted-foreground">{reportQuery.isFetching ? "Atualizando..." : "Resumo operacional do periodo"}</p>
         </div>
@@ -481,13 +481,13 @@ export default function VendasPage() {
           <div className="border-b border-border/60 bg-[radial-gradient(circle_at_top_left,rgba(234,179,8,0.12),transparent_42%),linear-gradient(180deg,rgba(23,23,23,0.96),rgba(14,14,14,0.98))] px-5 py-5">
             <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
               <div>
-                <div className="text-[11px] font-semibold uppercase tracking-[0.28em] text-yellow-400/80">Venda presencial</div>
+                <div className="text-[11px] font-semibold uppercase tracking-[0.28em] text-primary/80">Venda presencial</div>
                 <h2 className="mt-2 text-2xl font-bold text-foreground">{editingSaleId ? `Editando venda #${editingSaleId}` : "Lancamento com baixa de estoque"}</h2>
                 <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">Selecione os produtos vendidos, ajuste unidade e registre o pagamento.</p>
               </div>
-              <div className="rounded-2xl border border-yellow-500/20 bg-yellow-500/10 px-5 py-4 text-right">
-                <div className="text-[11px] uppercase tracking-[0.24em] text-yellow-200/70">Total da venda</div>
-                <div className="mt-2 text-3xl font-bold text-yellow-400">{money(saleTotal)}</div>
+              <div className="rounded-2xl border border-primary/20 bg-primary/10 px-5 py-4 text-right">
+                <div className="text-[11px] uppercase tracking-[0.24em] text-primary/60">Total da venda</div>
+                <div className="mt-2 text-3xl font-bold text-primary">{money(saleTotal)}</div>
               </div>
             </div>
           </div>
@@ -506,11 +506,11 @@ export default function VendasPage() {
             ) : null}
             <div className="grid gap-3 md:grid-cols-2">
               <div>
-                <label className="mb-1.5 block text-sm font-medium text-zinc-300">Data e hora</label>
+                <label className="mb-1.5 block text-sm font-medium text-muted-foreground">Data e hora</label>
                 <Input type="datetime-local" value={saleDatetime} onChange={(event) => setSaleDatetime(event.target.value)} required />
               </div>
               <div>
-                <label className="mb-1.5 block text-sm font-medium text-zinc-300">Forma de pagamento</label>
+                <label className="mb-1.5 block text-sm font-medium text-muted-foreground">Forma de pagamento</label>
                 <select value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value)} className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
                   <option value="veo">Veo</option>
                 </select>
@@ -546,7 +546,7 @@ export default function VendasPage() {
 
                     <div className="grid gap-3 md:grid-cols-[1.6fr,0.85fr,0.75fr,1fr]">
                       <div>
-                        <label className="mb-1.5 block text-sm font-medium text-zinc-300">Produto</label>
+                        <label className="mb-1.5 block text-sm font-medium text-muted-foreground">Produto</label>
                         <select value={item.productId} onChange={(event) => setItem(index, { productId: event.target.value })} className="flex h-11 w-full rounded-xl border border-input bg-background px-3 py-2 text-sm" required>
                           <option value="">Selecione</option>
                           {products.map((productOption) => (
@@ -564,11 +564,11 @@ export default function VendasPage() {
                         ) : null}
                       </div>
                       <div>
-                        <label className="mb-1.5 block text-sm font-medium text-zinc-300">Quantidade</label>
+                        <label className="mb-1.5 block text-sm font-medium text-muted-foreground">Quantidade</label>
                         <Input value={item.quantity} onChange={(event) => setItem(index, { quantity: event.target.value })} className="h-11 rounded-xl" required />
                       </div>
                       <div>
-                        <label className="mb-1.5 block text-sm font-medium text-zinc-300">Unidade</label>
+                        <label className="mb-1.5 block text-sm font-medium text-muted-foreground">Unidade</label>
                         <select value={item.unit} onChange={(event) => setItem(index, { unit: normalizeUnit(event.target.value) })} className="flex h-11 w-full rounded-xl border border-input bg-background px-3 py-2 text-sm" disabled={fixedUnit}>
                           {allowedUnits.map((allowedUnit) => (
                             <option key={allowedUnit} value={allowedUnit}>{allowedUnit}</option>
@@ -576,7 +576,7 @@ export default function VendasPage() {
                         </select>
                       </div>
                       <div>
-                        <label className="mb-1.5 block text-sm font-medium text-zinc-300">Valor unitario</label>
+                        <label className="mb-1.5 block text-sm font-medium text-muted-foreground">Valor unitario</label>
                         <Input value={item.unitPrice} onChange={(event) => setItem(index, { unitPrice: event.target.value })} className="h-11 rounded-xl" required />
                       </div>
                     </div>
@@ -597,7 +597,7 @@ export default function VendasPage() {
             </div>
 
             <div>
-              <label className="mb-1.5 block text-sm font-medium text-zinc-300">Observacoes</label>
+              <label className="mb-1.5 block text-sm font-medium text-muted-foreground">Observacoes</label>
               <textarea value={notes} onChange={(event) => setNotes(event.target.value)} className="min-h-[120px] w-full rounded-xl border border-input bg-background px-3 py-3 text-sm" placeholder="Opcional" />
             </div>
 
@@ -643,7 +643,7 @@ export default function VendasPage() {
                       <div className="flex items-center gap-2">
                         <div className="text-right">
                           <div className="text-xs uppercase tracking-wide text-muted-foreground">Total</div>
-                          <div className="text-lg font-bold text-yellow-400">{money(sale.total_amount)}</div>
+                          <div className="text-lg font-bold text-primary">{money(sale.total_amount)}</div>
                         </div>
                         <Button type="button" variant="outline" onClick={() => downloadReceiptPdf(sale)}>
                           <Download className="mr-2 h-4 w-4" /> PDF

@@ -2499,6 +2499,366 @@ async function discoverStorePhoneFromZApi() {
   };
 }
 
+function getZApiConfig() {
+  const instanceId = process.env.ZAPI_INSTANCE_ID;
+  const instanceToken = process.env.ZAPI_INSTANCE_TOKEN;
+  const clientToken = process.env.ZAPI_CLIENT_TOKEN;
+  const baseUrl = process.env.ZAPI_BASE_URL || "https://api.z-api.io";
+
+  return {
+    configured: Boolean(instanceId && instanceToken),
+    instanceId,
+    instanceToken,
+    clientToken,
+    baseUrl,
+  };
+}
+
+function buildZApiHeaders({ contentType = null } = {}) {
+  const { clientToken } = getZApiConfig();
+  const headers = {};
+  if (contentType) headers["Content-Type"] = contentType;
+  if (clientToken) headers["Client-Token"] = clientToken;
+  return headers;
+}
+
+function buildZApiInstanceEndpoint(pathname) {
+  const { configured, baseUrl, instanceId, instanceToken } = getZApiConfig();
+  if (!configured) return null;
+  return `${baseUrl}/instances/${instanceId}/token/${instanceToken}/${String(pathname || "").replace(/^\/+/, "")}`;
+}
+
+function getNestedValue(payload, keyPath) {
+  const parts = String(keyPath || "").split(".").filter(Boolean);
+  let cursor = payload;
+  for (const part of parts) {
+    cursor = cursor?.[part];
+    if (cursor === undefined || cursor === null) return null;
+  }
+  return cursor;
+}
+
+function findFirstNestedValue(payload, keyPaths) {
+  for (const keyPath of keyPaths) {
+    const value = getNestedValue(payload, keyPath);
+    if (value !== null && value !== undefined && value !== "") return value;
+  }
+  return null;
+}
+
+function normalizeBooleanLike(value) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value > 0;
+
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) return null;
+
+  if (["true", "1", "yes", "y", "connected", "authenticated", "ready", "online", "open", "success"].includes(raw)) {
+    return true;
+  }
+
+  if ([
+    "false",
+    "0",
+    "no",
+    "n",
+    "disconnected",
+    "not_connected",
+    "not connected",
+    "offline",
+    "closed",
+    "close",
+    "qr",
+    "qrcode",
+    "qr code",
+    "pairing",
+    "connecting",
+    "unauthenticated",
+    "logout",
+  ].includes(raw)) {
+    return false;
+  }
+
+  return null;
+}
+
+function extractZApiConnectionInfo(payload) {
+  const statusValue = findFirstNestedValue(payload, [
+    "status",
+    "instance.status",
+    "connected.status",
+    "session.status",
+    "data.status",
+    "value.status",
+  ]);
+
+  const connectedValue = findFirstNestedValue(payload, [
+    "connected",
+    "isConnected",
+    "authenticated",
+    "connected.connected",
+    "instance.connected",
+    "session.connected",
+    "data.connected",
+    "data.isConnected",
+    "value.connected",
+    "value.isConnected",
+  ]);
+
+  const connected = normalizeBooleanLike(connectedValue) ?? normalizeBooleanLike(statusValue);
+  const phone = extractStorePhoneFromPayload(payload);
+
+  return {
+    connected: connected === true,
+    connectedKnown: connected !== null,
+    status: statusValue === null || statusValue === undefined ? null : String(statusValue).trim() || null,
+    phone: phone.phone || null,
+    phonePath: phone.path || null,
+    phoneConfidence: phone.confidence || null,
+  };
+}
+
+function normalizeQrCodeValue(value, fallbackMimeType = "image/png") {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  if (raw.startsWith("data:image/")) return raw;
+  if (/^https?:\/\//i.test(raw)) return raw;
+  const normalized = raw.replace(/\s+/g, "");
+  return `data:${fallbackMimeType};base64,${normalized}`;
+}
+
+function extractZApiQrCodeDataUrl(payload, fallbackMimeType = "image/png") {
+  if (!payload) return null;
+  if (typeof payload === "string") return normalizeQrCodeValue(payload, fallbackMimeType);
+
+  const candidate = findFirstNestedValue(payload, [
+    "value",
+    "qrCode",
+    "qrcode",
+    "base64",
+    "image",
+    "data.value",
+    "data.qrCode",
+    "data.qrcode",
+    "data.base64",
+    "data.image",
+    "value.qrCode",
+    "value.qrcode",
+    "value.base64",
+    "value.image",
+  ]);
+
+  return candidate ? normalizeQrCodeValue(candidate, fallbackMimeType) : null;
+}
+
+async function fetchZApiConnectionStatus() {
+  const endpoint = buildZApiInstanceEndpoint("status");
+  if (!endpoint) {
+    return {
+      ok: false,
+      configured: false,
+      connected: false,
+      connectedKnown: false,
+      status: null,
+      reason: "missing-zapi-config",
+      phone: null,
+      phoneSource: null,
+      phoneSourcePath: null,
+      phoneConfidence: null,
+      diagnostics: [],
+    };
+  }
+
+  try {
+    const response = await fetch(endpoint, { method: "GET", headers: buildZApiHeaders() });
+    const result = await readApiResponse(response);
+    const payload = result.data || null;
+    const info = extractZApiConnectionInfo(payload);
+    const shouldTreatAsConnected = info.connected === true;
+    const diagnostics = [{
+      endpoint,
+      status: response.status,
+      ok: response.ok,
+      hasError: Boolean(payload?.error),
+    }];
+
+    if (!response.ok || (payload?.error && !shouldTreatAsConnected)) {
+      return {
+        ok: false,
+        configured: true,
+        connected: shouldTreatAsConnected,
+        connectedKnown: info.connectedKnown,
+        status: info.status,
+        reason: payload?.message || payload?.error || `zapi-status-http-${response.status}`,
+        phone: null,
+        phoneSource: null,
+        phoneSourcePath: null,
+        phoneConfidence: null,
+        diagnostics,
+      };
+    }
+
+    let phone = info.phone || null;
+    let phoneSource = endpoint;
+    let phoneSourcePath = info.phonePath || null;
+    let phoneConfidence = info.phoneConfidence || null;
+
+    if (!phone) {
+      const discovery = await discoverStorePhoneFromZApi();
+      if (discovery.ok && discovery.phone) {
+        phone = discovery.phone;
+        phoneSource = discovery.source || endpoint;
+        phoneSourcePath = discovery.sourcePath || null;
+        phoneConfidence = discovery.confidence || null;
+        diagnostics.push(...(Array.isArray(discovery.diagnostics) ? discovery.diagnostics : []));
+      }
+    }
+
+    return {
+      ok: true,
+      configured: true,
+      connected: info.connected,
+      connectedKnown: info.connectedKnown,
+      status: info.status,
+      reason: null,
+      phone,
+      phoneSource,
+      phoneSourcePath,
+      phoneConfidence,
+      diagnostics,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      configured: true,
+      connected: false,
+      connectedKnown: false,
+      status: null,
+      reason: error?.message || "zapi-status-request-failed",
+      phone: null,
+      phoneSource: null,
+      phoneSourcePath: null,
+      phoneConfidence: null,
+      diagnostics: [{
+        endpoint,
+        status: null,
+        ok: false,
+        hasError: true,
+      }],
+    };
+  }
+}
+
+async function fetchZApiQrCode() {
+  const endpoint = buildZApiInstanceEndpoint("qr-code/image");
+  if (!endpoint) {
+    return {
+      ok: false,
+      configured: false,
+      qrCodeDataUrl: null,
+      mimeType: null,
+      reason: "missing-zapi-config",
+    };
+  }
+
+  try {
+    const response = await fetch(endpoint, { method: "GET", headers: buildZApiHeaders() });
+    const contentType = String(response.headers.get("content-type") || "").split(";")[0].trim() || null;
+
+    if (contentType && contentType.startsWith("image/")) {
+      if (!response.ok) {
+        return {
+          ok: false,
+          configured: true,
+          qrCodeDataUrl: null,
+          mimeType: contentType,
+          reason: `zapi-qr-http-${response.status}`,
+        };
+      }
+
+      const buffer = Buffer.from(await response.arrayBuffer());
+      return {
+        ok: true,
+        configured: true,
+        qrCodeDataUrl: `data:${contentType};base64,${buffer.toString("base64")}`,
+        mimeType: contentType,
+        reason: null,
+      };
+    }
+
+    const result = await readApiResponse(response);
+    const payload = result.data || null;
+    const connectionInfo = extractZApiConnectionInfo(payload);
+    const qrCodeDataUrl = extractZApiQrCodeDataUrl(result.data || result.text || "", contentType || "image/png");
+    const errorMessage = payload?.message || payload?.error || result.text || null;
+
+    if (connectionInfo.connected) {
+      return {
+        ok: true,
+        configured: true,
+        qrCodeDataUrl: null,
+        mimeType: contentType || null,
+        reason: "already-connected",
+      };
+    }
+
+    if (!response.ok || !qrCodeDataUrl) {
+      return {
+        ok: false,
+        configured: true,
+        qrCodeDataUrl: qrCodeDataUrl || null,
+        mimeType: contentType,
+        reason: errorMessage || `zapi-qr-http-${response.status}`,
+      };
+    }
+
+    return {
+      ok: true,
+      configured: true,
+      qrCodeDataUrl,
+      mimeType: contentType || "image/png",
+      reason: null,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      configured: true,
+      qrCodeDataUrl: null,
+      mimeType: null,
+      reason: error?.message || "zapi-qr-request-failed",
+    };
+  }
+}
+
+async function disconnectZApiInstance() {
+  const endpoint = buildZApiInstanceEndpoint("disconnect");
+  if (!endpoint) {
+    return { ok: false, configured: false, reason: "missing-zapi-config" };
+  }
+
+  try {
+    const response = await fetch(endpoint, { method: "GET", headers: buildZApiHeaders() });
+    const result = await readApiResponse(response);
+    const payload = result.data || null;
+
+    if (!response.ok || payload?.error) {
+      return {
+        ok: false,
+        configured: true,
+        reason: payload?.message || payload?.error || result.text || `zapi-disconnect-http-${response.status}`,
+      };
+    }
+
+    return { ok: true, configured: true, reason: null };
+  } catch (error) {
+    return {
+      ok: false,
+      configured: true,
+      reason: error?.message || "zapi-disconnect-request-failed",
+    };
+  }
+}
+
 function normalizeDateInput(value, fallback = null) {
   if (!value) return fallback;
   const raw = String(value).trim();
@@ -4157,6 +4517,72 @@ app.get("/api/admin/zapi-instance-phone", async (req, res) => {
   } catch (error) {
     return res.status(error?.status || 500).json({
       error: error?.message || "Erro ao validar numero da instancia Z-API.",
+      detail: error?.detail || null,
+    });
+  }
+});
+
+app.get("/api/admin/zapi-connection", async (req, res) => {
+  try {
+    await requireAssistantAdmin(req);
+    const snapshot = await fetchZApiConnectionStatus();
+
+    return res.json({
+      ok: Boolean(snapshot.ok),
+      configured: Boolean(snapshot.configured),
+      connected: Boolean(snapshot.connected),
+      connectedKnown: Boolean(snapshot.connectedKnown),
+      status: snapshot.status || null,
+      reason: snapshot.reason || null,
+      phone: snapshot.phone || null,
+      phoneSource: snapshot.phoneSource || null,
+      phoneSourcePath: snapshot.phoneSourcePath || null,
+      phoneConfidence: snapshot.phoneConfidence || null,
+      diagnostics: Array.isArray(snapshot.diagnostics) ? snapshot.diagnostics : [],
+      checkedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro ao carregar conexao da Z-API.",
+      detail: error?.detail || null,
+    });
+  }
+});
+
+app.get("/api/admin/zapi-qr-code", async (req, res) => {
+  try {
+    await requireAssistantAdmin(req);
+    const qr = await fetchZApiQrCode();
+
+    return res.json({
+      ok: Boolean(qr.ok),
+      configured: Boolean(qr.configured),
+      qrCodeDataUrl: qr.qrCodeDataUrl || null,
+      mimeType: qr.mimeType || null,
+      reason: qr.reason || null,
+      fetchedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro ao carregar QR code da Z-API.",
+      detail: error?.detail || null,
+    });
+  }
+});
+
+app.post("/api/admin/zapi-disconnect", async (req, res) => {
+  try {
+    await requireAssistantAdmin(req);
+    const result = await disconnectZApiInstance();
+
+    return res.status(result.ok ? 200 : 400).json({
+      ok: Boolean(result.ok),
+      configured: Boolean(result.configured),
+      reason: result.reason || null,
+    });
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro ao desconectar instancia da Z-API.",
       detail: error?.detail || null,
     });
   }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTenant } from '@/contexts/TenantContext';
 import { backendRequest } from '@/lib/backendClient';
 import { Button } from '@/components/ui/button';
@@ -7,7 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Check, Copy, MessageSquareText, QrCode, Trash2, Truck, Upload } from 'lucide-react';
+import { Check, Copy, MessageSquareText, PowerOff, QrCode, RefreshCw, Smartphone, Trash2, Truck, Upload, Wifi, WifiOff } from 'lucide-react';
 import { toast } from 'sonner';
 
 type TemplateLocale = {
@@ -26,6 +26,29 @@ type TemplatesResponse = {
   placeholders: string[];
   defaults: ZapiTemplates;
   templates: ZapiTemplates;
+};
+
+type ZapiConnectionResponse = {
+  ok: boolean;
+  configured: boolean;
+  connected: boolean;
+  connectedKnown: boolean;
+  status: string | null;
+  reason: string | null;
+  phone: string | null;
+  phoneSource: string | null;
+  phoneSourcePath: string | null;
+  phoneConfidence: string | null;
+  checkedAt: string;
+};
+
+type ZapiQrResponse = {
+  ok: boolean;
+  configured: boolean;
+  qrCodeDataUrl: string | null;
+  mimeType: string | null;
+  reason: string | null;
+  fetchedAt: string;
 };
 
 const emptyTemplates: ZapiTemplates = {
@@ -87,6 +110,15 @@ export default function ConfiguracoesPage() {
   const [loadingVeoQr, setLoadingVeoQr] = useState(true);
   const [savingVeoQr, setSavingVeoQr] = useState(false);
   const veoFileRef = useRef<HTMLInputElement>(null);
+  const [zapiConnection, setZapiConnection] = useState<ZapiConnectionResponse | null>(null);
+  const [loadingZapiConnection, setLoadingZapiConnection] = useState(true);
+  const [refreshingZapiConnection, setRefreshingZapiConnection] = useState(false);
+  const [zapiQrCodeDataUrl, setZapiQrCodeDataUrl] = useState<string | null>(null);
+  const [loadingZapiQrCode, setLoadingZapiQrCode] = useState(false);
+  const [refreshingZapiQrCode, setRefreshingZapiQrCode] = useState(false);
+  const [disconnectingZapi, setDisconnectingZapi] = useState(false);
+  const [zapiQrFetchedAt, setZapiQrFetchedAt] = useState<string | null>(null);
+  const [zapiQrReason, setZapiQrReason] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -106,6 +138,97 @@ export default function ConfiguracoesPage() {
     void loadVeoQr();
     return () => { active = false; };
   }, []);
+
+  const loadZapiConnection = useCallback(async (mode: 'initial' | 'refresh' | 'silent' = 'refresh') => {
+    try {
+      if (mode === 'initial') {
+        setLoadingZapiConnection(true);
+      } else if (mode === 'refresh') {
+        setRefreshingZapiConnection(true);
+      }
+
+      const response = await backendRequest<ZapiConnectionResponse>('/api/admin/zapi-connection');
+      setZapiConnection(response);
+
+      if (response.connected) {
+        setZapiQrCodeDataUrl(null);
+      }
+    } catch (error: any) {
+      if (mode !== 'silent') toast.error(error.message || 'Erro ao carregar conexao da Z-API');
+    } finally {
+      if (mode !== 'silent') {
+        setLoadingZapiConnection(false);
+        setRefreshingZapiConnection(false);
+      }
+    }
+  }, []);
+
+  const loadZapiQrCode = useCallback(async (mode: 'initial' | 'refresh' | 'silent' = 'refresh') => {
+    try {
+      if (mode === 'initial') {
+        setLoadingZapiQrCode(true);
+      } else if (mode === 'refresh') {
+        setRefreshingZapiQrCode(true);
+      }
+
+      const response = await backendRequest<ZapiQrResponse>('/api/admin/zapi-qr-code');
+      setZapiQrCodeDataUrl(response.qrCodeDataUrl || null);
+      setZapiQrFetchedAt(response.fetchedAt || null);
+      setZapiQrReason(response.reason || null);
+
+      if (!response.ok && response.reason !== 'already-connected' && mode !== 'silent') {
+        toast.error(response.reason || 'Nao foi possivel carregar o QR Code da Z-API');
+      }
+    } catch (error: any) {
+      if (mode !== 'silent') toast.error(error.message || 'Erro ao carregar QR Code da Z-API');
+    } finally {
+      if (mode !== 'silent') {
+        setLoadingZapiQrCode(false);
+        setRefreshingZapiQrCode(false);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadZapiConnection('initial');
+
+    const intervalId = window.setInterval(() => {
+      void loadZapiConnection('silent');
+    }, 5000);
+
+    return () => window.clearInterval(intervalId);
+  }, [loadZapiConnection]);
+
+  useEffect(() => {
+    if (!zapiConnection?.configured) {
+      setZapiQrCodeDataUrl(null);
+      setZapiQrFetchedAt(null);
+      setZapiQrReason(null);
+      setLoadingZapiQrCode(false);
+      return;
+    }
+
+    if (zapiConnection.connected) {
+      setZapiQrCodeDataUrl(null);
+      setZapiQrReason('already-connected');
+      setLoadingZapiQrCode(false);
+      return;
+    }
+
+    if (!zapiQrCodeDataUrl) {
+      void loadZapiQrCode('initial');
+    }
+  }, [loadZapiQrCode, zapiConnection?.configured, zapiConnection?.connected, zapiQrCodeDataUrl]);
+
+  useEffect(() => {
+    if (!zapiConnection?.configured || zapiConnection.connected) return;
+
+    const intervalId = window.setInterval(() => {
+      void loadZapiQrCode('silent');
+    }, 15000);
+
+    return () => window.clearInterval(intervalId);
+  }, [loadZapiQrCode, zapiConnection?.configured, zapiConnection?.connected]);
 
   const handleVeoFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -146,6 +269,31 @@ export default function ConfiguracoesPage() {
       toast.error(error.message || 'Erro ao remover configuracao do Veo');
     } finally {
       setSavingVeoQr(false);
+    }
+  };
+
+  const handleDisconnectZapi = async () => {
+    try {
+      setDisconnectingZapi(true);
+      const response = await backendRequest<{ ok: boolean; configured: boolean; reason: string | null }>('/api/admin/zapi-disconnect', {
+        method: 'POST',
+      });
+
+      if (!response.ok) {
+        toast.error(response.reason || 'Nao foi possivel desconectar a instancia');
+        return;
+      }
+
+      toast.success('Instancia Z-API desconectada');
+      setZapiQrCodeDataUrl(null);
+      setZapiQrFetchedAt(null);
+      setZapiQrReason(null);
+      await loadZapiConnection('refresh');
+      await loadZapiQrCode('refresh');
+    } catch (error: any) {
+      toast.error(error.message || 'Erro ao desconectar a instancia Z-API');
+    } finally {
+      setDisconnectingZapi(false);
     }
   };
 
@@ -264,6 +412,22 @@ export default function ConfiguracoesPage() {
   const activeTemplate = templates[activeTemplateType][activeLocale];
   const activeEvent = eventMeta[activeTemplateType];
   const ActiveEventIcon = activeEvent.icon;
+  const zapiConfigured = Boolean(zapiConnection?.configured);
+  const zapiConnected = Boolean(zapiConnection?.connected);
+  const zapiStatusLabel = !zapiConfigured
+    ? 'Nao configurado'
+    : zapiConnected
+      ? 'Conectado'
+      : zapiConnection?.connectedKnown
+        ? 'Desconectado'
+        : 'Verificando';
+  const zapiStatusClass = !zapiConfigured
+    ? 'border-amber-500/30 bg-amber-500/10 text-amber-200'
+    : zapiConnected
+      ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+      : 'border-rose-500/30 bg-rose-500/10 text-rose-200';
+  const zapiLastCheckedLabel = zapiConnection?.checkedAt ? new Date(zapiConnection.checkedAt).toLocaleString('pt-BR') : 'agora';
+  const zapiQrFetchedLabel = zapiQrFetchedAt ? new Date(zapiQrFetchedAt).toLocaleString('pt-BR') : null;
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
@@ -354,6 +518,173 @@ export default function ConfiguracoesPage() {
                 <p className="text-xs text-muted-foreground">Previa</p>
                 <img src={veoQrBase64} alt="QR Code Veo" className="h-40 w-40 rounded-xl border border-border object-contain bg-white p-2" />
               </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      <div className="rounded-xl border border-border bg-card p-6 card-elevated space-y-5">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="flex items-center gap-3">
+            <div className="rounded-xl border border-border/70 bg-muted/40 p-2.5">
+              {zapiConnected ? <Wifi className="h-5 w-5 text-primary" /> : <WifiOff className="h-5 w-5 text-primary" />}
+            </div>
+            <div>
+              <h2 className="text-xl font-semibold text-foreground">Conexao WhatsApp Z-API</h2>
+              <p className="text-sm text-muted-foreground">
+                Mostra se a instancia esta conectada, exibe o QR Code para pareamento e permite desconectar pelo admin.
+              </p>
+            </div>
+          </div>
+          <Badge variant="outline" className={`px-3 py-1 text-[11px] font-medium ${zapiStatusClass}`}>
+            {zapiStatusLabel}
+          </Badge>
+        </div>
+
+        {loadingZapiConnection ? (
+          <p className="text-sm text-muted-foreground">Carregando status da Z-API...</p>
+        ) : (
+          <div className="space-y-4">
+            {!zapiConfigured ? (
+              <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 text-sm text-amber-100">
+                Configure `ZAPI_INSTANCE_ID` e `ZAPI_INSTANCE_TOKEN` no `backend/.env` para habilitar a conexao do WhatsApp.
+              </div>
+            ) : (
+              <>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="rounded-xl border border-border/80 bg-background/50 p-4 space-y-2">
+                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Telefone conectado</p>
+                    <div className="flex items-center gap-2 text-foreground">
+                      <Smartphone className="h-4 w-4 text-primary" />
+                      <span className="font-semibold">{zapiConnection?.phone || 'Nao identificado ainda'}</span>
+                    </div>
+                    {zapiConnection?.phoneSource && (
+                      <p className="text-xs text-muted-foreground">
+                        Origem: {zapiConnection.phoneSourcePath || zapiConnection.phoneSource}
+                        {zapiConnection.phoneConfidence ? ` (${zapiConnection.phoneConfidence})` : ''}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="rounded-xl border border-border/80 bg-background/50 p-4 space-y-2">
+                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Estado da instancia</p>
+                    <p className="font-semibold text-foreground">{zapiConnection?.status || (zapiConnected ? 'connected' : 'disconnected')}</p>
+                    <p className="text-xs text-muted-foreground">
+                      Ultima verificacao: {zapiConnection?.checkedAt ? new Date(zapiConnection.checkedAt).toLocaleString('pt-BR') : 'agora'}
+                    </p>
+                    {zapiConnection?.reason && (
+                      <p className="text-xs text-amber-200">Detalhe: {zapiConnection.reason}</p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => void loadZapiConnection('refresh')}
+                      disabled={refreshingZapiConnection}
+                      className="border-border/80 bg-background/70"
+                    >
+                    <RefreshCw className={`mr-2 h-4 w-4 ${refreshingZapiConnection ? 'animate-spin' : ''}`} />
+                    Atualizar status
+                  </Button>
+
+                  {!zapiConnected && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => void loadZapiQrCode('refresh')}
+                      disabled={loadingZapiQrCode || refreshingZapiQrCode}
+                      className="border-border/80 bg-background/70"
+                    >
+                      <QrCode className="mr-2 h-4 w-4" />
+                      {loadingZapiQrCode || refreshingZapiQrCode ? 'Atualizando QR...' : 'Atualizar QR'}
+                    </Button>
+                  )}
+
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handleDisconnectZapi}
+                    disabled={!zapiConfigured || disconnectingZapi}
+                    className="border-border/80 bg-background/70"
+                  >
+                    <PowerOff className="mr-2 h-4 w-4" />
+                    {disconnectingZapi ? 'Desconectando...' : 'Desconectar instancia'}
+                  </Button>
+                </div>
+
+                {zapiConnected && (
+                  <div className="rounded-2xl border border-emerald-500/20 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.18),transparent_55%),linear-gradient(180deg,rgba(16,185,129,0.08),rgba(16,185,129,0.03))] p-5">
+                    <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <Wifi className="h-5 w-5 text-emerald-300" />
+                          <p className="text-lg font-semibold text-emerald-50">WhatsApp conectado</p>
+                        </div>
+                        <p className="text-sm text-emerald-100/80">
+                          A instancia da Z-API esta ativa e pronta para enviar mensagens pelo sistema.
+                        </p>
+                        <div className="flex flex-wrap gap-2 pt-1">
+                          <Badge variant="outline" className="border-emerald-400/30 bg-emerald-500/10 text-emerald-100">
+                            numero: {zapiConnection?.phone || 'nao identificado'}
+                          </Badge>
+                          <Badge variant="outline" className="border-emerald-400/30 bg-emerald-500/10 text-emerald-100">
+                            status: {zapiConnection?.status || 'connected'}
+                          </Badge>
+                        </div>
+                      </div>
+                      <div className="rounded-xl border border-emerald-400/20 bg-black/20 px-4 py-3 text-right">
+                        <p className="text-xs uppercase tracking-wide text-emerald-100/60">ultima verificacao</p>
+                        <p className="text-sm font-medium text-emerald-50">{zapiLastCheckedLabel}</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {!zapiConnected && (
+                  <div className="rounded-xl border border-border/80 bg-background/40 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="font-medium text-foreground">QR Code para conectar WhatsApp</p>
+                        <p className="text-xs text-muted-foreground">
+                          Abra o WhatsApp no celular, entre em dispositivos conectados e escaneie este QR.
+                        </p>
+                        {zapiQrFetchedLabel && (
+                          <p className="text-xs text-muted-foreground">Ultima atualizacao do QR: {zapiQrFetchedLabel}</p>
+                        )}
+                      </div>
+                      <Badge variant="outline" className="border-rose-500/30 bg-rose-500/10 text-rose-200">
+                        aguardando pareamento
+                      </Badge>
+                    </div>
+
+                    <div className="mt-4 flex flex-col gap-4 sm:flex-row sm:items-start">
+                      <div className="flex min-h-[220px] min-w-[220px] items-center justify-center rounded-2xl border border-border bg-white p-3">
+                        {zapiQrCodeDataUrl ? (
+                          <img src={zapiQrCodeDataUrl} alt="QR Code Z-API" className="h-52 w-52 object-contain" />
+                        ) : (
+                          <p className="max-w-[220px] text-center text-sm text-muted-foreground">
+                            {loadingZapiQrCode
+                              ? 'Buscando QR Code...'
+                              : zapiQrReason === 'already-connected'
+                                ? 'A instancia conectou. Atualize o status para ver o estado ativo.'
+                                : 'O QR Code ainda nao foi retornado pela Z-API. Clique em atualizar QR.'}
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="space-y-2 text-sm text-muted-foreground">
+                        <p>1. No celular, abra o WhatsApp.</p>
+                        <p>2. Entre em dispositivos conectados.</p>
+                        <p>3. Escaneie o QR mostrado nesta tela.</p>
+                        <p>4. Assim que conectar, o status acima muda automaticamente.</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </>
             )}
           </div>
         )}

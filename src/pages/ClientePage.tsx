@@ -34,6 +34,7 @@ import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { useI18n } from '@/contexts/I18nContext';
 import { backendRequest } from '@/lib/backendClient';
+import { resolvePriorityProductImage } from '@/lib/productImageOverrides';
 import {
   extractPhoneDigits,
   formatPhoneForDisplay,
@@ -129,7 +130,11 @@ export default function ClientePage() {
           id: `${item.produto_id}-${Date.now()}`,
           produtoId: item.produto_id,
           nome: nomeProduto,
-          imagem: item.products?.foto_url || '',
+          imagem: resolvePriorityProductImage(
+            item.products?.nome || item.products?.nome_en || nomeProduto,
+            item.products?.foto_url || '',
+            [item.products?.nome_en],
+          ) || '',
           precoKg: item.preco_unitario,
           kg: item.quantidade,
           tipoCorte: 'piece',
@@ -421,7 +426,7 @@ export default function ClientePage() {
           id: produto.id,
           nome: nomeLocalizado,
           descricao: descricaoLocalizada,
-          imagem: produto.foto_url && produto.foto_url !== 'NULL' && produto.foto_url !== '' ? produto.foto_url : null,
+          imagem: resolvePriorityProductImage(produto.nome, produto.foto_url, [produto.nome_en]),
           preco: produto.preco,
           precoAnterior: produto.precoAnterior || null,
           destaque: produto.destaque || false,

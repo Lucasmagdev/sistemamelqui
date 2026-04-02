@@ -1,6 +1,8 @@
 ﻿import {
   Beef,
   BadgeCheck,
+  ChevronLeft,
+  ChevronRight,
   CircleUserRound,
   Clock3,
   ChevronDown,
@@ -22,7 +24,7 @@
   House,
   LogIn,
 } from 'lucide-react';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import { useTenant } from '@/contexts/TenantContext';
 import { Button } from '@/components/ui/button';
@@ -150,7 +152,6 @@ export default function ClientePage() {
   const isEn = locale === 'en';
   const tr = (pt: string, en: string) => (isEn ? en : pt);
   const ui = {
-    shopTitle: isEn ? 'Butcher Shop Online' : 'Loja online do acougue',
     sameDay: isEn ? 'Same-day delivery' : 'Entrega no mesmo dia',
     selectedCuts: isEn ? 'Selected cuts' : 'Cortes selecionados',
     searchPlaceholder: isEn ? 'Search products' : 'Busca por produtos',
@@ -244,6 +245,16 @@ export default function ClientePage() {
     subtotal: isEn ? 'Subtotal' : 'Subtotal',
     buyLabel: isEn ? 'Buy:' : 'Comprar:',
     menu: isEn ? 'Menu' : 'Menu',
+    qualityPremium: isEn ? 'Premium quality' : 'Qualidade premium',
+    heroSupport: isEn
+      ? 'Selected cuts with a premium storefront experience designed to make choosing faster and more appetizing.'
+      : 'Cortes selecionados com uma vitrine premium para deixar a escolha mais rapida, elegante e apetitosa.',
+    heroEyebrow: isEn ? 'Weekly showcase' : 'Vitrine da semana',
+    featuredCuts: isEn ? 'Featured cuts' : 'Cortes em destaque',
+    exploreCut: isEn ? 'Explore cut' : 'Ver corte',
+    featuredComingSoon: isEn ? 'Featured cuts coming soon' : 'Cortes em destaque em breve',
+    previousHighlight: isEn ? 'Previous highlight' : 'Destaque anterior',
+    nextHighlight: isEn ? 'Next highlight' : 'Proximo destaque',
   };
   const categoryLabel = (category: CategoryKey) =>
     ({
@@ -401,6 +412,11 @@ export default function ClientePage() {
 
   const [produtosCatalogo, setProdutosCatalogo] = useState<any[]>([]);
   const [carregandoProdutos, setCarregandoProdutos] = useState(true);
+  const [heroSlideIndex, setHeroSlideIndex] = useState(0);
+  const [heroCarouselPaused, setHeroCarouselPaused] = useState(false);
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
+  const [showcaseVisible, setShowcaseVisible] = useState(false);
+  const showcaseRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     async function fetchProdutos() {
       setCarregandoProdutos(true);
@@ -440,6 +456,83 @@ export default function ClientePage() {
     fetchProdutos();
   }, [config, isEn]);
 
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+
+    const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const syncPreference = () => setPrefersReducedMotion(mediaQuery.matches);
+
+    syncPreference();
+    mediaQuery.addEventListener?.('change', syncPreference);
+
+    return () => {
+      mediaQuery.removeEventListener?.('change', syncPreference);
+    };
+  }, []);
+
+  const trustSignals = useMemo(
+    () => [
+      { icon: Truck, label: ui.sameDay },
+      { icon: Beef, label: ui.selectedCuts },
+      { icon: BadgeCheck, label: ui.qualityPremium },
+      { icon: Star, label: ui.featuredCuts },
+    ],
+    [ui.featuredCuts, ui.qualityPremium, ui.sameDay, ui.selectedCuts],
+  );
+
+  const featuredHeroProducts = useMemo(() => {
+    const candidates = produtosCatalogo.filter((produto) => produto?.id && produto.imagem);
+    if (candidates.length <= 4) return candidates;
+
+    const shuffled = [...candidates];
+    for (let index = shuffled.length - 1; index > 0; index -= 1) {
+      const randomIndex = Math.floor(Math.random() * (index + 1));
+      [shuffled[index], shuffled[randomIndex]] = [shuffled[randomIndex], shuffled[index]];
+    }
+
+    return shuffled.slice(0, 4);
+  }, [produtosCatalogo]);
+
+  useEffect(() => {
+    if (!featuredHeroProducts.length) {
+      setHeroSlideIndex(0);
+      return;
+    }
+
+    setHeroSlideIndex((currentIndex) =>
+      currentIndex >= featuredHeroProducts.length ? 0 : currentIndex,
+    );
+  }, [featuredHeroProducts]);
+
+  useEffect(() => {
+    if (prefersReducedMotion || heroCarouselPaused || featuredHeroProducts.length <= 1) return;
+
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      setHeroSlideIndex((currentIndex) => (currentIndex + 1) % featuredHeroProducts.length);
+    }, 5000);
+
+    return () => window.clearInterval(intervalId);
+  }, [featuredHeroProducts.length, heroCarouselPaused, prefersReducedMotion]);
+
+  useEffect(() => {
+    const target = showcaseRef.current;
+    if (!target || showcaseVisible) return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry.isIntersecting) return;
+        setShowcaseVisible(true);
+        observer.disconnect();
+      },
+      { threshold: 0.18 },
+    );
+
+    observer.observe(target);
+
+    return () => observer.disconnect();
+  }, [showcaseVisible]);
+
   const produtosFiltrados = useMemo(() => {
     let resultado = [...produtosCatalogo];
 
@@ -470,6 +563,20 @@ export default function ClientePage() {
     const totalValor = itensCarrinho.reduce((acc, item) => acc + item.kg * item.precoKg, 0);
     return { totalItens, totalLb, totalValor };
   }, [itensCarrinho]);
+
+  const activeHeroProduct = featuredHeroProducts[heroSlideIndex] || null;
+
+  const shiftHeroSlide = (direction: 'prev' | 'next') => {
+    if (!featuredHeroProducts.length) return;
+
+    setHeroSlideIndex((currentIndex) => {
+      if (direction === 'prev') {
+        return currentIndex === 0 ? featuredHeroProducts.length - 1 : currentIndex - 1;
+      }
+
+      return (currentIndex + 1) % featuredHeroProducts.length;
+    });
+  };
 
   const adicionarAoCarrinho = (
     produtoId: string,
@@ -686,15 +793,16 @@ export default function ClientePage() {
         <div className="h-[2px] w-full" style={{ background: 'var(--gold-gradient)' }} />
 
         {/* Announcement bar */}
-        <div className="flex items-center justify-between gap-3 border-b border-border/60 bg-primary/15 px-4 py-2 text-xs text-primary md:px-6 md:text-sm">
-          <p className="font-semibold tracking-wide">{ui.shopTitle}</p>
-          <div className="hidden items-center gap-5 md:flex">
-            <span className="inline-flex items-center gap-1.5 text-muted-foreground">
-              <Truck className="h-3.5 w-3.5 text-primary" /> {ui.sameDay}
-            </span>
-            <span className="inline-flex items-center gap-1.5 text-muted-foreground">
-              <Beef className="h-3.5 w-3.5 text-primary" /> {ui.selectedCuts}
-            </span>
+        <div className="border-b border-border/60 bg-primary/15 px-4 py-2 text-xs text-primary md:px-6 md:text-sm">
+          <div className="trust-marquee relative overflow-hidden">
+            <div className="trust-marquee-track flex min-w-max items-center gap-6 text-muted-foreground">
+              {[...trustSignals, ...trustSignals].map(({ icon: Icon, label }, index) => (
+                <span key={`${label}-${index}`} className="inline-flex items-center gap-1.5 whitespace-nowrap">
+                  <Icon className="h-3.5 w-3.5 text-primary" />
+                  {label}
+                </span>
+              ))}
+            </div>
           </div>
         </div>
 
@@ -877,29 +985,176 @@ export default function ClientePage() {
 
         <main className="space-y-4 px-4 py-4 md:px-6 md:py-5">
           {/* Hero */}
-          <section className="relative overflow-hidden rounded-xl border border-border bg-card p-5 md:p-6">
+          <section className="relative overflow-hidden rounded-2xl border border-border bg-card p-5 md:p-6 lg:p-7">
             <div className="absolute left-0 top-0 h-[2px] w-full" style={{ background: 'var(--gold-gradient)' }} />
-            {usuarioLogado && (
-              <div className="mb-4 flex justify-end">
-                <Button onClick={repetirUltimoPedido} size="sm" className="gold-gradient-bg text-accent-foreground font-semibold gap-2">
-                  <Clock3 className="h-3.5 w-3.5" />
-                  {ui.repeatOrder}
-                </Button>
+            <div className="pointer-events-none absolute inset-0">
+              <div className="motion-orb absolute -left-16 top-8 h-36 w-36 rounded-full bg-primary/10 blur-3xl" />
+              <div className="motion-orb-reverse absolute right-6 top-10 h-32 w-32 rounded-full bg-accent/10 blur-3xl" />
+              <div className="motion-orb absolute bottom-0 left-1/3 h-40 w-40 rounded-full bg-secondary/10 blur-3xl" />
+            </div>
+            <div className="relative grid gap-6 lg:grid-cols-[minmax(0,1.05fr)_minmax(320px,0.95fr)] lg:items-stretch">
+              <div className="flex flex-col justify-between gap-6">
+                <div className="space-y-4">
+                  <p
+                    className="hero-layer inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.28em] text-primary"
+                    style={{ animationDelay: prefersReducedMotion ? '0ms' : '60ms' }}
+                  >
+                    <span className="inline-block h-px w-4 bg-primary" />
+                    {ui.heroEyebrow}
+                    <span className="inline-block h-px w-4 bg-primary" />
+                  </p>
+                  <div className="space-y-3">
+                    <h1
+                      className="hero-layer max-w-xl text-3xl font-bold leading-tight text-foreground md:text-4xl lg:text-[2.8rem]"
+                      style={{ animationDelay: prefersReducedMotion ? '0ms' : '150ms' }}
+                    >
+                      {ui.heroTitle}
+                    </h1>
+                    <p
+                      className="hero-layer max-w-2xl text-sm leading-6 text-muted-foreground md:text-base"
+                      style={{ animationDelay: prefersReducedMotion ? '0ms' : '240ms' }}
+                    >
+                      {ui.heroSupport}
+                    </p>
+                  </div>
+                </div>
+
+                <div
+                  className="hero-layer flex flex-col gap-3 sm:flex-row sm:items-center"
+                  style={{ animationDelay: prefersReducedMotion ? '0ms' : '330ms' }}
+                >
+                  <Button
+                    type="button"
+                    onClick={() => setCarrinhoAberto(true)}
+                    className="cta-lift w-full gold-gradient-bg font-semibold text-accent-foreground sm:w-auto"
+                  >
+                    <ShoppingCart className="mr-2 h-4 w-4" />
+                    {ui.viewCart} · {precoFormatado(resumoCarrinho.totalValor)}
+                  </Button>
+                  {usuarioLogado ? (
+                    <Button
+                      onClick={repetirUltimoPedido}
+                      size="sm"
+                      variant="outline"
+                      className="gap-2 border-primary/25 bg-background/60 text-foreground hover:border-primary/45 hover:bg-background"
+                    >
+                      <Clock3 className="h-3.5 w-3.5 text-primary" />
+                      {ui.repeatOrder}
+                    </Button>
+                  ) : null}
+                </div>
               </div>
-            )}
-            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-              <div>
-                <p className="inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-widest text-primary">
-                  <span className="inline-block h-px w-4 bg-primary" />
-                  {ui.showcase}
-                  <span className="inline-block h-px w-4 bg-primary" />
-                </p>
-                <h1 className="mt-2 text-2xl font-bold leading-tight text-foreground md:text-3xl">{ui.heroTitle}</h1>
+
+              <div
+                className="hero-layer premium-glass gold-glow relative min-h-[320px] overflow-hidden rounded-[1.75rem] p-3 md:min-h-[360px]"
+                style={{ animationDelay: prefersReducedMotion ? '0ms' : '220ms' }}
+                onMouseEnter={() => setHeroCarouselPaused(true)}
+                onMouseLeave={() => setHeroCarouselPaused(false)}
+              >
+                {activeHeroProduct ? (
+                  <>
+                    <div className="absolute inset-0 overflow-hidden rounded-[1.35rem]">
+                      <img
+                        src={activeHeroProduct.imagem}
+                        alt={activeHeroProduct.nome}
+                        className="carousel-image-pan h-full w-full object-cover"
+                      />
+                      <div className="absolute inset-0 bg-[linear-gradient(110deg,hsl(var(--background)/0.92)_0%,hsl(var(--background)/0.58)_34%,transparent_72%)]" />
+                      <div className="absolute inset-0 bg-[linear-gradient(0deg,hsl(var(--background)/0.82)_0%,transparent_46%,hsl(var(--background)/0.18)_100%)]" />
+                    </div>
+                    <div className="relative flex h-full flex-col justify-between rounded-[1.35rem] border border-white/10 p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-primary drop-shadow-[0_2px_14px_rgba(0,0,0,0.9)]">
+                            {ui.featuredCuts}
+                          </p>
+                          <h2 className="mt-2 max-w-[18rem] text-xl font-semibold leading-tight text-foreground drop-shadow-[0_4px_18px_rgba(0,0,0,0.95)] md:text-2xl">
+                            {activeHeroProduct.nome}
+                          </h2>
+                        </div>
+                        {activeHeroProduct.selo ? (
+                          <span className="rounded-full border border-primary/35 bg-background/75 px-3 py-1 text-[10px] font-bold uppercase tracking-wide text-primary shadow-[0_8px_20px_rgba(0,0,0,0.35)]">
+                            {activeHeroProduct.selo}
+                          </span>
+                        ) : null}
+                      </div>
+
+                      <div className="space-y-4">
+                        <div className="flex items-end justify-between gap-4">
+                          <div>
+                            {activeHeroProduct.precoAnterior ? (
+                              <p className="text-xs text-muted-foreground/85 line-through drop-shadow-[0_2px_10px_rgba(0,0,0,0.8)]">
+                                {precoFormatado(activeHeroProduct.precoAnterior)}
+                              </p>
+                            ) : null}
+                            <p className="text-3xl font-bold leading-none text-primary drop-shadow-[0_4px_20px_rgba(0,0,0,0.9)] md:text-4xl">
+                              {precoFormatado(activeHeroProduct.preco)}
+                            </p>
+                            <p className="mt-1 text-xs text-muted-foreground drop-shadow-[0_2px_12px_rgba(0,0,0,0.9)]">{ui.pricePerLb}</p>
+                          </div>
+                          <Button
+                            type="button"
+                            onClick={() =>
+                              abrirCompra({
+                                id: activeHeroProduct.id,
+                                nome: activeHeroProduct.nome,
+                                imagem: activeHeroProduct.imagem,
+                                preco: activeHeroProduct.preco,
+                              })
+                            }
+                            className="cta-lift gold-gradient-bg border border-primary/40 font-semibold text-accent-foreground shadow-[0_14px_30px_rgba(0,0,0,0.35)]"
+                          >
+                            {ui.exploreCut}
+                          </Button>
+                        </div>
+
+                        {featuredHeroProducts.length > 1 ? (
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-2">
+                              {featuredHeroProducts.map((produto, index) => (
+                                <button
+                                  key={produto.id}
+                                  type="button"
+                                  onClick={() => setHeroSlideIndex(index)}
+                                  aria-label={`${ui.featuredCuts} ${index + 1}`}
+                                  className={cn(
+                                    'h-2.5 rounded-full transition-all',
+                                    index === heroSlideIndex
+                                      ? 'w-8 bg-primary'
+                                      : 'w-2.5 bg-white/25 hover:bg-white/40',
+                                  )}
+                                />
+                              ))}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => shiftHeroSlide('prev')}
+                                className="flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-background/70 text-foreground shadow-[0_10px_24px_rgba(0,0,0,0.3)] transition hover:border-primary/40 hover:text-primary"
+                                aria-label={ui.previousHighlight}
+                              >
+                                <ChevronLeft className="h-4 w-4" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => shiftHeroSlide('next')}
+                                className="flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-background/70 text-foreground shadow-[0_10px_24px_rgba(0,0,0,0.3)] transition hover:border-primary/40 hover:text-primary"
+                                aria-label={ui.nextHighlight}
+                              >
+                                <ChevronRight className="h-4 w-4" />
+                              </button>
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex h-full items-center justify-center rounded-[1.35rem] border border-dashed border-border/80 bg-background/50 text-sm text-muted-foreground">
+                    {ui.featuredComingSoon}
+                  </div>
+                )}
               </div>
-              <Button type="button" onClick={() => setCarrinhoAberto(true)} className="w-full gold-gradient-bg font-semibold text-accent-foreground md:w-auto">
-                <ShoppingCart className="mr-2 h-4 w-4" />
-                {ui.viewCart} · {precoFormatado(resumoCarrinho.totalValor)}
-              </Button>
             </div>
           </section>
 
@@ -1213,7 +1468,7 @@ export default function ClientePage() {
           ) : null}
 
           {/* Filters bar */}
-          <div className="flex flex-col gap-2 rounded-xl border border-border bg-background px-3 py-2.5 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between md:px-4">
+          <div ref={showcaseRef} className="flex flex-col gap-2 rounded-xl border border-border bg-background px-3 py-2.5 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between md:px-4">
             <button
               type="button"
               onClick={() => setMostrarApenasOfertas((estadoAtual) => !estadoAtual)}
@@ -1332,10 +1587,17 @@ export default function ClientePage() {
             {produtosFiltrados.map((produto, index) => (
               <article
                 key={produto.id}
-                className="group overflow-hidden rounded-xl border border-border bg-card transition-all duration-200 hover:border-primary/25"
-                style={{ boxShadow: 'var(--card-shadow)' }}
+                className={cn(
+                  'group showcase-card overflow-hidden rounded-xl border border-border bg-card transition-all duration-300 hover:border-primary/35',
+                  showcaseVisible && 'showcase-card-enter',
+                )}
+                style={{
+                  boxShadow: 'var(--card-shadow)',
+                  ['--showcase-delay' as string]: `${Math.min(index, 7) * 90}ms`,
+                }}
                 onMouseEnter={e => (e.currentTarget.style.boxShadow = 'var(--card-shadow-hover)')}
                 onMouseLeave={e => (e.currentTarget.style.boxShadow = 'var(--card-shadow)')}
+                data-index={index}
               >
                 <div className={cn(
                   'relative bg-[linear-gradient(160deg,hsl(var(--muted))_0%,hsl(var(--background))_65%,hsl(var(--muted))_100%)]',
@@ -1344,7 +1606,7 @@ export default function ClientePage() {
                   <img
                     src={produto.imagem || ''}
                     alt={produto.nome}
-                    className={produto.imagem ? "h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.02]" : "hidden"}
+                    className={produto.imagem ? "h-full w-full object-cover transition-transform duration-500 group-hover:scale-[1.06]" : "hidden"}
                     loading={index === 0 ? "eager" : "lazy"}
                     fetchPriority={index === 0 ? "high" : "auto"}
                     decoding="async"
@@ -1353,7 +1615,7 @@ export default function ClientePage() {
                   />
                   <div className="absolute inset-0 bg-[linear-gradient(to_top,hsl(var(--background)/0.75)_0%,transparent_50%)]" />
                   {produto.selo ? (
-                    <span className="absolute left-3 top-3 rounded-full bg-primary px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-primary-foreground">
+                    <span className="absolute left-3 top-3 rounded-full bg-primary px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-primary-foreground transition-transform duration-300 group-hover:-translate-y-0.5 group-hover:scale-105">
                       {produto.selo}
                     </span>
                   ) : null}
@@ -1375,7 +1637,7 @@ export default function ClientePage() {
                       <p className="text-xs text-muted-foreground/70 line-through">{precoFormatado(produto.precoAnterior)}</p>
                     ) : null}
                     <p className={cn(
-                      'font-bold leading-none text-primary',
+                      'font-bold leading-none text-primary transition-all duration-300 group-hover:text-gold-light group-hover:drop-shadow-[0_0_12px_rgba(235,188,70,0.32)]',
                       modoVisualizacao === 'compact' ? 'text-xl' : 'text-2xl md:text-3xl',
                     )}>{precoFormatado(produto.preco)}</p>
                     <p className="mt-0.5 text-[11px] text-muted-foreground">{ui.pricePerLb}</p>
@@ -1384,7 +1646,7 @@ export default function ClientePage() {
                   <Button
                     type="button"
                     onClick={() => abrirCompra({ id: produto.id, nome: produto.nome, imagem: produto.imagem, preco: produto.preco })}
-                    className={cn('w-full gold-gradient-bg font-semibold text-accent-foreground', modoVisualizacao === 'compact' ? 'h-8 text-xs' : '')}
+                    className={cn('cta-lift w-full gold-gradient-bg font-semibold text-accent-foreground group-hover:-translate-y-0.5', modoVisualizacao === 'compact' ? 'h-8 text-xs' : '')}
                   >
                     {ui.buy}
                   </Button>

@@ -90,6 +90,47 @@
   }
 }
 
+@keyframes hero-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes trust-marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+@keyframes showcase-card-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(22px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes carousel-image-pan {
+  0%,
+  100% {
+    transform: scale(1.04);
+  }
+  50% {
+    transform: scale(1.085);
+  }
+}
+
 @layer base {
   * {
     @apply border-border;
@@ -152,6 +193,44 @@
     animation: float-orb-reverse 11s ease-in-out infinite;
   }
 
+  .hero-layer {
+    opacity: 0;
+    animation: hero-reveal 0.75s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  }
+
+  .trust-marquee {
+    mask-image: linear-gradient(to right, transparent, black 10%, black 90%, transparent);
+  }
+
+  .trust-marquee-track {
+    width: max-content;
+    animation: trust-marquee 22s linear infinite;
+  }
+
+  .showcase-card {
+    opacity: 0;
+    transform: translateY(22px) scale(0.985);
+  }
+
+  .showcase-card-enter {
+    animation: showcase-card-reveal 0.6s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+    animation-delay: var(--showcase-delay, 0ms);
+  }
+
+  .carousel-image-pan {
+    animation: carousel-image-pan 9s ease-in-out infinite;
+  }
+
+  .cta-lift {
+    transition: transform 0.28s ease, box-shadow 0.28s ease, filter 0.28s ease;
+  }
+
+  .cta-lift:hover {
+    transform: translateY(-2px);
+    filter: saturate(1.05);
+    box-shadow: 0 14px 34px -16px hsla(45, 64%, 52%, 0.75);
+  }
+
   .status-ok {
     color: hsl(var(--status-ok));
     background: hsl(var(--status-ok) / 0.1);
@@ -168,5 +247,30 @@
     color: hsl(var(--status-critical));
     background: hsl(var(--status-critical) / 0.1);
     border-color: hsl(var(--status-critical) / 0.3);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .motion-orb,
+  .motion-orb-reverse,
+  .gold-shimmer,
+  .hero-layer,
+  .trust-marquee-track,
+  .showcase-card-enter,
+  .carousel-image-pan {
+    animation: none !important;
+    transform: none !important;
+    opacity: 1 !important;
+  }
+
+  .showcase-card {
+    opacity: 1;
+    transform: none;
+  }
+
+  .cta-lift,
+  .premium-glass,
+  .card-elevated {
+    transition: none !important;
   }
 }

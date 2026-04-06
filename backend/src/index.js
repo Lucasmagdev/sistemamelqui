@@ -2310,6 +2310,17 @@ function sanitizeFileName(fileName) {
     .slice(-120);
 }
 
+function sanitizeStorageSegment(value) {
+  return String(value || "produto")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 80) || "produto";
+}
+
 function inferMimeTypeFromPath(filePath = "") {
   const normalized = String(filePath || "").toLowerCase().trim();
   if (normalized.endsWith(".pdf")) return "application/pdf";
@@ -3128,6 +3139,37 @@ function normalizeClientCampaignFilters(payload = {}) {
     minOrders: Math.max(0, Number.parseInt(String(payload.minOrders || "0"), 10) || 0),
     onlyWithPhone: payload.onlyWithPhone !== false,
   };
+}
+
+function extractStoragePathFromPublicUrl(bucket, fileUrl) {
+  const marker = `/storage/v1/object/public/${bucket}/`;
+  const raw = String(fileUrl || "").trim();
+  const index = raw.indexOf(marker);
+  if (index === -1) return null;
+  return raw.slice(index + marker.length).split("?")[0] || null;
+}
+
+async function removeStorageObjectByPublicUrl(bucket, fileUrl) {
+  const filePath = extractStoragePathFromPublicUrl(bucket, fileUrl);
+  if (!filePath) return false;
+
+  const { error } = await supabase.storage.from(bucket).remove([filePath]);
+  if (error) {
+    console.warn(`Falha ao remover arquivo antigo do bucket ${bucket}: ${error.message}`);
+    return false;
+  }
+
+  return true;
+}
+
+async function uploadAdminProductImage({ productName, imageBase64, imageFileName }) {
+  return uploadBase64FileToStorage({
+    bucket: "produtos",
+    fileName: imageFileName,
+    fileBase64: imageBase64,
+    folderPrefix: "products/admin-uploads",
+    defaultFileName: `${sanitizeStorageSegment(productName)}.jpg`,
+  });
 }
 
 function normalizeClientCampaignSchedule(payload = {}) {
@@ -5249,6 +5291,164 @@ app.patch("/api/admin/zapi-message-templates", async (req, res) => {
   } catch (error) {
     return res.status(error?.status || 500).json({
       error: error?.message || "Erro ao salvar configuracao de mensagens da Z-API.",
+      detail: error?.detail || null,
+    });
+  }
+});
+
+app.post("/api/admin/products", async (req, res) => {
+  try {
+    const actor = await requireAssistantAdmin(req);
+    const nome = String(req.body?.nome || "").trim();
+    const preco = parseLooseNumber(req.body?.preco, NaN);
+
+    if (!nome) {
+      return res.status(400).json({ error: "Nome do produto e obrigatorio." });
+    }
+
+    if (!Number.isFinite(preco) || preco < 0) {
+      return res.status(400).json({ error: "Preco invalido." });
+    }
+
+    let fotoUrl = null;
+    if (req.body?.imageBase64) {
+      const uploadedImage = await uploadAdminProductImage({
+        productName: nome,
+        imageBase64: req.body.imageBase64,
+        imageFileName: req.body.imageFileName,
+      });
+      fotoUrl = uploadedImage.fileUrl || null;
+    }
+
+    const payload = {
+      nome,
+      nome_en: String(req.body?.nome_en || "").trim() || null,
+      descricao: String(req.body?.descricao || "").trim() || null,
+      descricao_en: String(req.body?.descricao_en || "").trim() || null,
+      categoria: String(req.body?.categoria || "").trim() || null,
+      categoria_en: String(req.body?.categoria_en || "").trim() || null,
+      preco: roundQty(preco, 2),
+      unidade: String(req.body?.unidade || "LB").trim().toUpperCase() || "LB",
+      foto_url: fotoUrl,
+    };
+
+    let { data, error } = await supabase
+      .from("products")
+      .insert([payload])
+      .select("id, nome, descricao, nome_en, descricao_en, categoria, categoria_en, preco, unidade, foto_url")
+      .single();
+
+    if (error && String(error.message || "").toLowerCase().includes("tenant_id")) {
+      const tenantId = Number.isFinite(Number(actor.tenantId)) && Number(actor.tenantId) > 0
+        ? Number(actor.tenantId)
+        : Number.parseInt(String(process.env.DEFAULT_TENANT_ID || "1"), 10) || 1;
+
+      const retry = await supabase
+        .from("products")
+        .insert([{ ...payload, tenant_id: tenantId }])
+        .select("id, nome, descricao, nome_en, descricao_en, categoria, categoria_en, preco, unidade, foto_url")
+        .single();
+
+      data = retry.data;
+      error = retry.error;
+    }
+
+    if (error || !data) {
+      return res.status(500).json({
+        error: "Erro ao cadastrar produto.",
+        detail: error?.message || null,
+      });
+    }
+
+    return res.json({ ok: true, product: data });
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro ao cadastrar produto.",
+      detail: error?.detail || null,
+    });
+  }
+});
+
+app.patch("/api/admin/products/:id", async (req, res) => {
+  try {
+    await requireAssistantAdmin(req);
+    const productId = Number(req.params.id);
+    if (!Number.isInteger(productId) || productId <= 0) {
+      return res.status(400).json({ error: "Produto invalido." });
+    }
+
+    const { data: existingProduct, error: existingError } = await supabase
+      .from("products")
+      .select("id, foto_url")
+      .eq("id", productId)
+      .maybeSingle();
+
+    if (existingError) {
+      return res.status(500).json({
+        error: "Erro ao carregar produto atual.",
+        detail: existingError.message,
+      });
+    }
+
+    if (!existingProduct) {
+      return res.status(404).json({ error: "Produto nao encontrado." });
+    }
+
+    const nome = String(req.body?.nome || "").trim();
+    const preco = parseLooseNumber(req.body?.preco, NaN);
+
+    if (!nome) {
+      return res.status(400).json({ error: "Nome do produto e obrigatorio." });
+    }
+
+    if (!Number.isFinite(preco) || preco < 0) {
+      return res.status(400).json({ error: "Preco invalido." });
+    }
+
+    let fotoUrl = String(existingProduct.foto_url || "").trim() || null;
+    const previousPhotoUrl = fotoUrl;
+
+    if (req.body?.imageBase64) {
+      const uploadedImage = await uploadAdminProductImage({
+        productName: nome,
+        imageBase64: req.body.imageBase64,
+        imageFileName: req.body.imageFileName,
+      });
+      fotoUrl = uploadedImage.fileUrl || null;
+    }
+
+    const { data, error } = await supabase
+      .from("products")
+      .update({
+        nome,
+        nome_en: String(req.body?.nome_en || "").trim() || null,
+        descricao: String(req.body?.descricao || "").trim() || null,
+        descricao_en: String(req.body?.descricao_en || "").trim() || null,
+        categoria: String(req.body?.categoria || "").trim() || null,
+        categoria_en: String(req.body?.categoria_en || "").trim() || null,
+        preco: roundQty(preco, 2),
+        unidade: String(req.body?.unidade || "LB").trim().toUpperCase() || "LB",
+        foto_url: fotoUrl,
+      })
+      .eq("id", productId)
+      .select("id, nome, descricao, nome_en, descricao_en, categoria, categoria_en, preco, unidade, foto_url")
+      .single();
+
+    if (error || !data) {
+      return res.status(500).json({
+        error: "Erro ao atualizar produto.",
+        detail: error?.message || null,
+      });
+    }
+
+    if (req.body?.imageBase64 && previousPhotoUrl && previousPhotoUrl !== fotoUrl) {
+      void removeStorageObjectByPublicUrl("produtos", previousPhotoUrl);
+    }
+
+    return res.json({ ok: true, product: data });
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro ao atualizar produto.",
       detail: error?.detail || null,
     });
   }

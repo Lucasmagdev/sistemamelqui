@@ -6,6 +6,8 @@ import { useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { backendRequest } from "@/lib/backendClient";
+import { readFileAsDataUrl } from "@/lib/fileToDataUrl";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/lib/supabaseClient";
 
@@ -72,6 +74,19 @@ const selectClass = "flex h-11 w-full rounded-xl border border-amber-400/50 bg-z
 const EDIT_PRODUCT_ID_STORAGE_KEY = "products-admin-edit-id";
 const editDraftStorageKey = (productId: number | string) => `products-admin-edit-draft:${productId}`;
 
+type ProductMutationPayload = {
+  nome: string;
+  nome_en: string | null;
+  descricao: string | null;
+  descricao_en: string | null;
+  categoria: string | null;
+  categoria_en: string | null;
+  preco: number;
+  unidade: string;
+  imageBase64?: string;
+  imageFileName?: string;
+};
+
 const createEditFormFromProduct = (product: Product, draft?: Partial<ProductFormState> | null): ProductFormState => ({
   id: product.id,
   nome: draft?.nome ?? product.nome ?? "",
@@ -85,6 +100,26 @@ const createEditFormFromProduct = (product: Product, draft?: Partial<ProductForm
   foto: null,
   foto_url: product.foto_url || "",
 });
+
+const buildProductMutationPayload = async (form: ProductFormState): Promise<ProductMutationPayload> => {
+  const payload: ProductMutationPayload = {
+    nome: form.nome.trim(),
+    nome_en: form.nome_en.trim() || null,
+    descricao: form.descricao.trim() || null,
+    descricao_en: form.descricao_en.trim() || null,
+    categoria: form.categoria.trim() || null,
+    categoria_en: form.categoria_en.trim() || null,
+    preco: parseFloat(form.preco),
+    unidade: form.unidade || "LB",
+  };
+
+  if (form.foto) {
+    payload.imageBase64 = await readFileAsDataUrl(form.foto);
+    payload.imageFileName = form.foto.name;
+  }
+
+  return payload;
+};
 
 function ProductModal({
   open,
@@ -317,23 +352,16 @@ const ProductsAdminPage: React.FC = () => {
     setEditPreviewUrl(file ? URL.createObjectURL(file) : (editForm.foto_url || null));
   };
 
-  const uploadProductImage = async (file: File, productName: string) => {
-    const fileExt = file.name.split(".").pop();
-    const safeName = productName.replace(/[^a-zA-Z0-9-]/g, "").toLowerCase() || "produto";
-    const fileName = `${Date.now()}-${safeName}.${fileExt}`;
-    const { error } = await supabase.storage.from("produtos").upload(fileName, file, { contentType: file.type });
-    if (error) throw new Error(error.message);
-    return supabase.storage.from("produtos").getPublicUrl(fileName).data.publicUrl || null;
-  };
-
   const handleCreateSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     setLoading(true);
     setFeedback("");
     try {
-      const photoUrl = createForm.foto ? await uploadProductImage(createForm.foto, createForm.nome) : null;
-      const { error } = await supabase.from("products").insert([{ nome: createForm.nome.trim(), nome_en: createForm.nome_en.trim() || null, descricao: createForm.descricao.trim() || null, descricao_en: createForm.descricao_en.trim() || null, categoria: createForm.categoria.trim() || null, categoria_en: createForm.categoria_en.trim() || null, preco: parseFloat(createForm.preco), unidade: createForm.unidade || "LB", foto_url: photoUrl }]);
-      if (error) throw new Error(error.message);
+      const payload = await buildProductMutationPayload(createForm);
+      await backendRequest("/api/admin/products", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
       setShowCreateModal(false);
       setCreateForm(emptyForm());
       setCreatePreviewUrl(null);
@@ -351,10 +379,11 @@ const ProductsAdminPage: React.FC = () => {
     setLoading(true);
     setFeedback("");
     try {
-      let photoUrl = editForm.foto_url || null;
-      if (editForm.foto) photoUrl = await uploadProductImage(editForm.foto, editForm.nome);
-      const { error } = await supabase.from("products").update({ nome: editForm.nome.trim(), nome_en: editForm.nome_en.trim() || null, descricao: editForm.descricao.trim() || null, descricao_en: editForm.descricao_en.trim() || null, categoria: editForm.categoria.trim() || null, categoria_en: editForm.categoria_en.trim() || null, preco: parseFloat(editForm.preco), unidade: editForm.unidade || "LB", foto_url: photoUrl }).eq("id", editForm.id);
-      if (error) throw new Error(error.message);
+      const payload = await buildProductMutationPayload(editForm);
+      await backendRequest(`/api/admin/products/${editForm.id}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      });
       clearPersistedEditState(editProduct?.id ?? editForm.id ?? null);
       setEditProduct(null);
       setEditPreviewUrl(null);

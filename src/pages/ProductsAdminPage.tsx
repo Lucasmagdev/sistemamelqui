@@ -7,9 +7,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { backendRequest } from "@/lib/backendClient";
-import { readFileAsDataUrl } from "@/lib/fileToDataUrl";
+import { prepareImageForUpload } from "@/lib/prepareImageForUpload";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/lib/supabaseClient";
+import { toast } from "sonner";
 
 type Product = {
   id: number;
@@ -87,6 +88,11 @@ type ProductMutationPayload = {
   imageFileName?: string;
 };
 
+type ProductMutationResponse = {
+  ok: boolean;
+  product: Product;
+};
+
 const createEditFormFromProduct = (product: Product, draft?: Partial<ProductFormState> | null): ProductFormState => ({
   id: product.id,
   nome: draft?.nome ?? product.nome ?? "",
@@ -114,8 +120,9 @@ const buildProductMutationPayload = async (form: ProductFormState): Promise<Prod
   };
 
   if (form.foto) {
-    payload.imageBase64 = await readFileAsDataUrl(form.foto);
-    payload.imageFileName = form.foto.name;
+    const preparedImage = await prepareImageForUpload(form.foto);
+    payload.imageBase64 = preparedImage.dataUrl;
+    payload.imageFileName = preparedImage.fileName;
   }
 
   return payload;
@@ -342,6 +349,16 @@ const ProductsAdminPage: React.FC = () => {
   const setCreateText = (field: keyof ProductFormState, value: string) => setCreateForm((current) => ({ ...current, [field]: value }));
   const setEditText = (field: keyof ProductFormState, value: string) => setEditForm((current) => ({ ...current, [field]: value }));
 
+  const upsertProduct = (nextProduct: Product) => {
+    setProducts((current) => {
+      const existingIndex = current.findIndex((item) => Number(item.id) === Number(nextProduct.id));
+      if (existingIndex === -1) return [nextProduct, ...current];
+      const next = current.slice();
+      next[existingIndex] = nextProduct;
+      return next;
+    });
+  };
+
   const setCreateFile = (file: File | null) => {
     setCreateForm((current) => ({ ...current, foto: file }));
     setCreatePreviewUrl(file ? URL.createObjectURL(file) : null);
@@ -358,17 +375,20 @@ const ProductsAdminPage: React.FC = () => {
     setFeedback("");
     try {
       const payload = await buildProductMutationPayload(createForm);
-      await backendRequest("/api/admin/products", {
+      const response = await backendRequest<ProductMutationResponse>("/api/admin/products", {
         method: "POST",
         body: JSON.stringify(payload),
       });
+      if (response?.product) upsertProduct(response.product);
       setShowCreateModal(false);
       setCreateForm(emptyForm());
       setCreatePreviewUrl(null);
       setFeedback("Produto cadastrado com sucesso.");
-      await refreshProducts();
+      toast.success("Produto cadastrado com sucesso.");
+      void refreshProducts();
     } catch (error: any) {
       setFeedback(`Erro ao cadastrar produto: ${error.message}`);
+      toast.error(error?.message || "Erro ao cadastrar produto");
     } finally {
       setLoading(false);
     }
@@ -380,18 +400,21 @@ const ProductsAdminPage: React.FC = () => {
     setFeedback("");
     try {
       const payload = await buildProductMutationPayload(editForm);
-      await backendRequest(`/api/admin/products/${editForm.id}`, {
+      const response = await backendRequest<ProductMutationResponse>(`/api/admin/products/${editForm.id}`, {
         method: "PATCH",
         body: JSON.stringify(payload),
       });
+      if (response?.product) upsertProduct(response.product);
       clearPersistedEditState(editProduct?.id ?? editForm.id ?? null);
       setEditProduct(null);
       setEditPreviewUrl(null);
       setEditForm(emptyForm());
       setFeedback("Produto atualizado com sucesso.");
-      await refreshProducts();
+      toast.success("Produto atualizado com sucesso.");
+      void refreshProducts();
     } catch (error: any) {
       setFeedback(`Erro ao atualizar produto: ${error.message}`);
+      toast.error(error?.message || "Erro ao atualizar produto");
     } finally {
       setLoading(false);
     }

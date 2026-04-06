@@ -38,10 +38,11 @@ import { useI18n } from '@/contexts/I18nContext';
 import { backendRequest } from '@/lib/backendClient';
 import { resolvePriorityProductImage } from '@/lib/productImageOverrides';
 import {
-  extractPhoneDigits,
   formatPhoneForDisplay,
+  inferPhoneCountry,
   isValidPhone,
   normalizePhoneInput,
+  toStoragePhone,
 } from '@/lib/phone';
 
 type CategoryKey = 'all' | 'offers' | 'bbq' | 'premium' | 'subscription' | 'contact';
@@ -58,14 +59,6 @@ const categoryDbValueByKey: Record<Exclude<CategoryKey, 'all' | 'contact'>, stri
 const precoFormatado = (valor: number | null | undefined) => {
   if (typeof valor !== 'number' || isNaN(valor)) return '$0.00';
   return `$${valor.toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
-};
-
-const PHONE_DEFAULT_COUNTRY = '55';
-const toNormalizedPhone = (value: string) => {
-  const digits = extractPhoneDigits(value);
-  if (!digits) return '';
-  if (digits.length === 10 || digits.length === 11) return `+${PHONE_DEFAULT_COUNTRY}${digits}`;
-  return `+${digits}`;
 };
 
 type ModoVisualizacao = 'grid' | 'compact' | 'list';
@@ -203,7 +196,7 @@ export default function ClientePage() {
     identification: isEn ? 'Identification' : 'Identificacao',
     fullName: isEn ? 'Full name' : 'Nome completo',
     phone: isEn ? 'Phone' : 'Telefone',
-    phoneHint: isEn ? '(US: +1 XXX-XXX-XXXX)' : '(EUA: +1 XXX-XXX-XXXX)',
+    phoneHint: isEn ? '(Use +55 for Brazil or +1 for USA)' : '(Use +55 para Brasil ou +1 para EUA)',
     email: isEn ? 'Email' : 'E-mail',
     deliveryAddress: isEn ? 'Delivery Address' : 'Endereco de entrega',
     state2Letters: isEn ? 'State (2 letters)' : 'Estado (2 letras)',
@@ -683,7 +676,7 @@ export default function ClientePage() {
     // Salva alteraÃ§Ãµes de perfil no banco ao avanÃ§ar do perfil
     if (etapaCheckout === 1) {
       const email = clienteEmail.trim().toLowerCase();
-      const telefone = toNormalizedPhone(clienteTelefone);
+      const telefone = toStoragePhone(clienteTelefone);
       (async () => {
         const { data: authData } = await supabase.auth.getUser();
         const authUserId = authData?.user?.id || null;
@@ -705,7 +698,7 @@ export default function ClientePage() {
         if (authUserId) {
           query = query.eq('auth_user_id', authUserId);
         } else {
-          query = query.eq('telefone', telefone);
+          query = query.in('telefone', [telefone, `+${telefone}`]);
         }
 
         const { error } = await query;
@@ -720,7 +713,8 @@ export default function ClientePage() {
 
   // Salvar cliente no banco antes de finalizar pedido
   const finalizarPedido = async () => {
-    const telefoneNormalizado = toNormalizedPhone(clienteTelefone);
+    const telefoneNormalizado = toStoragePhone(clienteTelefone);
+    const pais = inferPhoneCountry(clienteTelefone) || (locale === 'en' ? 'USA' : 'Brasil');
     const emailNormalizado = clienteEmail.trim().toLowerCase();
 
     if (!isValidPhone(clienteTelefone)) {
@@ -747,7 +741,7 @@ export default function ClientePage() {
           enderecoCidade,
           enderecoEstado,
           enderecoZip,
-          pais: 'USA',
+          pais,
           locale,
           tenantId: 1,
           lastUserAgent: navigator.userAgent,
@@ -1353,7 +1347,7 @@ export default function ClientePage() {
                           onChange={(e) => setClienteTelefone(normalizePhoneInput(e.target.value))}
                           onBlur={(e) => setClienteTelefone(formatPhoneForDisplay(e.target.value))}
                           className="mt-1 h-10 w-full rounded-lg border border-border bg-card px-3 text-sm text-foreground outline-none focus:border-primary/50"
-                          placeholder="+1 555-555-5555"
+                          placeholder="+55 11 91234-5678 / +1 305-555-1212"
                           type="tel"
                           inputMode="tel"
                           autoComplete="tel"

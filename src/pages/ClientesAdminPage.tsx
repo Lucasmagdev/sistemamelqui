@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -9,11 +9,14 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { backendRequest } from "@/lib/backendClient";
 import { supabase } from "@/lib/supabaseClient";
 import { useAdminClientsQuery } from "@/hooks/useAdminQueries";
-import { Download, Mail, MessageSquareText, Phone, Star } from "lucide-react";
+import { CalendarClock, CheckCircle2, Download, LoaderCircle, Mail, MessageSquareText, Phone, RefreshCw, Star, Users } from "lucide-react";
 import { toast } from "sonner";
 
 type SortField = "nome" | "email" | "vip" | "pedidos";
 type Segment = "all" | "vip" | "non_vip";
+type CampaignCountry = "all" | "br" | "us";
+type CampaignStep = 1 | 2;
+type ScheduleMode = "now" | "schedule";
 
 type ClientRow = {
   id: string;
@@ -25,6 +28,9 @@ type ClientRow = {
   vip_observacao?: string | null;
   order_count: number;
   address: string;
+  cidade?: string | null;
+  pais?: string | null;
+  preferred_locale?: string | null;
 };
 
 type ClientsResponse = {
@@ -44,19 +50,116 @@ type ClientsResponse = {
 };
 
 type CampaignPreview = {
+  filters: {
+    segment: Segment;
+    search: string;
+    withOrders: boolean;
+    country: CampaignCountry;
+    onlyWithPhone: boolean;
+  };
+  targetCount: number;
   audienceCount: number;
   excludedWithoutPhone: number;
+  breakdown: {
+    vipCount: number;
+    nonVipCount: number;
+    withOrdersCount: number;
+    withoutOrdersCount: number;
+    brCount: number;
+    usCount: number;
+    otherCount: number;
+    topCities: Array<{ city: string; count: number }>;
+  };
   sampleRecipients: Array<{
     id: string;
     nome: string;
     phone: string;
-    previewText: string;
+    country: string | null;
   }>;
   previewText: string;
 };
 
+type CampaignSendResponse = {
+  campaignId: number;
+  status: string;
+  targetCount: number;
+  validCount: number;
+  skippedCount: number;
+  scheduledAt: string | null;
+};
+
+type CampaignStatusResponse = {
+  campaign: {
+    id: number;
+    status: string;
+    target_count: number;
+    valid_count: number;
+    skipped_count: number;
+    sent_count: number;
+    failed_count: number;
+    progressPercent: number;
+    processedCount: number;
+    canRetryFailed: boolean;
+    created_at: string;
+    updated_at: string;
+    metadata?: {
+      schedule?: {
+        mode?: ScheduleMode;
+        scheduledAt?: string | null;
+        nextRunAt?: string | null;
+        windowStart?: string | null;
+        windowEnd?: string | null;
+      };
+      progress?: {
+        state?: string;
+        processedCount?: number;
+        totalCount?: number;
+        startedAt?: string | null;
+        finishedAt?: string | null;
+        updatedAt?: string | null;
+      };
+      retryOfCampaignId?: number | null;
+    };
+  };
+  recentRecipients: Array<{
+    id: number;
+    client_name: string | null;
+    destination_phone: string | null;
+    local_status: string;
+    error_detail: string | null;
+  }>;
+  failedRecipients: Array<{
+    id: number;
+    client_name: string | null;
+    destination_phone: string | null;
+    local_status: string;
+    error_detail: string | null;
+  }>;
+};
+
 function enderecoCompleto(cliente: ClientRow) {
   return cliente.address || "-";
+}
+
+const ACTIVE_CAMPAIGN_STORAGE_KEY = "clients-admin-active-campaign-id";
+
+function formatCampaignStatus(status: string) {
+  switch (status) {
+    case "queued":
+      return "Na fila";
+    case "scheduled":
+      return "Agendada";
+    case "sending":
+      return "Enviando";
+    case "completed":
+      return "Concluida";
+    case "completed_with_failures":
+      return "Concluida com falhas";
+    case "failed":
+      return "Falhou";
+    default:
+      return "Rascunho";
+  }
 }
 
 export default function ClientesAdminPage() {
@@ -72,9 +175,22 @@ export default function ClientesAdminPage() {
   const [vipObservacao, setVipObservacao] = useState("");
   const [modalPerfil, setModalPerfil] = useState<{ open: boolean; cliente: ClientRow | null }>({ open: false, cliente: null });
   const [campaignSegment, setCampaignSegment] = useState<Segment>("all");
+  const [campaignCountry, setCampaignCountry] = useState<CampaignCountry>("all");
+  const [campaignOnlyWithPhone, setCampaignOnlyWithPhone] = useState(true);
   const [campaignMessage, setCampaignMessage] = useState("");
+  const [campaignStep, setCampaignStep] = useState<CampaignStep>(1);
   const [campaignPreview, setCampaignPreview] = useState<CampaignPreview | null>(null);
-  const [campaignPreviewOpen, setCampaignPreviewOpen] = useState(false);
+  const [campaignScheduleMode, setCampaignScheduleMode] = useState<ScheduleMode>("now");
+  const [campaignScheduledAt, setCampaignScheduledAt] = useState("");
+  const [campaignWindowEnabled, setCampaignWindowEnabled] = useState(false);
+  const [campaignWindowStart, setCampaignWindowStart] = useState("09:00");
+  const [campaignWindowEnd, setCampaignWindowEnd] = useState("18:00");
+  const [activeCampaignId, setActiveCampaignId] = useState<number | null>(() => {
+    if (typeof window === "undefined") return null;
+    const raw = window.localStorage.getItem(ACTIVE_CAMPAIGN_STORAGE_KEY);
+    const parsed = Number(raw || "");
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  });
 
   useEffect(() => {
     const timer = window.setTimeout(() => setSearch(searchInput.trim()), 300);
@@ -84,6 +200,15 @@ export default function ClientesAdminPage() {
   useEffect(() => {
     setPage(1);
   }, [search, segment, withOrders, sortField, sortDir]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (activeCampaignId) {
+      window.localStorage.setItem(ACTIVE_CAMPAIGN_STORAGE_KEY, String(activeCampaignId));
+    } else {
+      window.localStorage.removeItem(ACTIVE_CAMPAIGN_STORAGE_KEY);
+    }
+  }, [activeCampaignId]);
 
   const clientsQuery = useAdminClientsQuery({
     search,
@@ -100,47 +225,88 @@ export default function ClientesAdminPage() {
   const pageInfo = (clientsQuery.data as ClientsResponse | undefined)?.pageInfo;
   const isInitialLoading = clientsQuery.isLoading && !clientsQuery.data;
 
+  const buildCampaignPayload = () => ({
+    segment: campaignSegment,
+    search,
+    withOrders,
+    country: campaignCountry,
+    onlyWithPhone: campaignOnlyWithPhone,
+    message: campaignMessage,
+  });
+
   const previewMutation = useMutation({
     mutationFn: () =>
       backendRequest<CampaignPreview>("/api/client-campaigns/preview", {
         method: "POST",
-        body: JSON.stringify({
-          segment: campaignSegment,
-          search,
-          withOrders,
-          message: campaignMessage,
-        }),
+        body: JSON.stringify(buildCampaignPayload()),
       }),
     onSuccess: (payload) => {
       setCampaignPreview(payload);
-      setCampaignPreviewOpen(true);
+      setCampaignStep(2);
     },
     onError: (error: any) => {
       toast.error(error.message || "Erro ao gerar previa da campanha");
     },
   });
 
+  const campaignStatusQuery = useQuery({
+    queryKey: ["admin", "client-campaign", activeCampaignId],
+    enabled: Boolean(activeCampaignId),
+    queryFn: () => backendRequest<CampaignStatusResponse>(`/api/client-campaigns/${activeCampaignId}`),
+    refetchInterval: (query) => {
+      const payload = query.state.data;
+      const status = payload?.campaign?.status;
+      if (status === "queued" || status === "scheduled" || status === "sending") return 2500;
+      return false;
+    },
+  });
+
   const sendMutation = useMutation({
     mutationFn: () =>
-      backendRequest("/api/client-campaigns/send", {
+      backendRequest<CampaignSendResponse>("/api/client-campaigns/send", {
         method: "POST",
         body: JSON.stringify({
-          segment: campaignSegment,
-          search,
-          withOrders,
-          message: campaignMessage,
+          ...buildCampaignPayload(),
+          schedule: {
+            mode: campaignScheduleMode,
+            scheduledAt: campaignScheduleMode === "schedule" ? campaignScheduledAt : null,
+            windowStart: campaignWindowEnabled ? campaignWindowStart : null,
+            windowEnd: campaignWindowEnabled ? campaignWindowEnd : null,
+          },
           createdBy: window.localStorage.getItem("imperial-flow-nome") || "admin",
         }),
       }),
-    onSuccess: (payload: any) => {
-      toast.success(`Campanha enviada: ${payload.sentCount} enviado(s), ${payload.failedCount} falha(s), ${payload.skippedCount} ignorado(s).`);
-      setCampaignPreviewOpen(false);
-      setCampaignPreview(null);
-      setCampaignMessage("");
-      setCampaignSegment("all");
+    onSuccess: (payload) => {
+      setActiveCampaignId(payload.campaignId);
+      queryClient.invalidateQueries({ queryKey: ["admin", "client-campaign", payload.campaignId] });
+      toast.success(
+        payload.status === "scheduled"
+          ? "Campanha agendada com sucesso."
+          : "Campanha colocada na fila de envio.",
+      );
     },
     onError: (error: any) => {
       toast.error(error.message || "Erro ao enviar campanha");
+    },
+  });
+
+  const retryFailedMutation = useMutation({
+    mutationFn: () => {
+      if (!activeCampaignId) throw new Error("Nenhuma campanha ativa para reenviar.");
+      return backendRequest<{ campaignId: number; retryCount: number; status: string }>(`/api/client-campaigns/${activeCampaignId}/retry-failed`, {
+        method: "POST",
+        body: JSON.stringify({
+          createdBy: window.localStorage.getItem("imperial-flow-nome") || "admin",
+        }),
+      });
+    },
+    onSuccess: (payload) => {
+      setActiveCampaignId(payload.campaignId);
+      queryClient.invalidateQueries({ queryKey: ["admin", "client-campaign", payload.campaignId] });
+      toast.success(`Reenvio iniciado para ${payload.retryCount} destinatario(s).`);
+    },
+    onError: (error: any) => {
+      toast.error(error.message || "Erro ao reenviar falhas");
     },
   });
 
@@ -215,6 +381,14 @@ export default function ClientesAdminPage() {
     setPage(1);
   };
 
+  useEffect(() => {
+    setCampaignPreview(null);
+  }, [campaignSegment, campaignCountry, campaignOnlyWithPhone, campaignMessage, search, withOrders]);
+
+  const currentCampaign = campaignStatusQuery.data?.campaign;
+  const currentCampaignStatus = currentCampaign?.status || null;
+  const isCampaignBusy = currentCampaignStatus === "queued" || currentCampaignStatus === "scheduled" || currentCampaignStatus === "sending";
+
   return (
     <div className="space-y-6">
       <div className="grid gap-4 sm:grid-cols-3">
@@ -283,50 +457,363 @@ export default function ClientesAdminPage() {
         </div>
       </Card>
 
-      <Card className="space-y-4 border-emerald-500/20 bg-[linear-gradient(160deg,rgba(12,29,21,0.9),rgba(10,10,10,0.98))] p-5">
-        <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+      <Card className="space-y-5 border-emerald-500/20 bg-[linear-gradient(160deg,rgba(12,29,21,0.92),rgba(10,10,10,0.98))] p-5">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <div className="text-[11px] font-semibold uppercase tracking-[0.28em] text-emerald-300/80">Campanha para clientes</div>
-            <h2 className="mt-2 text-2xl font-bold text-foreground">WhatsApp com previa antes do envio</h2>
+            <h2 className="mt-2 text-2xl font-bold text-foreground">Fluxo guiado de WhatsApp</h2>
             <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-              Escolha a audiencia, personalize com <code>{`{nome}`}</code> e confira a previa antes de disparar.
+              Monte a audiencia, teste a mensagem e acompanhe o progresso em tempo real sem sair da aba de clientes.
             </p>
           </div>
           <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
-            Filtros reaproveitados da tela: busca atual e opcao "com pedidos".
+            A campanha usa a busca atual da tela e o filtro visual <span className="font-semibold">com pedidos</span>.
           </div>
         </div>
 
-        <div className="grid gap-3 md:grid-cols-[220px,1fr]">
-          <div className="space-y-1">
-            <label className="text-xs font-medium text-muted-foreground">Audiencia</label>
-            <select value={campaignSegment} onChange={(event) => setCampaignSegment(event.target.value as Segment)} className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
-              <option value="all">Todos os clientes</option>
-              <option value="vip">Somente VIP</option>
-              <option value="non_vip">Somente nao VIP</option>
-            </select>
-          </div>
-          <div className="space-y-1">
-            <label className="text-xs font-medium text-muted-foreground">Mensagem</label>
-            <textarea
-              value={campaignMessage}
-              onChange={(event) => setCampaignMessage(event.target.value)}
-              className="min-h-[140px] w-full rounded-md border border-input bg-background px-3 py-3 text-sm"
-              placeholder="Ex.: Oi, {nome}! Temos novidades para voce hoje."
-            />
-          </div>
+        <div className="grid gap-3 md:grid-cols-2">
+          {[
+            { step: 1 as CampaignStep, label: "Publico e mensagem" },
+            { step: 2 as CampaignStep, label: "Revisao e envio" },
+          ].map((item) => (
+            <button
+              key={item.step}
+              type="button"
+              onClick={() => setCampaignStep(item.step)}
+              className={`rounded-2xl border px-4 py-4 text-left transition ${
+                campaignStep === item.step
+                  ? "border-primary/40 bg-primary/10"
+                  : "border-border/70 bg-background/40 hover:border-primary/20"
+              }`}
+            >
+              <div className="text-[11px] uppercase tracking-[0.24em] text-muted-foreground">Etapa {item.step}</div>
+              <div className="mt-2 text-base font-semibold text-foreground">{item.label}</div>
+            </button>
+          ))}
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <Button onClick={() => previewMutation.mutate()} disabled={previewMutation.isPending || !campaignMessage.trim()} className="gold-gradient-bg text-accent-foreground font-semibold gold-shadow hover:opacity-90">
-            <MessageSquareText className="mr-2 h-4 w-4" />
-            {previewMutation.isPending ? "Gerando previa..." : "Gerar previa"}
-          </Button>
-          <span className="text-xs text-muted-foreground">
-            Segmento da campanha independe do filtro visual da lista, mas usa a busca atual e o filtro "com pedidos".
-          </span>
+        {campaignStep === 1 ? (
+          <div className="grid gap-4 lg:grid-cols-[0.95fr_1.05fr]">
+            <div className="space-y-4">
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-muted-foreground">Audiencia</label>
+                  <select value={campaignSegment} onChange={(event) => setCampaignSegment(event.target.value as Segment)} className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
+                    <option value="all">Todos os clientes</option>
+                    <option value="vip">Somente VIP</option>
+                    <option value="non_vip">Somente nao VIP</option>
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-muted-foreground">Pais</label>
+                  <select value={campaignCountry} onChange={(event) => setCampaignCountry(event.target.value as CampaignCountry)} className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
+                    <option value="all">Brasil + EUA</option>
+                    <option value="br">Somente Brasil</option>
+                    <option value="us">Somente EUA</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <label className="flex h-10 items-center gap-2 rounded-md border border-border px-3 text-sm">
+                  <input type="checkbox" checked={campaignOnlyWithPhone} onChange={(event) => setCampaignOnlyWithPhone(event.target.checked)} />
+                  Apenas com telefone valido
+                </label>
+                <div className="rounded-md border border-border/60 bg-background/50 px-3 py-2 text-xs text-muted-foreground">
+                  Busca reaproveitada: <span className="font-semibold text-foreground">{search || "sem termo"}</span>
+                </div>
+                <div className="rounded-md border border-border/60 bg-background/50 px-3 py-2 text-xs text-muted-foreground">
+                  Filtro global: <span className="font-semibold text-foreground">{withOrders ? "Com pedidos" : "Todos os clientes"}</span>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-border/70 bg-background/35 p-4">
+                <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                  <Users className="h-4 w-4 text-primary" />
+                  Resumo rapido
+                </div>
+                <div className="mt-3 space-y-2 text-sm text-muted-foreground">
+                  <div>Segmento: <span className="font-medium text-foreground">{campaignSegment === "vip" ? "VIP" : campaignSegment === "non_vip" ? "Nao VIP" : "Todos"}</span></div>
+                  <div>Pais: <span className="font-medium text-foreground">{campaignCountry === "br" ? "Brasil" : campaignCountry === "us" ? "EUA" : "Brasil + EUA"}</span></div>
+                  <div>Telefone: <span className="font-medium text-foreground">{campaignOnlyWithPhone ? "Somente validos" : "Com ou sem telefone"}</span></div>
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-4 rounded-2xl border border-border/70 bg-background/35 p-4">
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-muted-foreground">Mensagem</label>
+                <textarea
+                  value={campaignMessage}
+                  onChange={(event) => setCampaignMessage(event.target.value)}
+                  className="min-h-[180px] w-full rounded-md border border-input bg-background px-3 py-3 text-sm"
+                  placeholder="Ex.: Oi, {nome}! Temos novidades para voce hoje."
+                />
+              </div>
+              <div className="rounded-xl border border-border/60 bg-background/35 p-3 text-xs text-muted-foreground">
+                Variavel disponivel agora: <code>{`{nome}`}</code>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {campaignStep === 2 ? (
+          <div className="space-y-4">
+            <div className="grid gap-3 lg:grid-cols-[1.2fr_0.8fr]">
+              <div className="rounded-2xl border border-border/70 bg-background/35 p-4">
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <div className="text-sm font-semibold text-foreground">Revisao da campanha</div>
+                  <Button variant="outline" onClick={() => previewMutation.mutate()} disabled={previewMutation.isPending || !campaignMessage.trim()}>
+                    <RefreshCw className={`mr-2 h-4 w-4 ${previewMutation.isPending ? "animate-spin" : ""}`} />
+                    {previewMutation.isPending ? "Atualizando..." : "Atualizar revisao"}
+                  </Button>
+                </div>
+
+                {campaignPreview ? (
+                  <div className="space-y-4">
+                    <div className="grid gap-3 sm:grid-cols-3">
+                      <Card className="p-4">
+                        <div className="text-xs text-muted-foreground">Destinatarios validos</div>
+                        <div className="mt-2 text-2xl font-bold text-emerald-300">{campaignPreview.audienceCount}</div>
+                      </Card>
+                      <Card className="p-4">
+                        <div className="text-xs text-muted-foreground">Sem telefone</div>
+                        <div className="mt-2 text-2xl font-bold text-amber-300">{campaignPreview.excludedWithoutPhone}</div>
+                      </Card>
+                      <Card className="p-4">
+                        <div className="text-xs text-muted-foreground">Total no publico</div>
+                        <div className="mt-2 text-2xl font-bold text-sky-300">{campaignPreview.targetCount}</div>
+                      </Card>
+                    </div>
+
+                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                      <div className="rounded-xl border border-border/60 bg-background/40 p-3 text-sm text-muted-foreground">
+                        VIPs: <span className="font-semibold text-foreground">{campaignPreview.breakdown.vipCount}</span>
+                      </div>
+                      <div className="rounded-xl border border-border/60 bg-background/40 p-3 text-sm text-muted-foreground">
+                        Nao VIP: <span className="font-semibold text-foreground">{campaignPreview.breakdown.nonVipCount}</span>
+                      </div>
+                      <div className="rounded-xl border border-border/60 bg-background/40 p-3 text-sm text-muted-foreground">
+                        Brasil: <span className="font-semibold text-foreground">{campaignPreview.breakdown.brCount}</span>
+                      </div>
+                      <div className="rounded-xl border border-border/60 bg-background/40 p-3 text-sm text-muted-foreground">
+                        EUA: <span className="font-semibold text-foreground">{campaignPreview.breakdown.usCount}</span>
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="mb-2 text-sm font-semibold text-foreground">Texto final</div>
+                      <div className="rounded-xl border border-border/70 bg-muted/20 p-4 text-sm whitespace-pre-wrap">
+                        {campaignPreview.previewText || campaignMessage}
+                      </div>
+                    </div>
+
+                    <div>
+                      <div>
+                        <div className="mb-2 text-sm font-semibold text-foreground">Exemplos de destinatarios</div>
+                        <div className="space-y-2">
+                          {campaignPreview.sampleRecipients.map((recipient) => (
+                            <div key={recipient.id} className="rounded-lg border border-border/60 p-3">
+                              <div className="font-medium text-foreground">{recipient.nome}</div>
+                              <div className="text-xs text-muted-foreground">{recipient.phone}</div>
+                              <div className="mt-1 text-xs text-muted-foreground">{recipient.country || "Sem pais"}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-xl border border-dashed border-border/70 p-5 text-sm text-muted-foreground">
+                    Gere a revisao para ver a contagem final, exemplos reais e a distribuicao da audiencia.
+                  </div>
+                )}
+              </div>
+
+              <div className="rounded-2xl border border-border/70 bg-background/35 p-4">
+                <div className="text-sm font-semibold text-foreground">Janela de envio</div>
+                <div className="mt-4 space-y-3">
+                  <label className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm">
+                    <input type="radio" checked={campaignScheduleMode === "now"} onChange={() => setCampaignScheduleMode("now")} />
+                    Enviar agora
+                  </label>
+                  <label className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm">
+                    <input type="radio" checked={campaignScheduleMode === "schedule"} onChange={() => setCampaignScheduleMode("schedule")} />
+                    Agendar
+                  </label>
+                  {campaignScheduleMode === "schedule" ? (
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium text-muted-foreground">Data e hora</label>
+                      <Input type="datetime-local" value={campaignScheduledAt} onChange={(event) => setCampaignScheduledAt(event.target.value)} />
+                    </div>
+                  ) : null}
+
+                  <label className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm">
+                    <input type="checkbox" checked={campaignWindowEnabled} onChange={(event) => setCampaignWindowEnabled(event.target.checked)} />
+                    Restringir horario de envio
+                  </label>
+                  {campaignWindowEnabled ? (
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <label className="text-xs font-medium text-muted-foreground">Inicio</label>
+                        <Input type="time" value={campaignWindowStart} onChange={(event) => setCampaignWindowStart(event.target.value)} />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs font-medium text-muted-foreground">Fim</label>
+                        <Input type="time" value={campaignWindowEnd} onChange={(event) => setCampaignWindowEnd(event.target.value)} />
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+
+                <Button
+                  onClick={() => sendMutation.mutate()}
+                  disabled={sendMutation.isPending || !campaignPreview || !campaignMessage.trim() || (campaignScheduleMode === "schedule" && !campaignScheduledAt)}
+                  className="mt-5 w-full gold-gradient-bg text-accent-foreground font-semibold gold-shadow hover:opacity-90"
+                >
+                  <CalendarClock className="mr-2 h-4 w-4" />
+                  {sendMutation.isPending ? "Processando..." : campaignScheduleMode === "schedule" ? "Agendar campanha" : "Iniciar campanha"}
+                </Button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="text-xs text-muted-foreground">
+            Etapa atual: <span className="font-semibold text-foreground">{campaignStep}</span> de 2
+          </div>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              disabled={campaignStep === 1}
+              onClick={() => setCampaignStep(1)}
+            >
+              Voltar
+            </Button>
+            {campaignStep === 1 ? (
+              <Button onClick={() => previewMutation.mutate()} disabled={!campaignMessage.trim() || previewMutation.isPending} className="gold-gradient-bg text-accent-foreground font-semibold">
+                <MessageSquareText className="mr-2 h-4 w-4" />
+                {previewMutation.isPending ? "Gerando revisao..." : "Ir para revisao"}
+              </Button>
+            ) : null}
+          </div>
         </div>
       </Card>
+
+      {activeCampaignId ? (
+        <Card className="space-y-4 border-primary/20 bg-card/80 p-5">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <div className="text-[11px] uppercase tracking-[0.28em] text-primary/80">Campanha ativa</div>
+              <h3 className="mt-2 text-2xl font-bold text-foreground">
+                {currentCampaign ? formatCampaignStatus(currentCampaign.status) : "Carregando status..."}
+              </h3>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Acompanhe fila, agendamento, envio e falhas sem sair desta tela.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" onClick={() => campaignStatusQuery.refetch()} disabled={campaignStatusQuery.isFetching}>
+                <RefreshCw className={`mr-2 h-4 w-4 ${campaignStatusQuery.isFetching ? "animate-spin" : ""}`} />
+                Atualizar
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => retryFailedMutation.mutate()}
+                disabled={!currentCampaign?.canRetryFailed || retryFailedMutation.isPending || isCampaignBusy}
+              >
+                <LoaderCircle className={`mr-2 h-4 w-4 ${retryFailedMutation.isPending ? "animate-spin" : "hidden"}`} />
+                Reenviar falhas
+              </Button>
+            </div>
+          </div>
+
+          {campaignStatusQuery.isLoading && !campaignStatusQuery.data ? (
+            <Skeleton className="h-32 w-full rounded-2xl" />
+          ) : currentCampaign ? (
+            <>
+              <div className="grid gap-3 sm:grid-cols-4">
+                <Card className="p-4">
+                  <div className="text-xs text-muted-foreground">Total</div>
+                  <div className="mt-2 text-2xl font-bold text-foreground">{currentCampaign.target_count}</div>
+                </Card>
+                <Card className="p-4">
+                  <div className="text-xs text-muted-foreground">Enviados</div>
+                  <div className="mt-2 text-2xl font-bold text-emerald-300">{currentCampaign.sent_count}</div>
+                </Card>
+                <Card className="p-4">
+                  <div className="text-xs text-muted-foreground">Falhas</div>
+                  <div className="mt-2 text-2xl font-bold text-amber-300">{currentCampaign.failed_count}</div>
+                </Card>
+                <Card className="p-4">
+                  <div className="text-xs text-muted-foreground">Pulados</div>
+                  <div className="mt-2 text-2xl font-bold text-sky-300">{currentCampaign.skipped_count}</div>
+                </Card>
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-muted-foreground">Progresso</span>
+                  <span className="font-semibold text-foreground">{currentCampaign.progressPercent}%</span>
+                </div>
+                <div className="h-3 overflow-hidden rounded-full bg-muted/40">
+                  <div className="h-full rounded-full bg-[linear-gradient(90deg,#d4af37,#f6e27a)] transition-all" style={{ width: `${currentCampaign.progressPercent}%` }} />
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  Processados: <span className="font-semibold text-foreground">{currentCampaign.processedCount}</span> de <span className="font-semibold text-foreground">{currentCampaign.target_count}</span>
+                </div>
+              </div>
+
+              {currentCampaign.metadata?.schedule?.nextRunAt || currentCampaign.metadata?.schedule?.scheduledAt ? (
+                <div className="rounded-xl border border-border/60 bg-background/35 p-3 text-sm text-muted-foreground">
+                  Proxima execucao:{" "}
+                  <span className="font-semibold text-foreground">
+                    {new Date(currentCampaign.metadata?.schedule?.nextRunAt || currentCampaign.metadata?.schedule?.scheduledAt || "").toLocaleString("pt-BR")}
+                  </span>
+                </div>
+              ) : null}
+
+              <div className="grid gap-4 lg:grid-cols-2">
+                <div>
+                  <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
+                    <CheckCircle2 className="h-4 w-4 text-primary" />
+                    Eventos recentes
+                  </div>
+                  <div className="space-y-2">
+                    {(campaignStatusQuery.data?.recentRecipients || []).length ? campaignStatusQuery.data?.recentRecipients.map((recipient) => (
+                      <div key={recipient.id} className="rounded-lg border border-border/60 p-3 text-sm">
+                        <div className="font-medium text-foreground">{recipient.client_name || "Cliente"}</div>
+                        <div className="text-xs text-muted-foreground">{recipient.destination_phone || "-"}</div>
+                        <div className="mt-1 text-xs text-muted-foreground">Status: <span className="font-semibold text-foreground">{recipient.local_status}</span></div>
+                      </div>
+                    )) : (
+                      <div className="rounded-lg border border-border/60 p-3 text-sm text-muted-foreground">Sem eventos ainda.</div>
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="mb-2 text-sm font-semibold text-foreground">Falhas recentes</div>
+                  <div className="space-y-2">
+                    {(campaignStatusQuery.data?.failedRecipients || []).length ? campaignStatusQuery.data?.failedRecipients.map((recipient) => (
+                      <div key={recipient.id} className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 text-sm">
+                        <div className="font-medium text-foreground">{recipient.client_name || "Cliente"}</div>
+                        <div className="text-xs text-muted-foreground">{recipient.destination_phone || "-"}</div>
+                        <div className="mt-1 text-xs text-amber-200">{recipient.error_detail || "Falha sem detalhe do provedor."}</div>
+                      </div>
+                    )) : (
+                      <div className="rounded-lg border border-border/60 p-3 text-sm text-muted-foreground">Nenhuma falha listada.</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="rounded-xl border border-border/60 p-4 text-sm text-muted-foreground">Nao foi possivel carregar a campanha ativa.</div>
+          )}
+        </Card>
+      ) : null}
 
       <Card className="overflow-hidden p-0">
         <div className="hidden md:block overflow-x-auto">
@@ -506,53 +993,6 @@ export default function ClientesAdminPage() {
             {modalPerfil.cliente.vip_observacao ? <div className="text-xs text-muted-foreground">{modalPerfil.cliente.vip_observacao}</div> : null}
           </div>
         ) : null}
-      </Modal>
-
-      <Modal open={campaignPreviewOpen} onClose={() => setCampaignPreviewOpen(false)} title="Confirmar campanha do WhatsApp">
-        <div className="space-y-4">
-          <div className="grid gap-3 sm:grid-cols-3">
-            <Card className="p-4">
-              <div className="text-xs text-muted-foreground">Destinatarios validos</div>
-              <div className="mt-2 text-2xl font-bold text-emerald-300">{campaignPreview?.audienceCount || 0}</div>
-            </Card>
-            <Card className="p-4">
-              <div className="text-xs text-muted-foreground">Sem telefone</div>
-              <div className="mt-2 text-2xl font-bold text-amber-300">{campaignPreview?.excludedWithoutPhone || 0}</div>
-            </Card>
-            <Card className="p-4">
-              <div className="text-xs text-muted-foreground">Segmento</div>
-              <div className="mt-2 text-sm font-semibold text-foreground">
-                {campaignSegment === "vip" ? "Somente VIP" : campaignSegment === "non_vip" ? "Somente nao VIP" : "Todos"}
-              </div>
-            </Card>
-          </div>
-
-          <div>
-            <div className="mb-2 text-sm font-semibold text-foreground">Texto final</div>
-            <div className="rounded-xl border border-border/70 bg-muted/20 p-4 text-sm whitespace-pre-wrap">
-              {campaignPreview?.previewText || campaignMessage}
-            </div>
-          </div>
-
-          <div>
-            <div className="mb-2 text-sm font-semibold text-foreground">Exemplos de destinatarios</div>
-            <div className="space-y-2">
-              {(campaignPreview?.sampleRecipients || []).map((recipient) => (
-                <div key={recipient.id} className="rounded-lg border border-border/60 p-3">
-                  <div className="font-medium text-foreground">{recipient.nome}</div>
-                  <div className="text-xs text-muted-foreground">{recipient.phone}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={() => setCampaignPreviewOpen(false)}>Cancelar</Button>
-            <Button onClick={() => sendMutation.mutate()} disabled={sendMutation.isPending} className="gold-gradient-bg text-accent-foreground font-semibold gold-shadow hover:opacity-90">
-              {sendMutation.isPending ? "Enviando..." : "Confirmar envio"}
-            </Button>
-          </div>
-        </div>
       </Modal>
     </div>
   );

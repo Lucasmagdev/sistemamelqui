@@ -169,12 +169,66 @@ function formatDateForDisplay(value) {
   return date.toLocaleString("pt-BR");
 }
 
+const BRAZIL_AREA_CODES = new Set([
+  "11", "12", "13", "14", "15", "16", "17", "18", "19",
+  "21", "22", "24",
+  "27", "28",
+  "31", "32", "33", "34", "35", "37", "38",
+  "41", "42", "43", "44", "45", "46",
+  "47", "48", "49",
+  "51", "53", "54", "55",
+  "61", "62", "63", "64", "65", "66", "67", "68", "69",
+  "71", "73", "74", "75", "77", "79",
+  "81", "82", "83", "84", "85", "86", "87", "88", "89",
+  "91", "92", "93", "94", "95", "96", "97", "98", "99",
+]);
+
+function isLikelyBrazilMobileLocal(digits) {
+  return digits.length === 11
+    && BRAZIL_AREA_CODES.has(digits.slice(0, 2))
+    && digits.slice(2, 3) === "9";
+}
+
+function inferPhoneCountry(rawPhone) {
+  const raw = String(rawPhone || "").trim();
+  const digits = raw.replace(/\D/g, "");
+  if (!digits) return null;
+
+  if (raw.startsWith("+")) {
+    if (digits.startsWith("55")) return "Brasil";
+    if (digits.startsWith("1")) return "USA";
+    return null;
+  }
+
+  if (raw.startsWith("00") && digits.length > 2) {
+    const withoutPrefix = digits.slice(2);
+    if (withoutPrefix.startsWith("55")) return "Brasil";
+    if (withoutPrefix.startsWith("1")) return "USA";
+    return null;
+  }
+
+  if (isLikelyBrazilMobileLocal(digits)) return "Brasil";
+  if (digits.startsWith("55") && (digits.length === 12 || digits.length === 13)) return "Brasil";
+  if (digits.startsWith("1") && digits.length === 11) return "USA";
+  if (digits.length === 10) return "USA";
+  return null;
+}
+
 function normalizePhone(rawPhone) {
-  const digits = String(rawPhone || "").replace(/\D/g, "");
+  const raw = String(rawPhone || "").trim();
+  const digits = raw.replace(/\D/g, "");
   if (!digits) return "";
-  if (digits.length >= 12) return digits;
-  const countryCode = process.env.DEFAULT_COUNTRY_CODE || "55";
-  return `${countryCode}${digits}`;
+  if (raw.startsWith("+")) return digits;
+  if (raw.startsWith("00") && digits.length > 2) return digits.slice(2);
+
+  if (isLikelyBrazilMobileLocal(digits)) return `55${digits}`;
+  if ((digits.startsWith("55") && (digits.length === 12 || digits.length === 13))
+    || (digits.startsWith("1") && digits.length === 11)) {
+    return digits;
+  }
+  if (digits.length === 10) return `1${digits}`;
+  if (digits.length >= 11) return digits;
+  return digits;
 }
 
 function isLikelyPhoneDigits(rawValue) {
@@ -2921,6 +2975,51 @@ function buildClientAddress(client) {
     .trim() || "-";
 }
 
+function normalizeCountryFilter(value) {
+  const raw = String(value || "all").trim().toLowerCase();
+  if (["br", "brazil", "brasil"].includes(raw)) return "br";
+  if (["us", "usa", "eua", "united states"].includes(raw)) return "us";
+  return "all";
+}
+
+function normalizeCountryLabel(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) return null;
+  if (["br", "brazil", "brasil"].includes(raw)) return "Brasil";
+  if (["us", "usa", "eua", "united states"].includes(raw)) return "USA";
+  return String(value || "").trim() || null;
+}
+
+function detectClientCountry(client) {
+  return normalizeCountryLabel(client?.pais) || inferPhoneCountry(client?.telefone) || "Outro";
+}
+
+async function enrichClientAdminRows(rows) {
+  const ids = [...new Set((rows || []).map((row) => Number(row?.id)).filter(Boolean))];
+  if (!ids.length) return rows || [];
+
+  const { data, error } = await supabase
+    .from("clients")
+    .select("id, cidade, estado, pais, preferred_locale")
+    .in("id", ids);
+
+  if (error) {
+    throw createHttpError(500, "Erro ao enriquecer dados de clientes.", error.message);
+  }
+
+  const detailMap = new Map((data || []).map((item) => [String(item.id), item]));
+  return (rows || []).map((row) => {
+    const detail = detailMap.get(String(row?.id));
+    return {
+      ...row,
+      cidade: detail?.cidade || row?.cidade || null,
+      estado: detail?.estado || row?.estado || null,
+      pais: normalizeCountryLabel(detail?.pais || row?.pais) || null,
+      preferred_locale: detail?.preferred_locale || row?.preferred_locale || null,
+    };
+  });
+}
+
 function renderClientCampaignMessage(template, client) {
   return String(template || "")
     .replace(/\{nome\}/gi, String(client?.nome || "cliente").trim() || "cliente")
@@ -3008,6 +3107,109 @@ function normalizeClientSegment(value) {
   if (["vip", "vips"].includes(raw)) return "vip";
   if (["non_vip", "nao_vip", "regular", "nonvip"].includes(raw)) return "non_vip";
   return "all";
+}
+
+function normalizeClientCampaignTime(value) {
+  const raw = String(value || "").trim();
+  if (!/^\d{2}:\d{2}$/.test(raw)) return null;
+  const [hour, minute] = raw.split(":").map((item) => Number.parseInt(item, 10));
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+function normalizeClientCampaignFilters(payload = {}) {
+  return {
+    segment: normalizeClientSegment(payload.segment),
+    search: String(payload.search || "").trim(),
+    withOrders: Boolean(payload.withOrders),
+    country: normalizeCountryFilter(payload.country),
+    city: String(payload.city || "").trim(),
+    minOrders: Math.max(0, Number.parseInt(String(payload.minOrders || "0"), 10) || 0),
+    onlyWithPhone: payload.onlyWithPhone !== false,
+  };
+}
+
+function normalizeClientCampaignSchedule(payload = {}) {
+  const mode = String(payload.mode || "now").trim().toLowerCase() === "schedule" ? "schedule" : "now";
+  const scheduledAtRaw = payload.scheduledAt ? new Date(payload.scheduledAt) : null;
+  const scheduledAt = scheduledAtRaw && !Number.isNaN(scheduledAtRaw.getTime())
+    ? scheduledAtRaw.toISOString()
+    : null;
+  const windowStart = normalizeClientCampaignTime(payload.windowStart);
+  const windowEnd = normalizeClientCampaignTime(payload.windowEnd);
+  return {
+    mode,
+    scheduledAt,
+    windowStart,
+    windowEnd,
+  };
+}
+
+function clientCampaignTimeToMinutes(value) {
+  const normalized = normalizeClientCampaignTime(value);
+  if (!normalized) return null;
+  const [hour, minute] = normalized.split(":").map((item) => Number.parseInt(item, 10));
+  return (hour * 60) + minute;
+}
+
+function isClientCampaignWithinWindow(date, schedule = {}) {
+  const start = clientCampaignTimeToMinutes(schedule.windowStart);
+  const end = clientCampaignTimeToMinutes(schedule.windowEnd);
+  if (start === null || end === null) return true;
+
+  const current = (date.getHours() * 60) + date.getMinutes();
+  if (start <= end) {
+    return current >= start && current <= end;
+  }
+
+  return current >= start || current <= end;
+}
+
+function getNextClientCampaignWindowDate(schedule = {}, fromDate = new Date()) {
+  const start = clientCampaignTimeToMinutes(schedule.windowStart);
+  const end = clientCampaignTimeToMinutes(schedule.windowEnd);
+  if (start === null || end === null) {
+    return new Date(fromDate.getTime());
+  }
+
+  const next = new Date(fromDate.getTime());
+  next.setSeconds(0, 0);
+  const current = (next.getHours() * 60) + next.getMinutes();
+
+  if (start <= end) {
+    if (current <= start) {
+      next.setHours(Math.floor(start / 60), start % 60, 0, 0);
+      return next;
+    }
+
+    next.setDate(next.getDate() + 1);
+    next.setHours(Math.floor(start / 60), start % 60, 0, 0);
+    return next;
+  }
+
+  if (current <= end) {
+    return next;
+  }
+
+  if (current < start) {
+    next.setHours(Math.floor(start / 60), start % 60, 0, 0);
+    return next;
+  }
+
+  next.setDate(next.getDate() + 1);
+  next.setHours(Math.floor(start / 60), start % 60, 0, 0);
+  return next;
+}
+
+const scheduledClientCampaignTimers = new Map();
+
+function clearScheduledClientCampaign(campaignId) {
+  const timer = scheduledClientCampaignTimers.get(String(campaignId));
+  if (timer) {
+    clearTimeout(timer);
+    scheduledClientCampaignTimers.delete(String(campaignId));
+  }
 }
 
 function normalizeSortDirection(value) {
@@ -3257,7 +3459,7 @@ async function buildClientsAdminPayload({
     }
 
     const totalItems = Number(pageResult.count || 0);
-    const rows = (pageResult.data || []).map(normalizeClientAdminRow);
+    let rows = (pageResult.data || []).map(normalizeClientAdminRow);
 
     let allRows = rows;
     if (safePageSize >= 5000 && totalItems > rows.length) {
@@ -3281,6 +3483,11 @@ async function buildClientsAdminPayload({
 
       allRows = (allRowsResult.data || []).map(normalizeClientAdminRow);
     }
+
+    const enriched = await enrichClientAdminRows([...rows, ...allRows]);
+    const enrichedMap = new Map(enriched.map((row) => [String(row.id), row]));
+    rows = rows.map((row) => enrichedMap.get(String(row.id)) || row);
+    allRows = allRows.map((row) => enrichedMap.get(String(row.id)) || row);
 
     let summary = null;
     const summaryResult = await measureStep(
@@ -3545,6 +3752,377 @@ async function buildOrdersAdminPayloadLegacy({
       hasNextPage: startIndex + safePageSize < totalItems,
     },
   };
+}
+
+async function buildClientCampaignAudience(rawFilters = {}, messageTemplate = "") {
+  const filters = normalizeClientCampaignFilters(rawFilters);
+  const payload = await buildClientsAdminPayload({
+    search: filters.search,
+    segment: filters.segment,
+    withOrders: filters.withOrders,
+    page: 1,
+    pageSize: 5000,
+  });
+
+  const normalizedCity = normalizeSearchText(filters.city);
+  const scopedRows = (payload.allRows || []).filter((client) => {
+    if (filters.city && !normalizeSearchText(client?.cidade || "").includes(normalizedCity)) return false;
+    if (filters.minOrders > 0 && Number(client?.order_count || 0) < filters.minOrders) return false;
+
+    if (filters.country !== "all") {
+      const country = detectClientCountry(client);
+      if (filters.country === "br" && country !== "Brasil") return false;
+      if (filters.country === "us" && country !== "USA") return false;
+    }
+
+    if (filters.onlyWithPhone && !normalizePhone(client?.telefone)) return false;
+    return true;
+  });
+
+  const audience = scopedRows.map((client) => {
+    const normalizedPhone = normalizePhone(client?.telefone);
+    const country = detectClientCountry(client);
+    return {
+      ...client,
+      country,
+      city: client?.cidade || null,
+      normalizedPhone,
+      hasPhone: Boolean(normalizedPhone),
+      renderedMessage: renderClientCampaignMessage(messageTemplate, client),
+    };
+  });
+
+  const validRecipients = audience.filter((client) => client.hasPhone);
+  const invalidRecipients = audience.filter((client) => !client.hasPhone);
+  const cityBreakdownMap = new Map();
+  for (const row of audience) {
+    const cityLabel = String(row.city || "Sem cidade").trim() || "Sem cidade";
+    cityBreakdownMap.set(cityLabel, (cityBreakdownMap.get(cityLabel) || 0) + 1);
+  }
+
+  const topCities = [...cityBreakdownMap.entries()]
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, 5)
+    .map(([city, count]) => ({ city, count }));
+
+  const stats = {
+    targetCount: audience.length,
+    audienceCount: validRecipients.length,
+    excludedWithoutPhone: invalidRecipients.length,
+    vipCount: audience.filter((client) => Boolean(client.vip)).length,
+    nonVipCount: audience.filter((client) => !client.vip).length,
+    withOrdersCount: audience.filter((client) => Number(client.order_count || 0) > 0).length,
+    withoutOrdersCount: audience.filter((client) => Number(client.order_count || 0) <= 0).length,
+    brCount: audience.filter((client) => client.country === "Brasil").length,
+    usCount: audience.filter((client) => client.country === "USA").length,
+    otherCount: audience.filter((client) => !["Brasil", "USA"].includes(client.country)).length,
+    topCities,
+  };
+
+  return {
+    filters,
+    stats,
+    audience,
+    validRecipients,
+    invalidRecipients,
+    previewText: validRecipients[0]?.renderedMessage || renderClientCampaignMessage(messageTemplate, { nome: "cliente" }),
+    sampleRecipients: validRecipients.slice(0, 5).map((client) => ({
+      id: client.id,
+      nome: client.nome,
+      phone: client.normalizedPhone,
+      city: client.city,
+      country: client.country,
+      orderCount: Number(client.order_count || 0),
+      previewText: client.renderedMessage,
+    })),
+  };
+}
+
+async function loadClientCampaignById(campaignId) {
+  const { data, error } = await supabase
+    .from("client_campaigns")
+    .select("*")
+    .eq("id", campaignId)
+    .maybeSingle();
+
+  if (error) {
+    if (isMissingRelationError(error, "client_campaigns")) {
+      throw createHttpError(500, "Tabela client_campaigns nao encontrada.", error.message);
+    }
+    throw createHttpError(500, "Erro ao carregar campanha.", error.message);
+  }
+
+  if (!data) {
+    throw createHttpError(404, "Campanha nao encontrada.");
+  }
+
+  return data;
+}
+
+async function listClientCampaignRecipients(campaignId, { status = null, limit = 20 } = {}) {
+  let query = supabase
+    .from("client_campaign_recipients")
+    .select("*")
+    .eq("campaign_id", campaignId)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  if (status) {
+    query = query.eq("local_status", status);
+  }
+
+  const { data, error } = await query;
+  if (error) {
+    if (isMissingRelationError(error, "client_campaign_recipients")) return [];
+    throw createHttpError(500, "Erro ao carregar destinatarios da campanha.", error.message);
+  }
+
+  return data || [];
+}
+
+function normalizeCampaignStatusLabel(status) {
+  const normalized = String(status || "").trim().toLowerCase();
+  if (["queued", "scheduled", "sending", "completed", "completed_with_failures", "failed", "draft"].includes(normalized)) {
+    return normalized;
+  }
+  return "draft";
+}
+
+async function updateClientCampaignProgress(campaignId, {
+  sentCount = 0,
+  failedCount = 0,
+  skippedCount = 0,
+  validCount = 0,
+  targetCount = null,
+  status = "queued",
+  metadata = {},
+} = {}) {
+  const current = await loadClientCampaignById(campaignId);
+  const nextMetadata = {
+    ...(current.metadata || {}),
+    ...metadata,
+  };
+
+  const { data, error } = await supabase
+    .from("client_campaigns")
+    .update({
+      target_count: targetCount ?? current.target_count ?? 0,
+      sent_count: sentCount,
+      failed_count: failedCount,
+      skipped_count: skippedCount,
+      valid_count: validCount,
+      status,
+      metadata: nextMetadata,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", campaignId)
+    .select("*")
+    .maybeSingle();
+
+  if (error) {
+    throw createHttpError(500, "Erro ao atualizar progresso da campanha.", error.message);
+  }
+
+  return data || current;
+}
+
+async function executeClientCampaign(campaignId, recipientsOverride = null) {
+  clearScheduledClientCampaign(campaignId);
+  const campaign = await loadClientCampaignById(campaignId);
+  const metadata = campaign.metadata || {};
+  const schedule = normalizeClientCampaignSchedule(metadata.schedule || {});
+
+  if (schedule.windowStart && schedule.windowEnd && !isClientCampaignWithinWindow(new Date(), schedule)) {
+    const nextRunAt = getNextClientCampaignWindowDate(schedule, new Date()).toISOString();
+    await updateClientCampaignProgress(campaignId, {
+      sentCount: Number(campaign.sent_count || 0),
+      failedCount: Number(campaign.failed_count || 0),
+      skippedCount: Number(campaign.skipped_count || 0),
+      validCount: Number(campaign.valid_count || 0),
+      targetCount: Number(campaign.target_count || 0),
+      status: "scheduled",
+      metadata: {
+        schedule: {
+          ...schedule,
+          nextRunAt,
+        },
+        progress: {
+          ...(metadata.progress || {}),
+          state: "waiting_window",
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    });
+    scheduleClientCampaign(campaignId, nextRunAt);
+    return;
+  }
+
+  const filters = normalizeClientCampaignFilters(metadata.filters || {
+    segment: campaign.segment,
+    search: campaign.search_term,
+    withOrders: campaign.with_orders,
+  });
+  const messageTemplate = String(campaign.message_template || "").trim();
+  const audiencePayload = recipientsOverride
+    ? {
+        filters,
+        stats: {
+          targetCount: recipientsOverride.length,
+          audienceCount: recipientsOverride.length,
+          excludedWithoutPhone: 0,
+        },
+        validRecipients: recipientsOverride,
+      }
+    : await buildClientCampaignAudience(filters, messageTemplate);
+
+  const validRecipients = audiencePayload.validRecipients || [];
+  const targetCount = recipientsOverride ? recipientsOverride.length : Number(audiencePayload.stats?.targetCount || 0);
+  const skippedCount = recipientsOverride ? 0 : Number(audiencePayload.stats?.excludedWithoutPhone || 0);
+  const startedAt = new Date().toISOString();
+
+  await updateClientCampaignProgress(campaignId, {
+    sentCount: 0,
+    failedCount: 0,
+    skippedCount,
+    validCount: validRecipients.length,
+    targetCount,
+    status: "sending",
+    metadata: {
+      filters,
+      schedule: {
+        ...schedule,
+        nextRunAt: null,
+      },
+      progress: {
+        state: "sending",
+        processedCount: 0,
+        totalCount: targetCount,
+        startedAt,
+        updatedAt: startedAt,
+      },
+      channel: "whatsapp",
+      retryOfCampaignId: metadata.retryOfCampaignId || null,
+    },
+  });
+
+  let sentCount = 0;
+  let failedCount = 0;
+  let processedCount = 0;
+
+  for (const recipient of validRecipients) {
+    const sendResult = await sendWhatsAppViaZApi({
+      phone: recipient.phone || recipient.normalizedPhone,
+      message: recipient.renderedMessage,
+    });
+
+    processedCount += 1;
+    if (sendResult?.ok) sentCount += 1;
+    else failedCount += 1;
+
+    await persistWhatsAppAttempt({
+      orderId: null,
+      target: "client_campaign",
+      eventType: "client_campaign_broadcast",
+      destinationPhone: recipient.phone || recipient.normalizedPhone,
+      messageText: recipient.renderedMessage,
+      payload: {
+        campaignId,
+        clientId: recipient.id,
+        segment: filters.segment,
+        country: recipient.country || null,
+      },
+      sendResult,
+    });
+
+    await insertClientCampaignRecipientAudit({
+      campaignId,
+      clientId: recipient.id,
+      clientName: recipient.nome,
+      destinationPhone: recipient.phone || recipient.normalizedPhone,
+      renderedMessage: recipient.renderedMessage,
+      localStatus: sendResult?.ok ? "queued" : "failed",
+      errorDetail: sendResult?.detail || sendResult?.reason || null,
+      providerResponse: sendResult || {},
+      messageId: sendResult?.messageId || null,
+      zaapId: sendResult?.zaapId || null,
+    });
+
+    await updateClientCampaignProgress(campaignId, {
+      sentCount,
+      failedCount,
+      skippedCount,
+      validCount: validRecipients.length,
+      targetCount,
+      status: "sending",
+      metadata: {
+        progress: {
+          state: "sending",
+          processedCount,
+          totalCount: targetCount,
+          startedAt,
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    });
+  }
+
+  await updateClientCampaignProgress(campaignId, {
+    sentCount,
+    failedCount,
+    skippedCount,
+    validCount: validRecipients.length,
+    targetCount,
+    status: failedCount > 0 ? "completed_with_failures" : "completed",
+    metadata: {
+      progress: {
+        state: failedCount > 0 ? "completed_with_failures" : "completed",
+        processedCount,
+        totalCount: targetCount,
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+    },
+  });
+}
+
+function scheduleClientCampaign(campaignId, scheduledAt) {
+  const targetDate = new Date(scheduledAt);
+  if (Number.isNaN(targetDate.getTime())) {
+    return;
+  }
+
+  clearScheduledClientCampaign(campaignId);
+  const delay = Math.max(0, targetDate.getTime() - Date.now());
+  const timer = setTimeout(() => {
+    executeClientCampaign(campaignId).catch((error) => {
+      console.error(`Falha ao executar campanha ${campaignId}`, error?.message || error);
+    }).finally(() => {
+      scheduledClientCampaignTimers.delete(String(campaignId));
+    });
+  }, delay);
+
+  scheduledClientCampaignTimers.set(String(campaignId), timer);
+}
+
+async function restoreScheduledClientCampaigns() {
+  const { data, error } = await supabase
+    .from("client_campaigns")
+    .select("id, status, metadata")
+    .in("status", ["scheduled", "queued"]);
+
+  if (error) {
+    if (!isMissingRelationError(error, "client_campaigns")) {
+      console.error("Falha ao restaurar campanhas agendadas", error.message);
+    }
+    return;
+  }
+
+  for (const campaign of data || []) {
+    const schedule = normalizeClientCampaignSchedule(campaign.metadata?.schedule || {});
+    const nextRunAt = schedule.scheduledAt || campaign.metadata?.schedule?.nextRunAt || new Date().toISOString();
+    scheduleClientCampaign(campaign.id, nextRunAt);
+  }
 }
 
 async function buildOrdersAdminPayload({
@@ -4163,10 +4741,11 @@ async function callGeminiText({ prompt, temperature = 0.2, maxOutputTokens = 120
 
 async function upsertClientFromOrderPayload(payload) {
   const clientName = String(payload?.clientName || payload?.nome || "").trim();
+  const locale = normalizeLocale(payload?.locale || "pt");
   const normalizedPhone = normalizePhone(payload?.clientPhone || payload?.telefone || "");
   const normalizedEmail = String(payload?.clientEmail || payload?.email || "").trim().toLowerCase() || null;
   const authUserId = String(payload?.authUserId || "").trim() || null;
-  const locale = normalizeLocale(payload?.locale || "pt");
+  const inferredCountry = inferPhoneCountry(payload?.clientPhone || payload?.telefone || "");
 
   if (!clientName) {
     throw createHttpError(400, "Nome do cliente obrigatorio.");
@@ -4204,7 +4783,7 @@ async function upsertClientFromOrderPayload(payload) {
     const result = await supabase
       .from("clients")
       .select("*")
-      .eq("telefone", normalizedPhone)
+      .in("telefone", [normalizedPhone, `+${normalizedPhone}`])
       .order("id", { ascending: false })
       .limit(1);
     if (result.error) throw createHttpError(500, "Erro ao buscar cliente por telefone.", result.error.message);
@@ -4221,7 +4800,7 @@ async function upsertClientFromOrderPayload(payload) {
     cidade: payload?.enderecoCidade || null,
     estado: payload?.enderecoEstado || null,
     cep: payload?.enderecoZip || null,
-    pais: payload?.pais || "USA",
+    pais: payload?.pais || inferredCountry || (locale === "en" ? "USA" : "Brasil"),
     tenant_id: Number(payload?.tenantId || 1),
     preferred_locale: locale,
     last_user_agent: payload?.lastUserAgent || null,
@@ -5643,39 +6222,32 @@ app.get("/api/clients/admin", async (req, res) => {
 
 app.post("/api/client-campaigns/preview", async (req, res) => {
   try {
-    const segment = normalizeClientSegment(req.body?.segment);
     const message = String(req.body?.message || "").trim();
+    await requireAssistantAdmin(req);
     if (!message) {
       return res.status(400).json({ error: "message obrigatoria." });
     }
 
-    const payload = await buildClientsAdminPayload({
-      search: String(req.body?.search || "").trim(),
-      segment,
-      withOrders: Boolean(req.body?.withOrders),
-      page: 1,
-      pageSize: 5000,
-    });
-
-    const validRecipients = payload.allRows
-      .map((client) => ({
-        id: client.id,
-        nome: client.nome,
-        vip: Boolean(client.vip),
-        order_count: Number(client.order_count || 0),
-        phone: normalizePhone(client.telefone),
-        previewText: renderClientCampaignMessage(message, client),
-      }))
-      .filter((client) => client.phone);
-
-    const excludedWithoutPhone = payload.allRows.filter((client) => !normalizePhone(client.telefone)).length;
+    const audience = await buildClientCampaignAudience(req.body, message);
 
     return res.json({
       ok: true,
-      audienceCount: validRecipients.length,
-      excludedWithoutPhone,
-      sampleRecipients: validRecipients.slice(0, 3),
-      previewText: validRecipients[0]?.previewText || renderClientCampaignMessage(message, { nome: "cliente" }),
+      filters: audience.filters,
+      audienceCount: audience.stats.audienceCount,
+      targetCount: audience.stats.targetCount,
+      excludedWithoutPhone: audience.stats.excludedWithoutPhone,
+      breakdown: {
+        vipCount: audience.stats.vipCount,
+        nonVipCount: audience.stats.nonVipCount,
+        withOrdersCount: audience.stats.withOrdersCount,
+        withoutOrdersCount: audience.stats.withoutOrdersCount,
+        brCount: audience.stats.brCount,
+        usCount: audience.stats.usCount,
+        otherCount: audience.stats.otherCount,
+        topCities: audience.stats.topCities,
+      },
+      sampleRecipients: audience.sampleRecipients,
+      previewText: audience.previewText,
     });
   } catch (error) {
     return res.status(error?.status || 500).json({
@@ -5685,107 +6257,244 @@ app.post("/api/client-campaigns/preview", async (req, res) => {
   }
 });
 
+app.post("/api/client-campaigns/test", async (req, res) => {
+  try {
+    const message = String(req.body?.message || "").trim();
+    const actor = await requireAssistantAdmin(req);
+    const testPhone = normalizePhone(req.body?.testPhone || req.body?.phone || "");
+    if (!message) {
+      return res.status(400).json({ error: "message obrigatoria." });
+    }
+    if (!testPhone) {
+      return res.status(400).json({ error: "testPhone obrigatorio." });
+    }
+
+    const sendResult = await sendWhatsAppViaZApi({
+      phone: testPhone,
+      message,
+    });
+
+    await persistWhatsAppAttempt({
+      orderId: null,
+      target: "client_campaign_test",
+      eventType: "client_campaign_test",
+      destinationPhone: testPhone,
+      messageText: message,
+      payload: {
+        actor: actor?.id || null,
+      },
+      sendResult,
+    });
+
+    if (!sendResult?.ok) {
+      return res.status(400).json({
+        ok: false,
+        reason: sendResult?.reason || "test-send-failed",
+        detail: sendResult?.detail || null,
+      });
+    }
+
+    return res.json({
+      ok: true,
+      phone: testPhone,
+      messageId: sendResult.messageId || null,
+      zaapId: sendResult.zaapId || null,
+    });
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro interno ao enviar teste da campanha.",
+      detail: error?.detail || null,
+    });
+  }
+});
+
 app.post("/api/client-campaigns/send", async (req, res) => {
   try {
-    const segment = normalizeClientSegment(req.body?.segment);
+    const actor = await requireAssistantAdmin(req);
     const message = String(req.body?.message || "").trim();
     if (!message) {
       return res.status(400).json({ error: "message obrigatoria." });
     }
 
-    const payload = await buildClientsAdminPayload({
-      search: String(req.body?.search || "").trim(),
-      segment,
-      withOrders: Boolean(req.body?.withOrders),
-      page: 1,
-      pageSize: 5000,
-    });
+    const filters = normalizeClientCampaignFilters(req.body);
+    const schedule = normalizeClientCampaignSchedule(req.body?.schedule || {});
+    const audience = await buildClientCampaignAudience(filters, message);
 
-    const audience = payload.allRows.map((client) => ({
-      id: client.id,
-      nome: client.nome,
-      telefone: client.telefone,
-      phone: normalizePhone(client.telefone),
-      renderedMessage: renderClientCampaignMessage(message, client),
-    }));
-
-    const validRecipients = audience.filter((client) => client.phone);
-    const skippedCount = audience.length - validRecipients.length;
-    const fallbackCampaignId = `campaign-${Date.now()}`;
+    const nextRunAt = schedule.mode === "schedule" && schedule.scheduledAt
+      ? schedule.scheduledAt
+      : (!isClientCampaignWithinWindow(new Date(), schedule) ? getNextClientCampaignWindowDate(schedule, new Date()).toISOString() : null);
     const campaign = await createClientCampaignAudit({
-      segment,
-      searchTerm: String(req.body?.search || "").trim(),
-      withOrders: Boolean(req.body?.withOrders),
+      segment: filters.segment,
+      searchTerm: filters.search,
+      withOrders: filters.withOrders,
       messageTemplate: message,
-      targetCount: audience.length,
-      validCount: validRecipients.length,
-      skippedCount,
-      status: "sending",
-      createdBy: req.body?.createdBy || null,
-      metadata: { channel: "whatsapp" },
-    });
-    const campaignId = campaign?.id || fallbackCampaignId;
-
-    let sentCount = 0;
-    let failedCount = 0;
-
-    for (const recipient of validRecipients) {
-      const sendResult = await sendWhatsAppViaZApi({
-        phone: recipient.phone,
-        message: recipient.renderedMessage,
-      });
-
-      if (sendResult?.ok) sentCount += 1;
-      else failedCount += 1;
-
-      await persistWhatsAppAttempt({
-        orderId: null,
-        target: "client_campaign",
-        eventType: "client_campaign_broadcast",
-        destinationPhone: recipient.phone,
-        messageText: recipient.renderedMessage,
-        payload: {
-          campaignId,
-          clientId: recipient.id,
-          segment,
+      targetCount: audience.stats.targetCount,
+      validCount: audience.stats.audienceCount,
+      skippedCount: audience.stats.excludedWithoutPhone,
+      status: nextRunAt ? "scheduled" : "queued",
+      createdBy: req.body?.createdBy || actor?.name || actor?.id || null,
+      metadata: {
+        channel: "whatsapp",
+        filters,
+        schedule: {
+          ...schedule,
+          nextRunAt,
         },
-        sendResult,
-      });
+        progress: {
+          state: nextRunAt ? "scheduled" : "queued",
+          processedCount: 0,
+          totalCount: audience.stats.targetCount,
+          updatedAt: new Date().toISOString(),
+        },
+        audience: {
+          ...audience.stats,
+        },
+      },
+    });
 
-      await insertClientCampaignRecipientAudit({
-        campaignId: campaign?.id || null,
-        clientId: recipient.id,
-        clientName: recipient.nome,
-        destinationPhone: recipient.phone,
-        renderedMessage: recipient.renderedMessage,
-        localStatus: sendResult?.ok ? "queued" : "failed",
-        errorDetail: sendResult?.detail || sendResult?.reason || null,
-        providerResponse: sendResult || {},
-        messageId: sendResult?.messageId || null,
-        zaapId: sendResult?.zaapId || null,
-      });
+    if (!campaign?.id) {
+      throw createHttpError(500, "A tabela client_campaigns precisa existir para usar o novo fluxo de campanhas.");
     }
 
-    await updateClientCampaignAudit(campaign?.id || null, {
-      sentCount,
-      failedCount,
-      skippedCount,
-      validCount: validRecipients.length,
-      status: failedCount > 0 ? "completed_with_failures" : "completed",
-      metadata: { channel: "whatsapp" },
-    });
+    scheduleClientCampaign(campaign.id, nextRunAt || new Date().toISOString());
 
     return res.json({
       ok: true,
-      campaignId,
-      targetCount: audience.length,
-      sentCount,
-      skippedCount,
-      failedCount,
+      campaignId: campaign.id,
+      status: nextRunAt ? "scheduled" : "queued",
+      targetCount: audience.stats.targetCount,
+      validCount: audience.stats.audienceCount,
+      skippedCount: audience.stats.excludedWithoutPhone,
+      scheduledAt: nextRunAt,
     });
   } catch (error) {
     return res.status(error?.status || 500).json({
       error: error?.message || "Erro interno ao enviar campanha.",
+      detail: error?.detail || null,
+    });
+  }
+});
+
+app.get("/api/client-campaigns/:id", async (req, res) => {
+  try {
+    await requireAssistantAdmin(req);
+    const campaignId = Number(req.params.id);
+    if (!campaignId) {
+      return res.status(400).json({ error: "ID da campanha invalido." });
+    }
+
+    const campaign = await loadClientCampaignById(campaignId);
+    const recentRecipients = await listClientCampaignRecipients(campaignId, { limit: 8 });
+    const failedRecipients = await listClientCampaignRecipients(campaignId, { status: "failed", limit: 8 });
+    const totalCount = Number(campaign.target_count || 0);
+    const processedCount = Number(campaign.sent_count || 0) + Number(campaign.failed_count || 0);
+    const progressPercent = totalCount > 0 ? Math.min(100, Math.round((processedCount / totalCount) * 100)) : 0;
+
+    return res.json({
+      ok: true,
+      campaign: {
+        ...campaign,
+        status: normalizeCampaignStatusLabel(campaign.status),
+        progressPercent,
+        processedCount,
+        canRetryFailed: Number(campaign.failed_count || 0) > 0,
+      },
+      recentRecipients,
+      failedRecipients,
+    });
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro interno ao carregar status da campanha.",
+      detail: error?.detail || null,
+    });
+  }
+});
+
+app.post("/api/client-campaigns/:id/retry-failed", async (req, res) => {
+  try {
+    const actor = await requireAssistantAdmin(req);
+    const campaignId = Number(req.params.id);
+    if (!campaignId) {
+      return res.status(400).json({ error: "ID da campanha invalido." });
+    }
+
+    const originalCampaign = await loadClientCampaignById(campaignId);
+    const failedRecipients = await supabase
+      .from("client_campaign_recipients")
+      .select("client_id, client_name, destination_phone, rendered_message")
+      .eq("campaign_id", campaignId)
+      .eq("local_status", "failed");
+
+    if (failedRecipients.error) {
+      throw createHttpError(500, "Erro ao carregar falhas da campanha.", failedRecipients.error.message);
+    }
+
+    const recipients = (failedRecipients.data || []).map((row) => ({
+      id: row.client_id,
+      nome: row.client_name,
+      phone: normalizePhone(row.destination_phone),
+      renderedMessage: String(row.rendered_message || "").trim(),
+      country: inferPhoneCountry(row.destination_phone),
+    })).filter((row) => row.phone && row.renderedMessage);
+
+    if (!recipients.length) {
+      return res.status(400).json({ error: "Nao existem destinatarios com falha para reenviar." });
+    }
+
+    const retryCampaign = await createClientCampaignAudit({
+      segment: originalCampaign.segment,
+      searchTerm: originalCampaign.search_term,
+      withOrders: originalCampaign.with_orders,
+      messageTemplate: originalCampaign.message_template,
+      targetCount: recipients.length,
+      validCount: recipients.length,
+      skippedCount: 0,
+      status: "queued",
+      createdBy: req.body?.createdBy || actor?.name || actor?.id || null,
+      metadata: {
+        channel: "whatsapp",
+        retryOfCampaignId: campaignId,
+        filters: originalCampaign.metadata?.filters || {},
+        schedule: {
+          mode: "now",
+          scheduledAt: null,
+          windowStart: null,
+          windowEnd: null,
+          nextRunAt: null,
+        },
+        progress: {
+          state: "queued",
+          processedCount: 0,
+          totalCount: recipients.length,
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    if (!retryCampaign?.id) {
+      throw createHttpError(500, "Nao foi possivel criar a campanha de reenvio.");
+    }
+
+    const recipientSnapshot = recipients.map((recipient) => ({
+      ...recipient,
+      normalizedPhone: recipient.phone,
+    }));
+
+    setTimeout(() => {
+      executeClientCampaign(retryCampaign.id, recipientSnapshot).catch((error) => {
+        console.error(`Falha ao reenviar campanha ${retryCampaign.id}`, error?.message || error);
+      });
+    }, 0);
+
+    return res.json({
+      ok: true,
+      campaignId: retryCampaign.id,
+      retryCount: recipients.length,
+      status: "queued",
+    });
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro interno ao reenviar falhas da campanha.",
       detail: error?.detail || null,
     });
   }
@@ -5883,4 +6592,5 @@ app.post("/api/assistant/query", async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Backend rodando em http://localhost:${PORT}`);
+  void restoreScheduledClientCampaigns();
 });

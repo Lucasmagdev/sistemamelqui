@@ -5,16 +5,7 @@ import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
 import { useI18n } from '@/contexts/I18nContext';
-import { extractPhoneDigits, normalizePhoneInput } from '@/lib/phone';
-
-const PHONE_DEFAULT_COUNTRY = '55';
-
-function toNormalizedPhone(value: string) {
-  const digits = extractPhoneDigits(value);
-  if (!digits) return '';
-  if (digits.length === 10 || digits.length === 11) return `+${PHONE_DEFAULT_COUNTRY}${digits}`;
-  return `+${digits}`;
-}
+import { formatPhoneForDisplay, inferPhoneCountry, normalizePhoneInput, toStoragePhone } from '@/lib/phone';
 
 export default function CadastroPage() {
   const navigate = useNavigate();
@@ -35,7 +26,8 @@ export default function CadastroPage() {
     e.preventDefault();
     setLoading(true);
     const emailNormalizado = email.trim().toLowerCase();
-    const telefoneNormalizado = toNormalizedPhone(telefone);
+    const telefoneNormalizado = toStoragePhone(telefone);
+    const pais = inferPhoneCountry(telefone) || (locale === 'en' ? 'USA' : 'Brasil');
     // 1. Cria usuário no Supabase Auth
     const { data: authData, error: authError } = await supabase.auth.signUp({
       email: emailNormalizado,
@@ -58,7 +50,7 @@ export default function CadastroPage() {
       cidade: enderecoCidade,
       estado: enderecoEstado,
       cep: enderecoZip,
-      pais: 'USA',
+      pais,
       tenant_id: 1,
       auth_user_id,
       last_user_agent: navigator.userAgent,
@@ -94,7 +86,7 @@ export default function CadastroPage() {
         const byPhone = await supabase
           .from('clients')
           .select('id')
-          .eq('telefone', telefoneNormalizado)
+          .in('telefone', [telefoneNormalizado, `+${telefoneNormalizado}`])
           .order('id', { ascending: false })
           .limit(1);
         if (byPhone.error) throw byPhone.error;
@@ -171,8 +163,17 @@ export default function CadastroPage() {
                 <input value={nome} onChange={e => setNome(e.target.value)} className={inputCls} required />
               </div>
               <div>
-                <label className={labelCls}>Telefone <span className="text-muted-foreground/60">(EUA: +1 XXX-XXX-XXXX)</span></label>
-                <input value={telefone} onChange={e => setTelefone(normalizePhoneInput(e.target.value))} className={inputCls} placeholder="+1 555-555-5555" required />
+                <label className={labelCls}>
+                  Telefone <span className="text-muted-foreground/60">(Use +55 para Brasil ou +1 para EUA)</span>
+                </label>
+                <input
+                  value={telefone}
+                  onChange={e => setTelefone(normalizePhoneInput(e.target.value))}
+                  onBlur={e => setTelefone(formatPhoneForDisplay(e.target.value))}
+                  className={inputCls}
+                  placeholder="+55 11 91234-5678 / +1 305-555-1212"
+                  required
+                />
               </div>
               <div>
                 <label className={labelCls}>E-mail</label>

@@ -3,6 +3,7 @@ import { Router } from "express";
 export function createOrdersRouter(deps) {
   const {
     supabase,
+    requireAssistantAdmin,
     createHttpError,
     parseNumber,
     roundQty,
@@ -27,8 +28,16 @@ export function createOrdersRouter(deps) {
   } = deps;
 
   const router = Router();
+  const requireAdmin = async (req, _res, next) => {
+    try {
+      req.adminActor = await requireAssistantAdmin(req);
+      next();
+    } catch (error) {
+      next(error);
+    }
+  };
 
-  router.get("/admin", async (req, res) => {
+  router.get("/admin", requireAdmin, async (req, res) => {
     const startedAt = Date.now();
     try {
       const startRaw = String(req.query?.start || req.query?.date_from || "").trim();
@@ -167,7 +176,7 @@ export function createOrdersRouter(deps) {
     }
   });
 
-  router.get("/:id/messages", async (req, res) => {
+  router.get("/:id/messages", requireAdmin, async (req, res) => {
     try {
       const { data, error } = await supabase
         .from("whatsapp_messages")
@@ -185,7 +194,7 @@ export function createOrdersRouter(deps) {
     }
   });
 
-  router.post("/:id/status", async (req, res) => {
+  router.post("/:id/status", requireAdmin, async (req, res) => {
     try {
       const orderId = req.params.id;
       const newStatus = Number(req.body?.newStatus);

@@ -5456,6 +5456,7 @@ app.patch("/api/admin/products/:id", async (req, res) => {
 
 app.use("/api/stock", createStockRouter({
   supabase,
+  requireAssistantAdmin,
   sanitizeInvoiceProductName,
   normalizeStockUnit,
   normalizeSearchText,
@@ -5480,6 +5481,7 @@ app.use("/api/stock", createStockRouter({
 
 app.use("/api/orders", createOrdersRouter({
   supabase,
+  requireAssistantAdmin,
   createHttpError,
   parseNumber,
   roundQty,
@@ -5505,6 +5507,7 @@ app.use("/api/orders", createOrdersRouter({
 
 app.use("/api/delivery-routes", createDeliveryRoutesRouter({
   supabase,
+  requireAssistantAdmin,
   createHttpError,
   resolveOrderCode,
   resolveDeliveryAddress,

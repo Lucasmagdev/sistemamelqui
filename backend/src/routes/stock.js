@@ -3,6 +3,7 @@ import { Router } from "express";
 export function createStockRouter(deps) {
   const {
     supabase,
+    requireAssistantAdmin,
     sanitizeInvoiceProductName,
     normalizeStockUnit,
     normalizeSearchText,
@@ -26,6 +27,14 @@ export function createStockRouter(deps) {
   } = deps;
 
   const router = Router();
+  router.use(async (req, _res, next) => {
+    try {
+      req.adminActor = await requireAssistantAdmin(req);
+      next();
+    } catch (error) {
+      next(error);
+    }
+  });
 
   router.post("/products/create-from-invoice", async (req, res) => {
     try {

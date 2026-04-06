@@ -6,8 +6,6 @@ import { backendRequest } from "@/lib/backendClient";
 import { Modal } from "@/components/ui/modal";
 import { Button } from "@/components/ui/button";
 
-const backendBaseUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
-
 const shouldSendStatusWhatsApp = (previousStatus: number, newStatus: number) =>
   (previousStatus === 0 && newStatus === 1) ||
   (previousStatus === 3 && newStatus === 4) ||
@@ -191,18 +189,10 @@ export const OrderCard: React.FC<OrderCardProps> = ({ order, onStatusChange }) =
     const previousStatus = status;
 
     try {
-      const response = await fetch(`${backendBaseUrl}/api/orders/${order.id}/status`, {
+      const result = await backendRequest<any>(`/api/orders/${order.id}/status`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
         body: JSON.stringify({ newStatus }),
       });
-
-      const result = await response.json();
-      if (!response.ok) {
-        throw new Error(result?.error || "Falha ao atualizar status do pedido.");
-      }
 
       setStatus(newStatus);
       setPrepOpen(newStatus === 2);

@@ -83,6 +83,7 @@ function applyOrdersAdminFilters(query, {
 export function createDeliveryRoutesRouter(deps) {
   const {
     supabase,
+    requireAssistantAdmin,
     createHttpError,
     resolveOrderCode,
     resolveDeliveryAddress,
@@ -91,6 +92,14 @@ export function createDeliveryRoutesRouter(deps) {
   } = deps;
 
   const router = Router();
+  const requireAdmin = async (req, _res, next) => {
+    try {
+      req.adminActor = await requireAssistantAdmin(req);
+      next();
+    } catch (error) {
+      next(error);
+    }
+  };
   let cachedOrderItemsOrderColumn = null;
   let cachedOrdersClientColumn = null;
 
@@ -457,7 +466,7 @@ export function createDeliveryRoutesRouter(deps) {
     return result.data || null;
   };
 
-  router.get("/admin/current", async (req, res) => {
+  router.get("/admin/current", requireAdmin, async (req, res) => {
     try {
       const batch = await loadLatestBatch();
       if (!batch) {
@@ -476,7 +485,7 @@ export function createDeliveryRoutesRouter(deps) {
     }
   });
 
-  router.post("/admin/batches", async (req, res) => {
+  router.post("/admin/batches", requireAdmin, async (req, res) => {
     try {
       const routeDate = normalizeText(req.body?.routeDate, new Date().toISOString().slice(0, 10));
       const label = normalizeText(req.body?.label, `Rota ${routeDate}`);
@@ -916,7 +925,7 @@ export function createDeliveryRoutesRouter(deps) {
     }
   });
 
-  router.get("/admin/batches/:id/audit", async (req, res) => {
+  router.get("/admin/batches/:id/audit", requireAdmin, async (req, res) => {
     try {
       const batchId = Number(req.params.id);
       if (!Number.isFinite(batchId) || batchId <= 0) throw createHttpError(400, "ID de rota invalido.");

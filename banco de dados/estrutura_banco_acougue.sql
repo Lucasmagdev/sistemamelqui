@@ -15,7 +15,6 @@ CREATE TABLE users (
   id SERIAL PRIMARY KEY,
   nome VARCHAR(100) NOT NULL,
   email VARCHAR(100) UNIQUE NOT NULL,
-  senha VARCHAR(200) NOT NULL,
   tipo VARCHAR(20) NOT NULL,
   tenant_id INTEGER REFERENCES tenants(id)
 );
@@ -109,9 +108,9 @@ CREATE TABLE settings (
 -- Inserção do tenant padrão para evitar erro de chave estrangeira
 INSERT INTO tenants (nome, cnpj, endereco, contato) VALUES ('Tenant Padrão', '00.000.000/0000-00', 'Endereço Exemplo', 'Contato Exemplo');
 
-INSERT INTO users (nome, email, senha, tipo, tenant_id) VALUES
-  ('Administrador', 'admin@acougue.com', 'admin123', 'admin', 1),
-  ('Usuário Comum', 'usuario@acougue.com', 'usuario123', 'comum', 1);
+INSERT INTO users (nome, email, tipo, tenant_id) VALUES
+  ('Administrador', 'admin@acougue.com', 'admin', 1),
+  ('Usuário Comum', 'usuario@acougue.com', 'comum', 1);
 
 -- Clientes de exemplo para testes
 INSERT INTO clients (nome, documento, endereco, telefone, email, tenant_id) VALUES

@@ -116,7 +116,6 @@ export default function CadastroPage() {
     const userPayload = {
       nome,
       email: emailNormalizado,
-      senha,
       tipo: 'cliente',
       tenant_id: 1,
       auth_user_id,
@@ -124,7 +123,12 @@ export default function CadastroPage() {
     const { error: userError } = await supabase.from('users').insert([userPayload]);
     setLoading(false);
     if (userError) {
-      toast.error('Cliente cadastrado, mas erro ao vincular usuário: ' + userError.message);
+      const message = String(userError.message || '');
+      if (message.toLowerCase().includes('senha')) {
+        toast.error('Cliente cadastrado, mas o banco ainda exige a coluna senha em users. Execute a migration de remocao de senha e tente novamente.');
+      } else {
+        toast.error('Cliente cadastrado, mas erro ao vincular usuário: ' + userError.message);
+      }
       return;
     }
     toast.success('Cadastro realizado com sucesso! Faça login.');

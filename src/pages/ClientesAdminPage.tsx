@@ -7,9 +7,10 @@ import { Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { Skeleton } from "@/components/ui/skeleton";
 import { backendRequest } from "@/lib/backendClient";
+import { readFileAsDataUrl } from "@/lib/fileToDataUrl";
 import { supabase } from "@/lib/supabaseClient";
 import { useAdminClientsQuery } from "@/hooks/useAdminQueries";
-import { CalendarClock, CheckCircle2, Download, LoaderCircle, Mail, MessageSquareText, Phone, RefreshCw, Star, Users } from "lucide-react";
+import { CalendarClock, CheckCircle2, Download, ImagePlus, LoaderCircle, Mail, MessageSquareText, Phone, RefreshCw, Star, Trash2, Users } from "lucide-react";
 import { toast } from "sonner";
 
 type SortField = "nome" | "email" | "vip" | "pedidos";
@@ -77,6 +78,7 @@ type CampaignPreview = {
     country: string | null;
   }>;
   previewText: string;
+  mediaType?: "text" | "image";
 };
 
 type CampaignSendResponse = {
@@ -185,6 +187,9 @@ export default function ClientesAdminPage() {
   const [campaignWindowEnabled, setCampaignWindowEnabled] = useState(false);
   const [campaignWindowStart, setCampaignWindowStart] = useState("09:00");
   const [campaignWindowEnd, setCampaignWindowEnd] = useState("18:00");
+  const [campaignImageBase64, setCampaignImageBase64] = useState<string | null>(null);
+  const [campaignImageFileName, setCampaignImageFileName] = useState("");
+  const [campaignImageMimeType, setCampaignImageMimeType] = useState("");
   const [activeCampaignId, setActiveCampaignId] = useState<number | null>(() => {
     if (typeof window === "undefined") return null;
     const raw = window.localStorage.getItem(ACTIVE_CAMPAIGN_STORAGE_KEY);
@@ -232,7 +237,37 @@ export default function ClientesAdminPage() {
     country: campaignCountry,
     onlyWithPhone: campaignOnlyWithPhone,
     message: campaignMessage,
+    imageBase64: campaignImageBase64,
+    imageFileName: campaignImageFileName || null,
+    imageMimeType: campaignImageMimeType || null,
   });
+
+  const handleCampaignImageChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFile = event.target.files?.[0];
+    if (!selectedFile) {
+      setCampaignImageBase64(null);
+      setCampaignImageFileName("");
+      setCampaignImageMimeType("");
+      return;
+    }
+
+    try {
+      const dataUrl = await readFileAsDataUrl(selectedFile);
+      setCampaignImageBase64(dataUrl);
+      setCampaignImageFileName(selectedFile.name);
+      setCampaignImageMimeType(selectedFile.type || "image/jpeg");
+    } catch (error: any) {
+      toast.error(error.message || "Erro ao preparar imagem da campanha");
+    } finally {
+      event.target.value = "";
+    }
+  };
+
+  const clearCampaignImage = () => {
+    setCampaignImageBase64(null);
+    setCampaignImageFileName("");
+    setCampaignImageMimeType("");
+  };
 
   const previewMutation = useMutation({
     mutationFn: () =>
@@ -383,7 +418,7 @@ export default function ClientesAdminPage() {
 
   useEffect(() => {
     setCampaignPreview(null);
-  }, [campaignSegment, campaignCountry, campaignOnlyWithPhone, campaignMessage, search, withOrders]);
+  }, [campaignSegment, campaignCountry, campaignOnlyWithPhone, campaignMessage, campaignImageBase64, search, withOrders]);
 
   const currentCampaign = campaignStatusQuery.data?.campaign;
   const currentCampaignStatus = currentCampaign?.status || null;
@@ -553,6 +588,35 @@ export default function ClientesAdminPage() {
               <div className="rounded-xl border border-border/60 bg-background/35 p-3 text-xs text-muted-foreground">
                 Variavel disponivel agora: <code>{`{nome}`}</code>
               </div>
+              <div className="rounded-2xl border border-dashed border-border/70 bg-background/20 p-4">
+                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <div className="text-sm font-semibold text-foreground">Imagem opcional</div>
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      Se houver imagem, a legenda enviada sera o texto da mensagem acima.
+                    </div>
+                  </div>
+                  <label className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-border px-3 py-2 text-sm text-foreground transition hover:border-primary/40">
+                    <ImagePlus className="h-4 w-4 text-primary" />
+                    Selecionar imagem
+                    <input type="file" accept="image/*" className="hidden" onChange={handleCampaignImageChange} />
+                  </label>
+                </div>
+                {campaignImageBase64 ? (
+                  <div className="mt-4 space-y-3">
+                    <div className="overflow-hidden rounded-2xl border border-border/70 bg-black/30">
+                      <img src={campaignImageBase64} alt={campaignImageFileName || "Imagem da campanha"} className="max-h-72 w-full object-contain" />
+                    </div>
+                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border/60 bg-background/40 px-3 py-2 text-xs text-muted-foreground">
+                      <span>{campaignImageFileName || "Imagem pronta para envio"}</span>
+                      <Button type="button" size="sm" variant="outline" onClick={clearCampaignImage}>
+                        <Trash2 className="mr-2 h-3.5 w-3.5" />
+                        Remover imagem
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
             </div>
           </div>
         ) : null}
@@ -602,9 +666,23 @@ export default function ClientesAdminPage() {
                     </div>
 
                     <div>
-                      <div className="mb-2 text-sm font-semibold text-foreground">Texto final</div>
-                      <div className="rounded-xl border border-border/70 bg-muted/20 p-4 text-sm whitespace-pre-wrap">
-                        {campaignPreview.previewText || campaignMessage}
+                      <div className="mb-2 text-sm font-semibold text-foreground">Mensagem final</div>
+                      <div className="rounded-xl border border-border/70 bg-muted/20 p-4">
+                        {campaignImageBase64 ? (
+                          <div className="space-y-3">
+                            <img src={campaignImageBase64} alt={campaignImageFileName || "Preview da campanha"} className="max-h-80 w-full rounded-xl object-contain" />
+                            <div className="text-xs uppercase tracking-wide text-muted-foreground">
+                              Tipo de envio: {campaignPreview.mediaType === "image" ? "Imagem + legenda" : "Imagem + legenda"}
+                            </div>
+                            <div className="text-sm whitespace-pre-wrap text-foreground">
+                              {campaignPreview.previewText || campaignMessage}
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="text-sm whitespace-pre-wrap text-foreground">
+                            {campaignPreview.previewText || campaignMessage}
+                          </div>
+                        )}
                       </div>
                     </div>
 

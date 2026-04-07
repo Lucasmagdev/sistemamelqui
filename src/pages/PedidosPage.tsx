@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, Clock, Copy, DollarSign, Download, ExternalLink, Plus, Route, ShoppingCart } from "lucide-react";
+import { CheckCircle2, Clock, Copy, DollarSign, Download, ExternalLink, FileText, Plus, Printer, Route, ShoppingCart, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
@@ -9,6 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { OrderList, Order } from "@/components/dashboard/OrderList";
 import { useAdminDeliveryRouteCurrentQuery, useAdminOrdersQuery } from "@/hooks/useAdminQueries";
 import { backendRequest, BackendRequestError } from "@/lib/backendClient";
+import { downloadOrderDocumentPdf, printOrderDocument } from "@/lib/orderDocument";
 import { toast } from "sonner";
 
 const PAGE_SIZE = 10;
@@ -38,6 +39,11 @@ type OrdersResponse = {
     totalItems: number;
     hasNextPage: boolean;
   };
+};
+
+type OrderDetailResponse = {
+  ok: true;
+  detail: any;
 };
 
 type DeliveryRouteOrderAudit = {
@@ -104,6 +110,8 @@ const statusLabel = (status: number) => {
       return "Saiu para entrega";
     case 5:
       return "Concluido";
+    case 6:
+      return "Cancelado";
     default:
       return "Desconhecido";
   }
@@ -122,6 +130,7 @@ const STATUS_BADGE_CLASS: Record<number, string> = {
   3: "bg-teal-500/15 text-teal-400 border-teal-500/20",
   4: "bg-purple-500/15 text-purple-400 border-purple-500/20",
   5: "bg-emerald-500/15 text-emerald-400 border-emerald-500/20",
+  6: "bg-rose-500/15 text-rose-400 border-rose-500/20",
 };
 
 const deliveryEventLabel = (eventType: string) => {
@@ -241,6 +250,36 @@ export default function PedidosPage() {
     anchor.download = "pedidos-admin.csv";
     anchor.click();
     URL.revokeObjectURL(url);
+  };
+
+  const withDocument = async (orderId: number | string, action: "print" | "pdf") => {
+    try {
+      const response = await backendRequest<OrderDetailResponse>(`/api/orders/${orderId}/detail`);
+      if (action === "print") {
+        printOrderDocument(response.detail);
+      } else {
+        await downloadOrderDocumentPdf(response.detail);
+      }
+    } catch (error: any) {
+      toast.error(error.message || "Erro ao gerar documento do pedido.");
+    }
+  };
+
+  const cancelOrder = async (orderId: number | string) => {
+    const reason = window.prompt("Motivo do cancelamento (opcional):") || "";
+    try {
+      await backendRequest(`/api/orders/${orderId}/cancel`, {
+        method: "POST",
+        body: JSON.stringify({ reason }),
+      });
+      toast.success("Pedido cancelado com sucesso.");
+      queryClient.invalidateQueries({ queryKey: ["admin", "orders"] });
+      queryClient.invalidateQueries({ queryKey: ["admin", "operational-report"] });
+      queryClient.invalidateQueries({ queryKey: ["admin", "stock-products"] });
+      queryClient.invalidateQueries({ queryKey: ["admin", "delivery-route-current"] });
+    } catch (error: any) {
+      toast.error(error.message || "Erro ao cancelar pedido.");
+    }
   };
 
   const limparFiltros = () => {
@@ -505,6 +544,7 @@ export default function PedidosPage() {
               <option value="3">Pronto</option>
               <option value="4">Saiu para entrega</option>
               <option value="5">Concluido</option>
+              <option value="6">Cancelado</option>
             </select>
           </div>
           <div className="space-y-1">
@@ -556,6 +596,15 @@ export default function PedidosPage() {
               queryClient.invalidateQueries({ queryKey: ["admin", "stock-products"] });
               queryClient.invalidateQueries({ queryKey: ["admin", "delivery-route-current"] });
             }}
+            onPrintDocument={(orderId) => {
+              void withDocument(orderId, "print");
+            }}
+            onDownloadDocument={(orderId) => {
+              void withDocument(orderId, "pdf");
+            }}
+            onCancelOrder={(orderId) => {
+              void cancelOrder(orderId);
+            }}
           />
         </section>
       ) : null}
@@ -573,13 +622,14 @@ export default function PedidosPage() {
                 <th className="px-4 py-3">Data</th>
                 <th className="px-4 py-3 text-right">Valor</th>
                 <th className="px-4 py-3 text-center">Status</th>
+                <th className="px-4 py-3 text-right">Acoes</th>
               </tr>
             </thead>
             <tbody>
               {isInitialLoading ? (
                 Array.from({ length: 6 }).map((_, index) => (
                   <tr key={`orders-skeleton-${index}`} className="border-t border-border/60">
-                    {Array.from({ length: 8 }).map((__, cellIndex) => (
+                    {Array.from({ length: 9 }).map((__, cellIndex) => (
                       <td key={`orders-skeleton-${index}-${cellIndex}`} className="px-4 py-4">
                         <Skeleton className="h-5 w-full max-w-[140px]" />
                       </td>
@@ -588,7 +638,7 @@ export default function PedidosPage() {
                 ))
               ) : orders.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-4 py-12 text-center text-sm text-muted-foreground">
+                  <td colSpan={9} className="px-4 py-12 text-center text-sm text-muted-foreground">
                     Nenhum pedido encontrado com os filtros atuais.
                   </td>
                 </tr>
@@ -626,6 +676,24 @@ export default function PedidosPage() {
                       <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[10px] font-semibold ${STATUS_BADGE_CLASS[Number(order.status || 0)] || "bg-muted text-muted-foreground border-border"}`}>
                         {statusLabel(Number(order.status || 0))}
                       </span>
+                    </td>
+                    <td className="px-4 py-4 text-right">
+                      <div className="flex justify-end gap-2">
+                        <Button type="button" variant="outline" size="sm" onClick={() => void withDocument(order.id, "print")}>
+                          <Printer className="mr-2 h-4 w-4" />
+                          Imprimir
+                        </Button>
+                        <Button type="button" variant="outline" size="sm" onClick={() => void withDocument(order.id, "pdf")}>
+                          <FileText className="mr-2 h-4 w-4" />
+                          PDF
+                        </Button>
+                        {Number(order.status) !== 6 ? (
+                          <Button type="button" variant="outline" size="sm" onClick={() => void cancelOrder(order.id)}>
+                            <XCircle className="mr-2 h-4 w-4" />
+                            Cancelar
+                          </Button>
+                        ) : null}
+                      </div>
                     </td>
                   </tr>
                 ))

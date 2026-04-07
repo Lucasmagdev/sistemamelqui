@@ -38,6 +38,7 @@ const STATUS_LABELS: Record<number, string> = {
   3: 'Pronto',
   4: 'Em entrega',
   5: 'Concluido',
+  6: 'Cancelado',
 };
 
 const STATUS_COLORS: Record<number, string> = {
@@ -47,6 +48,7 @@ const STATUS_COLORS: Record<number, string> = {
   3: '#14b8a6',
   4: '#8b5cf6',
   5: '#22c55e',
+  6: '#f43f5e',
 };
 
 const STATUS_BADGE: Record<number, string> = {
@@ -56,6 +58,7 @@ const STATUS_BADGE: Record<number, string> = {
   3: 'bg-teal-500/15 text-teal-400 border-teal-500/20',
   4: 'bg-purple-500/15 text-purple-400 border-purple-500/20',
   5: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/20',
+  6: 'bg-rose-500/15 text-rose-400 border-rose-500/20',
 };
 
 const formatCurrency = (value: number) =>

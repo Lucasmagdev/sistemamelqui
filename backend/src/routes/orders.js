@@ -1,5 +1,35 @@
 import { Router } from "express";
 
+const OPTIONAL_CANCEL_COLUMNS = ["canceled_at", "canceled_by", "cancel_reason"];
+
+function isMissingColumnError(error, column) {
+  const message = String(error?.message || "");
+  return message.includes(`Could not find the '${column}' column`) ||
+    message.includes(`column "${column}" does not exist`) ||
+    message.includes(`schema cache`) && message.includes(column);
+}
+
+async function updateOrderWithFallback(supabase, orderId, patch) {
+  let payload = { ...(patch || {}) };
+
+  while (Object.keys(payload).length > 0) {
+    const { data, error } = await supabase
+      .from("orders")
+      .update(payload)
+      .eq("id", orderId)
+      .select("*")
+      .single();
+
+    if (!error) return { data, error: null };
+
+    const missingColumn = OPTIONAL_CANCEL_COLUMNS.find((column) => Object.prototype.hasOwnProperty.call(payload, column) && isMissingColumnError(error, column));
+    if (!missingColumn) return { data: null, error };
+    delete payload[missingColumn];
+  }
+
+  return supabase.from("orders").update({}).eq("id", orderId).select("*").single();
+}
+
 export function createOrdersRouter(deps) {
   const {
     supabase,
@@ -25,6 +55,10 @@ export function createOrdersRouter(deps) {
     normalizePhone,
     applyOrderStockExit,
     applyOrderStockReversal,
+    normalizePaymentMethod,
+    formatPaymentMethodLabel,
+    loadStoreBranding,
+    sendOrderConfirmedGroupNotification,
   } = deps;
 
   const router = Router();
@@ -35,6 +69,152 @@ export function createOrdersRouter(deps) {
     } catch (error) {
       next(error);
     }
+  };
+
+  const loadOrder = async (orderId) => {
+    const { data: order, error } = await supabase
+      .from("orders")
+      .select("*")
+      .eq("id", orderId)
+      .single();
+
+    if (error || !order) {
+      throw createHttpError(404, "Pedido nao encontrado.", error?.message || null);
+    }
+
+    return order;
+  };
+
+  const loadOrderClientCandidates = async (order) => {
+    const clientCandidates = [];
+    const candidateIds = new Set();
+    let clientError = null;
+    const clientId = order.cliente_id || order.client_id || null;
+    const orderEmail = order.email_cliente || order.email || null;
+
+    if (clientId) {
+      const clientByIdResult = await supabase.from("clients").select("*").eq("id", clientId).maybeSingle();
+      if (clientByIdResult.data) {
+        clientCandidates.push(clientByIdResult.data);
+        candidateIds.add(String(clientByIdResult.data.id));
+      }
+      clientError = clientByIdResult.error;
+    }
+
+    if (orderEmail) {
+      const clientByEmailResult = await supabase
+        .from("clients")
+        .select("*")
+        .eq("email", orderEmail)
+        .order("id", { ascending: false });
+
+      if (!clientError) clientError = clientByEmailResult.error;
+
+      for (const candidate of clientByEmailResult.data || []) {
+        const candidateKey = String(candidate.id);
+        if (candidateIds.has(candidateKey)) continue;
+        clientCandidates.push(candidate);
+        candidateIds.add(candidateKey);
+      }
+    }
+
+    return { clientCandidates, clientError };
+  };
+
+  const loadOrderDetail = async (orderId) => {
+    const order = await loadOrder(orderId);
+    const { clientCandidates } = await loadOrderClientCandidates(order);
+    const client = clientCandidates[0] || null;
+
+    let itemsResult = await supabase.from("order_items").select("*").eq("pedido_id", orderId).order("id", { ascending: true });
+    if (itemsResult.error && isMissingColumnError(itemsResult.error, "pedido_id")) {
+      itemsResult = await supabase.from("order_items").select("*").eq("order_id", orderId).order("id", { ascending: true });
+    }
+
+    if (itemsResult.error) {
+      throw createHttpError(500, "Erro ao carregar itens do pedido.", itemsResult.error.message);
+    }
+
+    const items = itemsResult.data || [];
+    const productIds = Array.from(new Set(items.map((item) => Number(item.produto_id || item.product_id)).filter(Boolean)));
+    const productsResult = productIds.length
+      ? await supabase.from("products").select("id, nome, nome_en, foto_url").in("id", productIds)
+      : { data: [], error: null };
+
+    if (productsResult.error) {
+      throw createHttpError(500, "Erro ao carregar produtos do pedido.", productsResult.error.message);
+    }
+
+    const productMap = new Map((productsResult.data || []).map((product) => [Number(product.id), product]));
+    const normalizedItems = items.map((item) => {
+      const productId = Number(item.produto_id || item.product_id || 0);
+      const product = productMap.get(productId);
+      const quantity = Number(item.quantidade ?? item.quantity ?? 0);
+      const unitPrice = Number(item.preco_unitario ?? item.unit_price ?? 0);
+      return {
+        id: item.id,
+        productId,
+        name: product?.nome || product?.nome_en || `Produto ${productId}`,
+        quantity,
+        unit: item.unidade || item.unit || "LB",
+        unitPrice,
+        totalPrice: roundQty(quantity * unitPrice, 2),
+        cutType: item.tipo_corte || null,
+        notes: item.observacoes || null,
+        imageUrl: product?.foto_url || null,
+      };
+    });
+
+    const branding = await loadStoreBranding(Number(order.tenant_id || 1));
+    return {
+      branding,
+      order,
+      client,
+      orderCode: resolveOrderCode(order),
+      paymentMethodLabel: formatPaymentMethodLabel(order.payment_method, normalizeLocale(order.locale || "pt")),
+      deliveryAddress: client ? resolveDeliveryAddress(client) : null,
+      items: normalizedItems,
+    };
+  };
+
+  const transitionOrderStatus = async ({ order, newStatus, actorName, cancelReason = null }) => {
+    const orderId = order.id;
+    const previousStatus = Number(order.status ?? 0);
+    let stock = { applied: false, reason: "not_required", changedProducts: [] };
+
+    if (previousStatus !== status.CONCLUIDO && newStatus === status.CONCLUIDO) {
+      stock = await applyOrderStockExit(orderId);
+    }
+
+    const needsReversal =
+      previousStatus === status.CONCLUIDO &&
+      (newStatus < status.CONCLUIDO || newStatus === status.CANCELADO);
+
+    if (needsReversal) {
+      stock = await applyOrderStockReversal(orderId, `status_${previousStatus}_to_${newStatus}`);
+    }
+
+    const patch = {
+      status: newStatus,
+      canceled_at: newStatus === status.CANCELADO ? new Date().toISOString() : null,
+      canceled_by: newStatus === status.CANCELADO ? actorName || null : null,
+      cancel_reason: newStatus === status.CANCELADO ? cancelReason || null : null,
+    };
+
+    const { data: updatedOrder, error: updateError } = await updateOrderWithFallback(supabase, orderId, patch);
+
+    if (updateError || !updatedOrder) {
+      if (previousStatus !== status.CONCLUIDO && newStatus === status.CONCLUIDO && stock.applied) {
+        try {
+          await applyOrderStockReversal(orderId, "cleanup_after_order_status_update_failure");
+        } catch {
+          // noop
+        }
+      }
+      throw createHttpError(500, "Erro ao atualizar status do pedido.", updateError?.message || null);
+    }
+
+    return { previousStatus, updatedOrder, stock };
   };
 
   router.get("/admin", requireAdmin, async (req, res) => {
@@ -115,7 +295,7 @@ export function createOrdersRouter(deps) {
         tenant_id: Number(req.body?.tenantId || 1),
         locale: normalizeLocale(req.body?.locale || client.preferred_locale || "pt"),
         source: "delivery",
-        payment_method: req.body?.paymentMethod || req.body?.pagamento || null,
+        payment_method: normalizePaymentMethod(req.body?.paymentMethod || req.body?.pagamento || null),
         change_for: parseLooseNumber(req.body?.changeFor || req.body?.trocoPara, null),
         delivery_mode: String(req.body?.deliveryMode || req.body?.modoEntrega || "entrega").toLowerCase() === "retirada" ? "retirada" : "entrega",
         delivery_date: req.body?.deliveryDate || req.body?.dataEntrega || null,
@@ -176,6 +356,20 @@ export function createOrdersRouter(deps) {
     }
   });
 
+  router.get("/:id/detail", requireAdmin, async (req, res) => {
+    try {
+      const orderId = Number(req.params.id);
+      if (!orderId) return res.status(400).json({ error: "ID do pedido invalido." });
+      const detail = await loadOrderDetail(orderId);
+      return res.json({ ok: true, detail });
+    } catch (error) {
+      return res.status(error?.status || 500).json({
+        error: error?.message || "Erro ao carregar detalhe do pedido.",
+        detail: error?.detail || null,
+      });
+    }
+  });
+
   router.get("/:id/messages", requireAdmin, async (req, res) => {
     try {
       const { data, error } = await supabase
@@ -194,54 +388,53 @@ export function createOrdersRouter(deps) {
     }
   });
 
+  router.post("/:id/cancel", requireAdmin, async (req, res) => {
+    try {
+      const orderId = req.params.id;
+      const order = await loadOrder(orderId);
+      const actorName = req.adminActor?.name || "admin";
+      const cancelReason = String(req.body?.reason || "").trim() || null;
+      const { previousStatus, updatedOrder, stock } = await transitionOrderStatus({
+        order,
+        newStatus: status.CANCELADO,
+        actorName,
+        cancelReason,
+      });
+
+      return res.json({
+        ok: true,
+        previousStatus,
+        newStatus: status.CANCELADO,
+        stock,
+        order: updatedOrder,
+      });
+    } catch (error) {
+      return res.status(error?.status || 500).json({
+        error: error?.message || "Erro ao cancelar pedido.",
+        detail: error?.detail || null,
+      });
+    }
+  });
+
   router.post("/:id/status", requireAdmin, async (req, res) => {
     try {
       const orderId = req.params.id;
       const newStatus = Number(req.body?.newStatus);
 
-      if (!Number.isInteger(newStatus) || newStatus < 0 || newStatus > 5) {
-        return res.status(400).json({ error: "newStatus invalido. Use inteiro entre 0 e 5." });
+      if (!Number.isInteger(newStatus) || newStatus < 0 || newStatus > status.CANCELADO) {
+        return res.status(400).json({ error: `newStatus invalido. Use inteiro entre 0 e ${status.CANCELADO}.` });
       }
 
-      const { data: order, error: orderError } = await supabase
-        .from("orders")
-        .select("*")
-        .eq("id", orderId)
-        .single();
+      const order = await loadOrder(orderId);
+      const actorName = req.adminActor?.name || "admin";
+      const { previousStatus, updatedOrder, stock } = await transitionOrderStatus({
+        order,
+        newStatus,
+        actorName,
+      });
 
-      if (orderError || !order) {
-        return res.status(404).json({ error: "Pedido nao encontrado.", detail: orderError?.message || null });
-      }
-
-      const previousStatus = Number(order.status ?? 0);
-
-      let stock = { applied: false, reason: "not_required", changedProducts: [] };
-
-      if (previousStatus !== status.CONCLUIDO && newStatus === status.CONCLUIDO) {
-        stock = await applyOrderStockExit(orderId);
-      }
-
-      if (previousStatus === status.CONCLUIDO && newStatus < status.CONCLUIDO) {
-        stock = await applyOrderStockReversal(orderId, `status_${previousStatus}_to_${newStatus}`);
-      }
-
-      const { error: updateError } = await supabase.from("orders").update({ status: newStatus }).eq("id", orderId);
-
-      if (updateError) {
-        if (previousStatus !== status.CONCLUIDO && newStatus === status.CONCLUIDO && stock.applied) {
-          try {
-            await applyOrderStockReversal(orderId, "cleanup_after_order_status_update_failure");
-          } catch {
-            // noop
-          }
-        }
-        return res.status(500).json({ error: `Erro ao atualizar status: ${updateError.message}` });
-      }
-
-      const clientId = order.cliente_id || order.client_id || null;
-      const orderEmail = order.email_cliente || order.email || null;
-      const orderCode = resolveOrderCode(order);
-      const orderTotal = order.valor_total ?? order.total ?? null;
+      const orderCode = resolveOrderCode(updatedOrder);
+      const orderTotal = updatedOrder.valor_total ?? updatedOrder.total ?? null;
       const expectedEventType =
         previousStatus === status.RECEBIDO && newStatus === status.CONFIRMADO
           ? "order_confirmed_client"
@@ -251,41 +444,13 @@ export function createOrdersRouter(deps) {
               ? "order_review_client"
               : null;
 
-      const clientCandidates = [];
-      const candidateIds = new Set();
-      let clientError = null;
-
-      if (clientId) {
-        const clientByIdResult = await supabase.from("clients").select("*").eq("id", clientId).maybeSingle();
-        if (clientByIdResult.data) {
-          clientCandidates.push(clientByIdResult.data);
-          candidateIds.add(String(clientByIdResult.data.id));
-        }
-        clientError = clientByIdResult.error;
-      }
-
-      if (orderEmail) {
-        const clientByEmailResult = await supabase
-          .from("clients")
-          .select("*")
-          .eq("email", orderEmail)
-          .order("id", { ascending: false });
-
-        if (!clientError) clientError = clientByEmailResult.error;
-
-        for (const candidate of clientByEmailResult.data || []) {
-          const candidateKey = String(candidate.id);
-          if (candidateIds.has(candidateKey)) continue;
-          clientCandidates.push(candidate);
-          candidateIds.add(candidateKey);
-        }
-      }
-
+      const { clientCandidates, clientError } = await loadOrderClientCandidates(updatedOrder);
       let notification = { sent: false, queued: false, reason: "missing-client" };
+      let groupNotification = { sent: false, queued: false, reason: "not_required" };
 
       if (clientCandidates.length > 0 && !clientError) {
         for (const client of clientCandidates) {
-          const locale = resolveMessageLocale(order, client);
+          const locale = resolveMessageLocale(updatedOrder, client);
           const orderItems = await fetchOrderItems(orderId, locale);
           const deliveryAddress = resolveDeliveryAddress(client);
           const normalizedPhone = normalizePhone(client.telefone);
@@ -293,7 +458,7 @@ export function createOrdersRouter(deps) {
           notification = await sendStatusNotification({
             previousStatus,
             newStatus,
-            tenantId: order.tenant_id || client.tenant_id || 1,
+            tenantId: updatedOrder.tenant_id || client.tenant_id || 1,
             clientName: client.nome,
             clientPhone: client.telefone,
             orderCode,
@@ -301,7 +466,7 @@ export function createOrdersRouter(deps) {
             orderTotal,
             locale,
             deliveryAddress,
-            paymentMethod: order.payment_method || null,
+            paymentMethod: updatedOrder.payment_method || null,
           });
 
           if (expectedEventType && notification?.reason !== "no-notification-transition") {
@@ -320,18 +485,18 @@ export function createOrdersRouter(deps) {
               },
               sendResult: notification?.queued
                 ? {
-                    ok: true,
-                    messageId: notification.messageId,
-                    zaapId: notification.zaapId,
-                    detail: notification.deliveryStatus || "pending",
-                  }
+                  ok: true,
+                  messageId: notification.messageId,
+                  zaapId: notification.zaapId,
+                  detail: notification.deliveryStatus || "pending",
+                }
                 : {
-                    ok: false,
-                    reason: notification?.reason || "send-failed",
-                    detail: notification?.detail || null,
-                    messageId: notification?.messageId || null,
-                    zaapId: notification?.zaapId || null,
-                  },
+                  ok: false,
+                  reason: notification?.reason || "send-failed",
+                  detail: notification?.detail || null,
+                  messageId: notification?.messageId || null,
+                  zaapId: notification?.zaapId || null,
+                },
             });
           }
 
@@ -339,7 +504,7 @@ export function createOrdersRouter(deps) {
             await persistWhatsAppAttempt({
               orderId,
               target: "client",
-              eventType: "order_confirmed_client_veo_qr",
+              eventType: "order_confirmed_client_vemo_qr",
               destinationPhone: notification.qr.destinationPhone || normalizedPhone,
               messageText: notification.qr.caption || null,
               payload: {
@@ -348,33 +513,69 @@ export function createOrdersRouter(deps) {
                 locale,
                 clientId: client.id,
                 orderCode,
-                paymentMethod: order.payment_method || null,
+                paymentMethod: updatedOrder.payment_method || null,
                 paymentLink: notification.qr.paymentLink || null,
                 mediaType: "image",
               },
               sendResult: notification.qr.queued
                 ? {
-                    ok: true,
-                    messageId: notification.qr.messageId,
-                    zaapId: notification.qr.zaapId,
-                    detail: notification.qr.detail || "pending",
-                  }
+                  ok: true,
+                  messageId: notification.qr.messageId,
+                  zaapId: notification.qr.zaapId,
+                  detail: notification.qr.detail || "pending",
+                }
                 : {
-                    ok: false,
-                    reason: notification.qr.reason || "send-failed",
-                    detail: notification.qr.detail || null,
-                    messageId: notification.qr.messageId || null,
-                    zaapId: notification.qr.zaapId || null,
-                  },
+                  ok: false,
+                  reason: notification.qr.reason || "send-failed",
+                  detail: notification.qr.detail || null,
+                  messageId: notification.qr.messageId || null,
+                  zaapId: notification.qr.zaapId || null,
+                },
+            });
+          }
+
+          if (previousStatus === status.RECEBIDO && newStatus === status.CONFIRMADO) {
+            groupNotification = await sendOrderConfirmedGroupNotification({
+              tenantId: updatedOrder.tenant_id || client.tenant_id || 1,
+              orderCode,
+              clientName: client.nome,
+              city: client.cidade || null,
+              paymentMethod: updatedOrder.payment_method || null,
+              orderTotal,
+              orderItems,
+            });
+
+            await persistWhatsAppAttempt({
+              orderId,
+              target: "group",
+              eventType: "order_confirmed_group",
+              destinationPhone: groupNotification.groupId || null,
+              messageText: groupNotification.messageText || null,
+              payload: {
+                orderCode,
+                groupName: groupNotification.groupName || null,
+              },
+              sendResult: groupNotification.queued
+                ? {
+                  ok: true,
+                  messageId: groupNotification.messageId,
+                  zaapId: groupNotification.zaapId,
+                  detail: "pending",
+                }
+                : {
+                  ok: false,
+                  reason: groupNotification.reason || "group-send-failed",
+                  detail: groupNotification.detail || null,
+                },
             });
           }
 
           if (notification?.queued || notification?.sent) {
-            return res.json({ ok: true, previousStatus, newStatus, locale, stock, notification });
+            return res.json({ ok: true, previousStatus, newStatus, locale, stock, notification, groupNotification, order: updatedOrder });
           }
 
           if (!["missing-phone", "phone-not-on-whatsapp"].includes(notification?.reason || "")) {
-            return res.json({ ok: true, previousStatus, newStatus, locale, stock, notification });
+            return res.json({ ok: true, previousStatus, newStatus, locale, stock, notification, groupNotification, order: updatedOrder });
           }
         }
       }
@@ -399,9 +600,11 @@ export function createOrdersRouter(deps) {
         ok: true,
         previousStatus,
         newStatus,
-        locale: normalizeLocale(order.locale || "pt"),
+        locale: normalizeLocale(updatedOrder.locale || "pt"),
         stock,
         notification,
+        groupNotification,
+        order: updatedOrder,
       });
     } catch (error) {
       return res.status(error?.status || 500).json({

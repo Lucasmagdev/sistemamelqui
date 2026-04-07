@@ -31,7 +31,8 @@ const getAllowedSaleUnits = (stockUnit: string | undefined | null): Unit[] =>
 const paymentMethodLabel = (value: string | undefined | null) => {
   switch (value) {
     case "veo":
-      return "Veo";
+    case "vemo":
+      return "Vemo";
     default:
       return "Nao informado";
   }
@@ -131,7 +132,7 @@ export default function VendasPage() {
   const [end, setEnd] = useState(today);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [saleDatetime, setSaleDatetime] = useState(new Date().toISOString().slice(0, 16));
-  const [paymentMethod, setPaymentMethod] = useState("veo");
+  const [paymentMethod, setPaymentMethod] = useState("vemo");
   const [notes, setNotes] = useState("");
   const [draftItems, setDraftItems] = useState<SaleDraftItem[]>([createDraftItem()]);
   const [editingSaleId, setEditingSaleId] = useState<number | null>(null);
@@ -369,7 +370,7 @@ export default function VendasPage() {
       }),
     onSuccess: () => {
       setNotes("");
-      setPaymentMethod("veo");
+      setPaymentMethod("vemo");
       setSaleDatetime(new Date().toISOString().slice(0, 16));
       setDraftItems([createDraftItem()]);
       setEditingSaleId(null);
@@ -399,7 +400,7 @@ export default function VendasPage() {
   const startSaleEdit = (sale: any) => {
     setEditingSaleId(Number(sale.id));
     setSaleDatetime(sale.sale_datetime ? new Date(sale.sale_datetime).toISOString().slice(0, 16) : new Date().toISOString().slice(0, 16));
-    setPaymentMethod(sale.payment_method || "veo");
+    setPaymentMethod(sale.payment_method || "vemo");
     setNotes(sale.notes || "");
     setDraftItems(
       (sale.items || []).map((item: any) => ({
@@ -415,7 +416,7 @@ export default function VendasPage() {
   const resetSaleForm = () => {
     setEditingSaleId(null);
     setNotes("");
-    setPaymentMethod("veo");
+    setPaymentMethod("vemo");
     setSaleDatetime(new Date().toISOString().slice(0, 16));
     setDraftItems([createDraftItem()]);
   };
@@ -512,7 +513,7 @@ export default function VendasPage() {
               <div>
                 <label className="mb-1.5 block text-sm font-medium text-muted-foreground">Forma de pagamento</label>
                 <select value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value)} className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
-                  <option value="veo">Veo</option>
+                  <option value="vemo">Vemo</option>
                 </select>
               </div>
             </div>

@@ -35,5 +35,6 @@ export const config = Object.freeze({
     PRONTO: 3,
     ENTREGA: 4,
     CONCLUIDO: 5,
+    CANCELADO: 6,
   }),
 });

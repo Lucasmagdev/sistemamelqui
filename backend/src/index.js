@@ -351,8 +351,22 @@ const ZAPI_MESSAGE_SETTINGS_KEYS = {
   out_for_delivery: "zapi_template_out_for_delivery",
 };
 
-const VEO_QR_SETTING_KEY = "veo_qr_code_base64";
-const VEO_PAYMENT_LINK_SETTING_KEY = "veo_payment_link";
+const VEMO_QR_SETTING_KEYS = ["vemo_qr_code_base64", "veo_qr_code_base64"];
+const VEMO_PAYMENT_LINK_SETTING_KEYS = ["vemo_payment_link", "veo_payment_link"];
+const STORE_BRANDING_SETTINGS_KEYS = {
+  companyName: "storefront_company_name",
+  primaryColor: "storefront_primary_color",
+  logoUrl: "storefront_logo_url",
+};
+const ZAPI_GROUP_SETTINGS_KEYS = {
+  orderConfirmedGroupId: "zapi_group_order_confirmed_id",
+  orderConfirmedGroupName: "zapi_group_order_confirmed_name",
+};
+const DEFAULT_STORE_BRANDING = {
+  nomeEmpresa: "Sabor Imperial",
+  corPrimaria: "#D4AF37",
+  logoUrl: "/brand/logo-sabor-imperial.png",
+};
 
 const ZAPI_TEMPLATE_PLACEHOLDERS = [
   "{{nome}}",
@@ -419,6 +433,130 @@ function parseJsonSafe(value, fallback = null) {
   } catch {
     return fallback;
   }
+}
+
+function normalizePaymentMethod(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) return null;
+  if (raw === "veo" || raw === "vemo") return "vemo";
+  return raw;
+}
+
+function isWhatsAppGroupId(value) {
+  return /@g\.us$/i.test(String(value || "").trim());
+}
+
+async function loadSettingRow(tenantId, keys = []) {
+  const settingKeys = Array.from(new Set((Array.isArray(keys) ? keys : [keys]).map((key) => String(key || "").trim()).filter(Boolean)));
+  if (!settingKeys.length) return null;
+
+  const { data, error } = await supabase
+    .from("settings")
+    .select("id, chave, valor, tenant_id")
+    .in("chave", settingKeys)
+    .or(`tenant_id.eq.${tenantId},tenant_id.is.null`)
+    .order("tenant_id", { ascending: false })
+    .order("id", { ascending: false });
+
+  if (error) {
+    throw createHttpError(500, "Erro ao carregar configuracao.", error.message);
+  }
+
+  for (const key of settingKeys) {
+    const row = (data || []).find((item) => String(item.chave || "").trim() === key);
+    if (row) return row;
+  }
+
+  return null;
+}
+
+async function loadSettingValue(tenantId, keys = [], fallback = null) {
+  const row = await loadSettingRow(tenantId, keys);
+  const value = row?.valor;
+  if (value === undefined || value === null || value === "") return fallback;
+  return value;
+}
+
+async function saveSettingValue(tenantId, key, value) {
+  const normalizedKey = String(key || "").trim();
+  if (!normalizedKey) throw createHttpError(400, "Chave de configuracao invalida.");
+
+  const existing = await supabase
+    .from("settings")
+    .select("id")
+    .eq("tenant_id", tenantId)
+    .eq("chave", normalizedKey)
+    .order("id", { ascending: false })
+    .limit(1);
+
+  if (existing.error) {
+    throw createHttpError(500, "Erro ao localizar configuracao.", existing.error.message);
+  }
+
+  if (existing.data?.[0]?.id) {
+    const result = await supabase.from("settings").update({ valor: value }).eq("id", existing.data[0].id);
+    if (result.error) {
+      throw createHttpError(500, "Erro ao salvar configuracao.", result.error.message);
+    }
+    return existing.data[0].id;
+  }
+
+  const result = await supabase
+    .from("settings")
+    .insert([{ tenant_id: tenantId, chave: normalizedKey, valor: value }])
+    .select("id")
+    .single();
+
+  if (result.error) {
+    throw createHttpError(500, "Erro ao criar configuracao.", result.error.message);
+  }
+
+  return result.data?.id || null;
+}
+
+async function loadStoreBranding(tenantId = 1) {
+  const [companyName, primaryColor, logoUrl] = await Promise.all([
+    loadSettingValue(tenantId, [STORE_BRANDING_SETTINGS_KEYS.companyName], DEFAULT_STORE_BRANDING.nomeEmpresa),
+    loadSettingValue(tenantId, [STORE_BRANDING_SETTINGS_KEYS.primaryColor], DEFAULT_STORE_BRANDING.corPrimaria),
+    loadSettingValue(tenantId, [STORE_BRANDING_SETTINGS_KEYS.logoUrl], DEFAULT_STORE_BRANDING.logoUrl),
+  ]);
+
+  return {
+    nomeEmpresa: String(companyName || DEFAULT_STORE_BRANDING.nomeEmpresa).trim() || DEFAULT_STORE_BRANDING.nomeEmpresa,
+    corPrimaria: String(primaryColor || DEFAULT_STORE_BRANDING.corPrimaria).trim() || DEFAULT_STORE_BRANDING.corPrimaria,
+    logoUrl: String(logoUrl || DEFAULT_STORE_BRANDING.logoUrl).trim() || DEFAULT_STORE_BRANDING.logoUrl,
+  };
+}
+
+async function saveStoreBranding(tenantId, branding = {}) {
+  await Promise.all([
+    saveSettingValue(tenantId, STORE_BRANDING_SETTINGS_KEYS.companyName, String(branding.nomeEmpresa || DEFAULT_STORE_BRANDING.nomeEmpresa).trim() || DEFAULT_STORE_BRANDING.nomeEmpresa),
+    saveSettingValue(tenantId, STORE_BRANDING_SETTINGS_KEYS.primaryColor, String(branding.corPrimaria || DEFAULT_STORE_BRANDING.corPrimaria).trim() || DEFAULT_STORE_BRANDING.corPrimaria),
+    saveSettingValue(tenantId, STORE_BRANDING_SETTINGS_KEYS.logoUrl, String(branding.logoUrl || DEFAULT_STORE_BRANDING.logoUrl).trim() || DEFAULT_STORE_BRANDING.logoUrl),
+  ]);
+
+  return loadStoreBranding(tenantId);
+}
+
+async function loadZApiGroupConfig(tenantId = 1) {
+  const [orderConfirmedGroupId, orderConfirmedGroupName] = await Promise.all([
+    loadSettingValue(tenantId, [ZAPI_GROUP_SETTINGS_KEYS.orderConfirmedGroupId], null),
+    loadSettingValue(tenantId, [ZAPI_GROUP_SETTINGS_KEYS.orderConfirmedGroupName], null),
+  ]);
+
+  return {
+    orderConfirmedGroupId: String(orderConfirmedGroupId || "").trim() || null,
+    orderConfirmedGroupName: String(orderConfirmedGroupName || "").trim() || null,
+  };
+}
+
+async function saveZApiGroupConfig(tenantId, payload = {}) {
+  await Promise.all([
+    saveSettingValue(tenantId, ZAPI_GROUP_SETTINGS_KEYS.orderConfirmedGroupId, String(payload.orderConfirmedGroupId || "").trim()),
+    saveSettingValue(tenantId, ZAPI_GROUP_SETTINGS_KEYS.orderConfirmedGroupName, String(payload.orderConfirmedGroupName || "").trim()),
+  ]);
+
+  return loadZApiGroupConfig(tenantId);
 }
 
 function isValueTooLongError(error) {
@@ -531,69 +669,25 @@ async function saveZapiMessageTemplates(tenantId, templates) {
   }
 }
 
-async function loadVeoQrCode(tenantId = 1) {
-  const { data } = await supabase
-    .from("settings")
-    .select("valor, tenant_id")
-    .eq("chave", VEO_QR_SETTING_KEY)
-    .or(`tenant_id.eq.${tenantId},tenant_id.is.null`)
-    .order("tenant_id", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  return data?.valor || null;
+async function loadVemoQrCode(tenantId = 1) {
+  const value = await loadSettingValue(tenantId, VEMO_QR_SETTING_KEYS, null);
+  return value ? String(value) : null;
 }
 
-async function loadVeoPaymentLink(tenantId = 1) {
-  const { data } = await supabase
-    .from("settings")
-    .select("valor, tenant_id")
-    .eq("chave", VEO_PAYMENT_LINK_SETTING_KEY)
-    .or(`tenant_id.eq.${tenantId},tenant_id.is.null`)
-    .order("tenant_id", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  return String(data?.valor || "").trim() || null;
+async function loadVemoPaymentLink(tenantId = 1) {
+  const value = await loadSettingValue(tenantId, VEMO_PAYMENT_LINK_SETTING_KEYS, null);
+  return String(value || "").trim() || null;
 }
 
-async function saveVeoQrCode(tenantId, base64) {
-  const existing = await supabase
-    .from("settings")
-    .select("id")
-    .eq("tenant_id", tenantId)
-    .eq("chave", VEO_QR_SETTING_KEY)
-    .limit(1);
-
-  if (existing.data?.[0]?.id) {
-    const result = await supabase.from("settings").update({ valor: base64 }).eq("id", existing.data[0].id);
-    if (result.error) throw createHttpError(500, "Erro ao salvar QR code Veo.", result.error.message);
-  } else {
-    const result = await supabase.from("settings").insert([{ tenant_id: tenantId, chave: VEO_QR_SETTING_KEY, valor: base64 }]);
-    if (result.error) throw createHttpError(500, "Erro ao salvar QR code Veo.", result.error.message);
-  }
+async function saveVemoQrCode(tenantId, base64) {
+  await saveSettingValue(tenantId, VEMO_QR_SETTING_KEYS[0], String(base64 || "").trim());
 }
 
-async function saveVeoPaymentLink(tenantId, paymentLink) {
-  const existing = await supabase
-    .from("settings")
-    .select("id")
-    .eq("tenant_id", tenantId)
-    .eq("chave", VEO_PAYMENT_LINK_SETTING_KEY)
-    .limit(1);
-
-  if (existing.data?.[0]?.id) {
-    const result = await supabase.from("settings").update({ valor: String(paymentLink || "").trim() }).eq("id", existing.data[0].id);
-    if (result.error) throw createHttpError(500, "Erro ao salvar link de pagamento Veo.", result.error.message);
-  } else {
-    const result = await supabase.from("settings").insert([{
-      tenant_id: tenantId,
-      chave: VEO_PAYMENT_LINK_SETTING_KEY,
-      valor: String(paymentLink || "").trim(),
-    }]);
-    if (result.error) throw createHttpError(500, "Erro ao salvar link de pagamento Veo.", result.error.message);
-  }
+async function saveVemoPaymentLink(tenantId, paymentLink) {
+  await saveSettingValue(tenantId, VEMO_PAYMENT_LINK_SETTING_KEYS[0], String(paymentLink || "").trim());
 }
 
-function buildVeoPaymentCaption({ orderCode, orderTotal, locale, paymentLink }) {
+function buildVemoPaymentCaption({ orderCode, orderTotal, locale, paymentLink }) {
   const isEn = locale === "en";
   const codeLine = orderCode ? `${isEn ? "Order" : "Pedido"}: ${orderCode}` : "";
   const totalLabel = formatMoney(orderTotal);
@@ -606,7 +700,7 @@ function buildVeoPaymentCaption({ orderCode, orderTotal, locale, paymentLink }) 
     : "";
 
   return [
-    isEn ? "Veo payment" : "Pagamento Veo",
+    isEn ? "Vemo payment" : "Pagamento Vemo",
     codeLine,
     "",
     isEn ? "Scan the QR Code to complete your payment." : "Escaneie o QR Code para concluir o pagamento.",
@@ -676,13 +770,15 @@ function buildMessage({ type, name, code, orderItems, orderTotal, locale, delive
 
 function formatPaymentMethodLabel(paymentMethod, locale = "pt") {
   const isEn = locale === "en";
-  switch (String(paymentMethod || "").toLowerCase()) {
+  switch (normalizePaymentMethod(paymentMethod) || String(paymentMethod || "").toLowerCase()) {
     case "pix":
       return "Pix";
     case "cartao":
       return isEn ? "Card" : "Cartao";
     case "dinheiro":
       return isEn ? "Cash" : "Dinheiro";
+    case "vemo":
+      return "Vemo";
     default:
       return paymentMethod ? String(paymentMethod) : (isEn ? "Not informed" : "Nao informado");
   }
@@ -1113,36 +1209,41 @@ async function sendWhatsAppViaZApi({ phone, message }) {
   const headers = { "Content-Type": "application/json" };
   if (clientToken) headers["Client-Token"] = clientToken;
 
-  const phoneExistsEndpoint = `${baseUrl}/instances/${instanceId}/token/${instanceToken}/phone-exists/${encodeURIComponent(phone)}`;
-  const phoneExistsResponse = await fetch(phoneExistsEndpoint, {
-    method: "GET",
-    headers,
-  });
-  const phoneExistsResult = await readApiResponse(phoneExistsResponse);
+  const normalizedTarget = String(phone || "").trim();
+  let resolvedPhone = normalizedTarget;
 
-  if (!phoneExistsResponse.ok) {
-    return {
-      ok: false,
-      reason: `zapi-phone-exists-http-${phoneExistsResponse.status}`,
-      detail: phoneExistsResult.text || null,
-    };
-  }
+  if (!isWhatsAppGroupId(normalizedTarget)) {
+    const phoneExistsEndpoint = `${baseUrl}/instances/${instanceId}/token/${instanceToken}/phone-exists/${encodeURIComponent(normalizedTarget)}`;
+    const phoneExistsResponse = await fetch(phoneExistsEndpoint, {
+      method: "GET",
+      headers,
+    });
+    const phoneExistsResult = await readApiResponse(phoneExistsResponse);
 
-  if (phoneExistsResult.data?.error) {
-    return {
-      ok: false,
-      reason: "zapi-phone-exists-error",
-      detail: phoneExistsResult.data?.message || phoneExistsResult.data?.error || phoneExistsResult.text || null,
-    };
-  }
+    if (!phoneExistsResponse.ok) {
+      return {
+        ok: false,
+        reason: `zapi-phone-exists-http-${phoneExistsResponse.status}`,
+        detail: phoneExistsResult.text || null,
+      };
+    }
 
-  if (phoneExistsResult.data?.exists === false) {
-    return { ok: false, reason: "phone-not-on-whatsapp" };
-  }
+    if (phoneExistsResult.data?.error) {
+      return {
+        ok: false,
+        reason: "zapi-phone-exists-error",
+        detail: phoneExistsResult.data?.message || phoneExistsResult.data?.error || phoneExistsResult.text || null,
+      };
+    }
 
-  const resolvedPhone = String(phoneExistsResult.data?.phone || phone || "").replace(/\D/g, "");
-  if (!resolvedPhone) {
-    return { ok: false, reason: "phone-not-on-whatsapp" };
+    if (phoneExistsResult.data?.exists === false) {
+      return { ok: false, reason: "phone-not-on-whatsapp" };
+    }
+
+    resolvedPhone = String(phoneExistsResult.data?.phone || normalizedTarget || "").replace(/\D/g, "");
+    if (!resolvedPhone) {
+      return { ok: false, reason: "phone-not-on-whatsapp" };
+    }
   }
 
   const endpoint = `${baseUrl}/instances/${instanceId}/token/${instanceToken}/send-text`;
@@ -1260,21 +1361,21 @@ async function sendStatusNotification({ previousStatus, newStatus, clientName, c
   }
 
   let qr = null;
-  if (type === "confirmed" && String(paymentMethod || "").toLowerCase() === "veo") {
-    const paymentLink = await loadVeoPaymentLink(Number(tenantId || 1));
-    const qrCaption = buildVeoPaymentCaption({
+  if (type === "confirmed" && normalizePaymentMethod(paymentMethod) === "vemo") {
+    const paymentLink = await loadVemoPaymentLink(Number(tenantId || 1));
+    const qrCaption = buildVemoPaymentCaption({
       orderCode,
       orderTotal,
       locale,
       paymentLink,
     });
-    const qrBase64 = await loadVeoQrCode(Number(tenantId || 1));
+    const qrBase64 = await loadVemoQrCode(Number(tenantId || 1));
     if (!qrBase64) {
       qr = {
         attempted: true,
         sent: false,
         queued: false,
-        reason: "missing-veo-qr-code",
+        reason: "missing-vemo-qr-code",
         detail: null,
         caption: qrCaption,
         paymentLink,
@@ -1307,7 +1408,7 @@ async function sendStatusNotification({ previousStatus, newStatus, clientName, c
               attempted: true,
               sent: false,
               queued: false,
-              reason: qrResult.reason || "veo-qr-send-failed",
+              reason: qrResult.reason || "vemo-qr-send-failed",
               detail: qrResult.detail || null,
               caption: qrCaption,
               paymentLink,
@@ -1320,7 +1421,7 @@ async function sendStatusNotification({ previousStatus, newStatus, clientName, c
           attempted: true,
           sent: false,
           queued: false,
-          reason: "veo-qr-send-exception",
+          reason: "vemo-qr-send-exception",
           detail: error?.message || null,
           caption: qrCaption,
           paymentLink,
@@ -1341,6 +1442,112 @@ async function sendStatusNotification({ previousStatus, newStatus, clientName, c
     eventType,
     messageText: message,
     qr,
+  };
+}
+
+function buildOrderConfirmedGroupMessage({
+  orderCode,
+  clientName,
+  city,
+  paymentMethod,
+  orderTotal,
+  orderItems,
+}) {
+  const itemsSummary = (orderItems || [])
+    .slice(0, 8)
+    .map((item) => `- ${item.nome}: ${formatQuantity(item.quantidade)}`)
+    .join("\n");
+
+  return [
+    `Pedido confirmado ${orderCode}`,
+    "",
+    `Cliente: ${clientName || "Nao informado"}`,
+    `Cidade: ${city || "Nao informada"}`,
+    `Pagamento: ${formatPaymentMethodLabel(paymentMethod, "pt")}`,
+    orderTotal ? `Total estimado: ${formatMoney(orderTotal)}` : "",
+    itemsSummary ? "" : "",
+    itemsSummary ? "Itens:" : "",
+    itemsSummary,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+async function listZApiGroups() {
+  const endpoint = buildZApiInstanceEndpoint("groups");
+  if (!endpoint) {
+    return { ok: false, configured: false, groups: [], reason: "missing-zapi-config" };
+  }
+
+  const response = await fetch(endpoint, {
+    method: "GET",
+    headers: buildZApiHeaders(),
+  });
+  const result = await readApiResponse(response);
+
+  if (!response.ok) {
+    return { ok: false, configured: true, groups: [], reason: result.text || `HTTP ${response.status}` };
+  }
+
+  const rows = Array.isArray(result.data) ? result.data : Array.isArray(result.data?.groups) ? result.data.groups : [];
+  const groups = rows
+    .map((group) => ({
+      id: String(group?.id || group?.jid || group?.phone || group?.groupId || "").trim(),
+      name: String(group?.subject || group?.name || group?.groupName || "").trim() || "Grupo sem nome",
+    }))
+    .filter((group) => group.id);
+
+  return { ok: true, configured: true, groups, reason: null };
+}
+
+async function sendOrderConfirmedGroupNotification({
+  tenantId,
+  orderCode,
+  clientName,
+  city,
+  paymentMethod,
+  orderTotal,
+  orderItems,
+}) {
+  const config = await loadZApiGroupConfig(Number(tenantId || 1));
+  if (!config.orderConfirmedGroupId) {
+    return { sent: false, queued: false, reason: "missing-group-config", messageText: null };
+  }
+
+  const message = buildOrderConfirmedGroupMessage({
+    orderCode,
+    clientName,
+    city,
+    paymentMethod,
+    orderTotal,
+    orderItems,
+  });
+
+  const sendResult = await sendWhatsAppViaZApi({
+    phone: config.orderConfirmedGroupId,
+    message,
+  });
+
+  if (!sendResult.ok) {
+    return {
+      sent: false,
+      queued: false,
+      reason: sendResult.reason || "group-send-failed",
+      detail: sendResult.detail || null,
+      groupId: config.orderConfirmedGroupId,
+      groupName: config.orderConfirmedGroupName,
+      messageText: message,
+    };
+  }
+
+  return {
+    sent: true,
+    queued: true,
+    groupId: config.orderConfirmedGroupId,
+    groupName: config.orderConfirmedGroupName,
+    messageId: sendResult.messageId || null,
+    zaapId: sendResult.zaapId || null,
+    messageText: message,
   };
 }
 
@@ -3141,6 +3348,27 @@ function normalizeClientCampaignFilters(payload = {}) {
   };
 }
 
+function normalizeClientCampaignMedia(payload = {}) {
+  const imageBase64 = String(payload.imageBase64 || "").trim();
+  const imageFileName = String(payload.imageFileName || "").trim() || null;
+  const imageMimeType = String(payload.imageMimeType || "").trim() || null;
+  if (!imageBase64) {
+    return {
+      kind: "text",
+      imageBase64: null,
+      imageFileName: null,
+      imageMimeType: null,
+    };
+  }
+
+  return {
+    kind: "image",
+    imageBase64,
+    imageFileName,
+    imageMimeType,
+  };
+}
+
 function extractStoragePathFromPublicUrl(bucket, fileUrl) {
   const marker = `/storage/v1/object/public/${bucket}/`;
   const raw = String(fileUrl || "").trim();
@@ -3973,6 +4201,7 @@ async function executeClientCampaign(campaignId, recipientsOverride = null) {
   const campaign = await loadClientCampaignById(campaignId);
   const metadata = campaign.metadata || {};
   const schedule = normalizeClientCampaignSchedule(metadata.schedule || {});
+  const media = normalizeClientCampaignMedia(metadata.media || {});
 
   if (schedule.windowStart && schedule.windowEnd && !isClientCampaignWithinWindow(new Date(), schedule)) {
     const nextRunAt = getNextClientCampaignWindowDate(schedule, new Date()).toISOString();
@@ -4043,6 +4272,7 @@ async function executeClientCampaign(campaignId, recipientsOverride = null) {
         updatedAt: startedAt,
       },
       channel: "whatsapp",
+      media,
       retryOfCampaignId: metadata.retryOfCampaignId || null,
     },
   });
@@ -4052,10 +4282,16 @@ async function executeClientCampaign(campaignId, recipientsOverride = null) {
   let processedCount = 0;
 
   for (const recipient of validRecipients) {
-    const sendResult = await sendWhatsAppViaZApi({
-      phone: recipient.phone || recipient.normalizedPhone,
-      message: recipient.renderedMessage,
-    });
+    const sendResult = media.kind === "image"
+      ? await sendWhatsAppImageViaZApi({
+        phone: recipient.phone || recipient.normalizedPhone,
+        imageBase64: media.imageBase64,
+        caption: recipient.renderedMessage,
+      })
+      : await sendWhatsAppViaZApi({
+        phone: recipient.phone || recipient.normalizedPhone,
+        message: recipient.renderedMessage,
+      });
 
     processedCount += 1;
     if (sendResult?.ok) sentCount += 1;
@@ -4072,6 +4308,7 @@ async function executeClientCampaign(campaignId, recipientsOverride = null) {
         clientId: recipient.id,
         segment: filters.segment,
         country: recipient.country || null,
+        mediaType: media.kind,
       },
       sendResult,
     });
@@ -4084,7 +4321,7 @@ async function executeClientCampaign(campaignId, recipientsOverride = null) {
       renderedMessage: recipient.renderedMessage,
       localStatus: sendResult?.ok ? "queued" : "failed",
       errorDetail: sendResult?.detail || sendResult?.reason || null,
-      providerResponse: sendResult || {},
+      providerResponse: { ...(sendResult || {}), mediaType: media.kind },
       messageId: sendResult?.messageId || null,
       zaapId: sendResult?.zaapId || null,
     });
@@ -4344,7 +4581,7 @@ async function buildFinanceOverviewPayloadLegacy(query) {
   const [{ data: expenses, error: expensesError }, { data: payments, error: paymentsError }] = await Promise.all([
     supabase
       .from("expenses")
-      .select("category, amount")
+      .select("category, cost_type, amount")
       .gte("competency_date", range.startDate)
       .lte("competency_date", range.endDate),
     supabase
@@ -4373,11 +4610,14 @@ async function buildFinanceOverviewPayloadLegacy(query) {
 
   const employeeMap = new Map((employees || []).map((employee) => [Number(employee.id), employee.name]));
   const expensesByCategory = {};
+  const expensesByType = {};
   const payrollByEmployee = {};
 
   for (const expense of expenses || []) {
     const key = expense.category || "outras";
     expensesByCategory[key] = roundQty((expensesByCategory[key] || 0) + parseNumber(expense.amount, 0), 2);
+    const typeKey = String(expense.cost_type || "variable");
+    expensesByType[typeKey] = roundQty((expensesByType[typeKey] || 0) + parseNumber(expense.amount, 0), 2);
   }
 
   for (const payment of payments || []) {
@@ -4392,11 +4632,12 @@ async function buildFinanceOverviewPayloadLegacy(query) {
     ok: true,
     range,
     expensesTotal,
-    payrollTotal,
-    totalOutflow: roundQty(expensesTotal + payrollTotal, 2),
-    expensesByCategory: Object.entries(expensesByCategory).map(([category, total]) => ({ category, total })),
-    payrollByEmployee: Object.entries(payrollByEmployee).map(([employee_name, total]) => ({ employee_name, total })),
-  };
+      payrollTotal,
+      totalOutflow: roundQty(expensesTotal + payrollTotal, 2),
+      expensesByCategory: Object.entries(expensesByCategory).map(([category, total]) => ({ category, total })),
+      expensesByType: Object.entries(expensesByType).map(([cost_type, total]) => ({ cost_type, total })),
+      payrollByEmployee: Object.entries(payrollByEmployee).map(([employee_name, total]) => ({ employee_name, total })),
+    };
 }
 
 async function buildFinanceOverviewPayload(query) {
@@ -4423,14 +4664,97 @@ async function buildFinanceOverviewPayload(query) {
     return buildFinanceOverviewPayloadLegacy(query);
   }
 
+    return {
+      ok: true,
+      range,
+      expensesTotal: Number(payload.expensesTotal || 0),
+      payrollTotal: Number(payload.payrollTotal || 0),
+      totalOutflow: Number(payload.totalOutflow || 0),
+      expensesByCategory: Array.isArray(payload.expensesByCategory) ? payload.expensesByCategory : [],
+      expensesByType: Array.isArray(payload.expensesByType) ? payload.expensesByType : [],
+      payrollByEmployee: Array.isArray(payload.payrollByEmployee) ? payload.payrollByEmployee : [],
+    };
+}
+
+async function callDocumentOcr({ fileBase64, fileName, mimeType, ocrHint, entityType = "expense" }) {
+  if (ocrHint && String(ocrHint).trim()) return String(ocrHint).trim();
+
+  const endpoint = process.env.PAPERLESS_OCR_ENDPOINT;
+  const token = process.env.PAPERLESS_API_TOKEN;
+  if (!endpoint || !fileBase64) return "";
+
+  const headers = { "Content-Type": "application/json" };
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      entity_type: entityType,
+      file_name: fileName || "documento",
+      file_base64: fileBase64,
+      mime_type: mimeType || null,
+    }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw createHttpError(502, "Falha ao processar OCR do documento.", text || `HTTP ${response.status}`);
+  }
+
+  const payload = await response.json().catch(() => ({}));
+  return String(payload?.ocr_text || payload?.text || payload?.content || "");
+}
+
+function detectExpenseCostType(text = "") {
+  const normalized = normalizeSearchText(text);
+  if (!normalized) return "variable";
+  if (/(aluguel|rent|internet|energia|power|agua|water|salary|payroll|salario|contabilidade|accounting|insurance|seguro)/.test(normalized)) {
+    return "fixed";
+  }
+  return "variable";
+}
+
+function detectExpenseCategory(text = "") {
+  const normalized = normalizeSearchText(text);
+  if (/(carne|beef|frango|chicken|porco|pork|black angus)/.test(normalized)) return "carne";
+  if (/(limpeza|cleaning|detergent|sanitizer)/.test(normalized)) return "limpeza";
+  if (/(aluguel|rent)/.test(normalized)) return "aluguel";
+  return "outras";
+}
+
+function extractExpenseDate(text = "") {
+  const raw = String(text || "");
+  const isoMatch = raw.match(/\b(20\d{2})[-\/](\d{2})[-\/](\d{2})\b/);
+  if (isoMatch) return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
+
+  const brMatch = raw.match(/\b(\d{2})[\/.-](\d{2})[\/.-](20\d{2})\b/);
+  if (brMatch) return `${brMatch[3]}-${brMatch[2]}-${brMatch[1]}`;
+
+  return null;
+}
+
+function extractExpenseAmount(text = "") {
+  const matches = Array.from(String(text || "").matchAll(/(?:\$|usd|r\$)?\s*([0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]{2}))/gi));
+  if (!matches.length) return null;
+  const lastMatch = matches[matches.length - 1]?.[1];
+  const parsed = parseLooseNumber(lastMatch, NaN);
+  return Number.isFinite(parsed) ? roundQty(parsed, 2) : null;
+}
+
+function buildExpenseOcrSuggestion(ocrText = "") {
+  const firstMeaningfulLine = String(ocrText || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line && !/invoice|nota fiscal|receipt|comprovante/i.test(line));
+
   return {
-    ok: true,
-    range,
-    expensesTotal: Number(payload.expensesTotal || 0),
-    payrollTotal: Number(payload.payrollTotal || 0),
-    totalOutflow: Number(payload.totalOutflow || 0),
-    expensesByCategory: Array.isArray(payload.expensesByCategory) ? payload.expensesByCategory : [],
-    payrollByEmployee: Array.isArray(payload.payrollByEmployee) ? payload.payrollByEmployee : [],
+    description: firstMeaningfulLine || "Despesa importada por OCR",
+    amount: extractExpenseAmount(ocrText),
+    competencyDate: extractExpenseDate(ocrText),
+    category: detectExpenseCategory(ocrText),
+    costType: detectExpenseCostType(ocrText),
+    notes: String(ocrText || "").trim() || null,
   };
 }
 
@@ -5102,6 +5426,31 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true });
 });
 
+app.get("/api/storefront/branding", async (_req, res) => {
+  try {
+    const branding = await loadStoreBranding(Number.parseInt(String(process.env.DEFAULT_TENANT_ID || "1"), 10) || 1);
+    return res.json({ ok: true, branding });
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro ao carregar branding da loja.",
+      detail: error?.detail || null,
+    });
+  }
+});
+
+app.patch("/api/admin/storefront/branding", async (req, res) => {
+  try {
+    const actor = await requireAssistantAdmin(req);
+    const branding = await saveStoreBranding(actor.tenantId, req.body || {});
+    return res.json({ ok: true, branding });
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro ao salvar branding da loja.",
+      detail: error?.detail || null,
+    });
+  }
+});
+
 app.get("/api/admin/zapi-message-templates", async (req, res) => {
   try {
     const actor = await requireAssistantAdmin(req);
@@ -5209,16 +5558,72 @@ app.post("/api/admin/zapi-disconnect", async (req, res) => {
   }
 });
 
+app.get("/api/admin/vemo-qr-code", async (req, res) => {
+  try {
+    const actor = await requireAssistantAdmin(req);
+    const [base64, paymentLink] = await Promise.all([
+      loadVemoQrCode(actor.tenantId),
+      loadVemoPaymentLink(actor.tenantId),
+    ]);
+    return res.json({ ok: true, hasQrCode: Boolean(base64), base64: base64 || null, paymentLink: paymentLink || null });
+  } catch (error) {
+    return res.status(error?.status || 500).json({ error: error?.message || "Erro ao carregar QR code Vemo." });
+  }
+});
+
+app.patch("/api/admin/vemo-qr-code", async (req, res) => {
+  try {
+    const actor = await requireAssistantAdmin(req);
+    const hasBase64 = Object.prototype.hasOwnProperty.call(req.body || {}, "base64");
+    const hasPaymentLink = Object.prototype.hasOwnProperty.call(req.body || {}, "paymentLink");
+
+    if (!hasBase64 && !hasPaymentLink) {
+      return res.status(400).json({ error: "Informe ao menos base64 ou paymentLink para atualizar o Vemo." });
+    }
+
+    if (hasBase64) {
+      const base64 = String(req.body?.base64 || "").trim();
+      await saveVemoQrCode(actor.tenantId, base64);
+    }
+
+    if (hasPaymentLink) {
+      const paymentLink = String(req.body?.paymentLink || "").trim();
+      await saveVemoPaymentLink(actor.tenantId, paymentLink);
+    }
+
+    const [base64, paymentLink] = await Promise.all([
+      loadVemoQrCode(actor.tenantId),
+      loadVemoPaymentLink(actor.tenantId),
+    ]);
+    return res.json({ ok: true, hasQrCode: Boolean(base64), base64: base64 || null, paymentLink: paymentLink || null });
+  } catch (error) {
+    return res.status(error?.status || 500).json({ error: error?.message || "Erro ao salvar QR code Vemo." });
+  }
+});
+
+app.delete("/api/admin/vemo-qr-code", async (req, res) => {
+  try {
+    const actor = await requireAssistantAdmin(req);
+    await Promise.all([
+      saveVemoQrCode(actor.tenantId, ""),
+      saveVemoPaymentLink(actor.tenantId, ""),
+    ]);
+    return res.json({ ok: true, hasQrCode: false, base64: null, paymentLink: null });
+  } catch (error) {
+    return res.status(error?.status || 500).json({ error: error?.message || "Erro ao remover QR code Vemo." });
+  }
+});
+
 app.get("/api/admin/veo-qr-code", async (req, res) => {
   try {
     const actor = await requireAssistantAdmin(req);
     const [base64, paymentLink] = await Promise.all([
-      loadVeoQrCode(actor.tenantId),
-      loadVeoPaymentLink(actor.tenantId),
+      loadVemoQrCode(actor.tenantId),
+      loadVemoPaymentLink(actor.tenantId),
     ]);
     return res.json({ ok: true, hasQrCode: Boolean(base64), base64: base64 || null, paymentLink: paymentLink || null });
   } catch (error) {
-    return res.status(error?.status || 500).json({ error: error?.message || "Erro ao carregar QR code Veo." });
+    return res.status(error?.status || 500).json({ error: error?.message || "Erro ao carregar QR code Vemo." });
   }
 });
 
@@ -5229,26 +5634,19 @@ app.patch("/api/admin/veo-qr-code", async (req, res) => {
     const hasPaymentLink = Object.prototype.hasOwnProperty.call(req.body || {}, "paymentLink");
 
     if (!hasBase64 && !hasPaymentLink) {
-      return res.status(400).json({ error: "Informe ao menos base64 ou paymentLink para atualizar o Veo." });
+      return res.status(400).json({ error: "Informe ao menos base64 ou paymentLink para atualizar o Vemo." });
     }
 
-    if (hasBase64) {
-      const base64 = String(req.body?.base64 || "").trim();
-      await saveVeoQrCode(actor.tenantId, base64);
-    }
-
-    if (hasPaymentLink) {
-      const paymentLink = String(req.body?.paymentLink || "").trim();
-      await saveVeoPaymentLink(actor.tenantId, paymentLink);
-    }
+    if (hasBase64) await saveVemoQrCode(actor.tenantId, String(req.body?.base64 || "").trim());
+    if (hasPaymentLink) await saveVemoPaymentLink(actor.tenantId, String(req.body?.paymentLink || "").trim());
 
     const [base64, paymentLink] = await Promise.all([
-      loadVeoQrCode(actor.tenantId),
-      loadVeoPaymentLink(actor.tenantId),
+      loadVemoQrCode(actor.tenantId),
+      loadVemoPaymentLink(actor.tenantId),
     ]);
     return res.json({ ok: true, hasQrCode: Boolean(base64), base64: base64 || null, paymentLink: paymentLink || null });
   } catch (error) {
-    return res.status(error?.status || 500).json({ error: error?.message || "Erro ao salvar QR code Veo." });
+    return res.status(error?.status || 500).json({ error: error?.message || "Erro ao salvar QR code Vemo." });
   }
 });
 
@@ -5256,12 +5654,47 @@ app.delete("/api/admin/veo-qr-code", async (req, res) => {
   try {
     const actor = await requireAssistantAdmin(req);
     await Promise.all([
-      saveVeoQrCode(actor.tenantId, ""),
-      saveVeoPaymentLink(actor.tenantId, ""),
+      saveVemoQrCode(actor.tenantId, ""),
+      saveVemoPaymentLink(actor.tenantId, ""),
     ]);
     return res.json({ ok: true, hasQrCode: false, base64: null, paymentLink: null });
   } catch (error) {
-    return res.status(error?.status || 500).json({ error: error?.message || "Erro ao remover QR code Veo." });
+    return res.status(error?.status || 500).json({ error: error?.message || "Erro ao remover QR code Vemo." });
+  }
+});
+
+app.get("/api/admin/zapi-groups", async (req, res) => {
+  try {
+    const actor = await requireAssistantAdmin(req);
+    const [groupsResult, config] = await Promise.all([
+      listZApiGroups(),
+      loadZApiGroupConfig(actor.tenantId),
+    ]);
+    return res.json({
+      ok: Boolean(groupsResult.ok),
+      configured: Boolean(groupsResult.configured),
+      groups: groupsResult.groups || [],
+      reason: groupsResult.reason || null,
+      config,
+    });
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro ao carregar grupos da Z-API.",
+      detail: error?.detail || null,
+    });
+  }
+});
+
+app.patch("/api/admin/zapi-groups", async (req, res) => {
+  try {
+    const actor = await requireAssistantAdmin(req);
+    const config = await saveZApiGroupConfig(actor.tenantId, req.body || {});
+    return res.json({ ok: true, config });
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro ao salvar grupo da Z-API.",
+      detail: error?.detail || null,
+    });
   }
 });
 
@@ -5296,6 +5729,29 @@ app.patch("/api/admin/zapi-message-templates", async (req, res) => {
   }
 });
 
+const PRODUCT_CATEGORY_PRESETS = [
+  { categoria: "Cortes bovinos", categoria_en: "Beef Cuts" },
+  { categoria: "Cortes suinos", categoria_en: "Pork Cuts" },
+  { categoria: "Cortes de aves", categoria_en: "Poultry Cuts" },
+];
+
+function normalizeProductCategoryPair(categoria, categoriaEn) {
+  const raw = String(`${categoria || ""} ${categoriaEn || ""}`)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+
+  if (/(ave|aves|frango|chicken|hen|turkey|poultry)/.test(raw)) {
+    return PRODUCT_CATEGORY_PRESETS[2];
+  }
+
+  if (/(suin|porco|pork|pig|bacon|pernil|lombo|costelinha)/.test(raw)) {
+    return PRODUCT_CATEGORY_PRESETS[1];
+  }
+
+  return PRODUCT_CATEGORY_PRESETS[0];
+}
+
 app.post("/api/admin/products", async (req, res) => {
   try {
     const actor = await requireAssistantAdmin(req);
@@ -5309,6 +5765,8 @@ app.post("/api/admin/products", async (req, res) => {
     if (!Number.isFinite(preco) || preco < 0) {
       return res.status(400).json({ error: "Preco invalido." });
     }
+
+    const categoryPair = normalizeProductCategoryPair(req.body?.categoria, req.body?.categoria_en);
 
     let fotoUrl = null;
     if (req.body?.imageBase64) {
@@ -5325,8 +5783,8 @@ app.post("/api/admin/products", async (req, res) => {
       nome_en: String(req.body?.nome_en || "").trim() || null,
       descricao: String(req.body?.descricao || "").trim() || null,
       descricao_en: String(req.body?.descricao_en || "").trim() || null,
-      categoria: String(req.body?.categoria || "").trim() || null,
-      categoria_en: String(req.body?.categoria_en || "").trim() || null,
+      categoria: categoryPair.categoria,
+      categoria_en: categoryPair.categoria_en,
       preco: roundQty(preco, 2),
       unidade: String(req.body?.unidade || "LB").trim().toUpperCase() || "LB",
       foto_url: fotoUrl,
@@ -5405,6 +5863,8 @@ app.patch("/api/admin/products/:id", async (req, res) => {
       return res.status(400).json({ error: "Preco invalido." });
     }
 
+    const categoryPair = normalizeProductCategoryPair(req.body?.categoria, req.body?.categoria_en);
+
     let fotoUrl = String(existingProduct.foto_url || "").trim() || null;
     const previousPhotoUrl = fotoUrl;
 
@@ -5424,8 +5884,8 @@ app.patch("/api/admin/products/:id", async (req, res) => {
         nome_en: String(req.body?.nome_en || "").trim() || null,
         descricao: String(req.body?.descricao || "").trim() || null,
         descricao_en: String(req.body?.descricao_en || "").trim() || null,
-        categoria: String(req.body?.categoria || "").trim() || null,
-        categoria_en: String(req.body?.categoria_en || "").trim() || null,
+        categoria: categoryPair.categoria,
+        categoria_en: categoryPair.categoria_en,
         preco: roundQty(preco, 2),
         unidade: String(req.body?.unidade || "LB").trim().toUpperCase() || "LB",
         foto_url: fotoUrl,
@@ -5503,6 +5963,10 @@ app.use("/api/orders", createOrdersRouter({
   normalizePhone,
   applyOrderStockExit,
   applyOrderStockReversal,
+  normalizePaymentMethod,
+  formatPaymentMethodLabel,
+  loadStoreBranding,
+  sendOrderConfirmedGroupNotification,
 }));
 
 app.use("/api/delivery-routes", createDeliveryRoutesRouter({
@@ -5652,7 +6116,7 @@ app.post("/api/store-sales", async (req, res) => {
       origin: "store",
       sale_datetime: normalizeDateInput(req.body?.saleDatetime || new Date().toISOString(), new Date().toISOString()),
       total_amount: totalAmount,
-      payment_method: String(req.body?.paymentMethod || "").trim() || "nao_informado",
+      payment_method: normalizePaymentMethod(req.body?.paymentMethod) || "nao_informado",
       notes: req.body?.notes || null,
       created_by: req.body?.createdBy || actor.name || null,
     };
@@ -5747,7 +6211,7 @@ app.patch("/api/store-sales/:id", async (req, res) => {
     const payload = {
       sale_datetime: normalizeDateInput(req.body?.saleDatetime || current.sale.sale_datetime, current.sale.sale_datetime),
       total_amount: roundQty(items.reduce((acc, item) => acc + parseNumber(item.total_price, 0), 0), 2),
-      payment_method: String(req.body?.paymentMethod || current.sale.payment_method || "").trim() || "nao_informado",
+      payment_method: normalizePaymentMethod(req.body?.paymentMethod || current.sale.payment_method) || "nao_informado",
       notes: req.body?.notes ?? current.sale.notes ?? null,
       created_by: req.body?.createdBy || current.sale.created_by || actor.name || null,
     };
@@ -5832,6 +6296,8 @@ app.get("/api/expenses", async (req, res) => {
 
     const category = String(req.query?.category || "").trim();
     if (category) query = query.eq("category", category);
+    const costType = String(req.query?.costType || req.query?.cost_type || "").trim();
+    if (costType) query = query.eq("cost_type", costType);
 
     const search = String(req.query?.search || "").trim();
     if (search) query = query.ilike("description", `%${search}%`);
@@ -5854,7 +6320,7 @@ app.get("/api/expenses/summary", async (req, res) => {
     const range = resolveRangeFromQuery(req.query);
     const { data, error } = await supabase
       .from("expenses")
-      .select("category, amount")
+      .select("category, cost_type, amount")
       .gte("competency_date", range.startDate)
       .lte("competency_date", range.endDate);
 
@@ -5863,9 +6329,12 @@ app.get("/api/expenses/summary", async (req, res) => {
     }
 
     const byCategory = {};
+    const byType = {};
     for (const item of data || []) {
       const key = item.category || "outras";
       byCategory[key] = roundQty((byCategory[key] || 0) + parseNumber(item.amount, 0), 2);
+      const typeKey = item.cost_type || "variable";
+      byType[typeKey] = roundQty((byType[typeKey] || 0) + parseNumber(item.amount, 0), 2);
     }
 
     return res.json({
@@ -5873,9 +6342,35 @@ app.get("/api/expenses/summary", async (req, res) => {
       range,
       total: roundQty((data || []).reduce((acc, item) => acc + parseNumber(item.amount, 0), 0), 2),
       by_category: Object.entries(byCategory).map(([category, total]) => ({ category, total })),
+      by_type: Object.entries(byType).map(([cost_type, total]) => ({ cost_type, total })),
     });
   } catch (error) {
     return res.status(500).json({ error: error?.message || "Erro interno ao consolidar despesas." });
+  }
+});
+
+app.post("/api/expenses/ocr-preview", async (req, res) => {
+  try {
+    await requireAssistantAdmin(req);
+    const attachmentBase64 = String(req.body?.attachmentBase64 || "").trim();
+    if (!attachmentBase64) {
+      return res.status(400).json({ error: "attachmentBase64 obrigatorio." });
+    }
+
+    const ocrText = await callDocumentOcr({
+      fileBase64: attachmentBase64,
+      fileName: req.body?.attachmentName || "despesa",
+      mimeType: req.body?.attachmentMimeType || null,
+      ocrHint: req.body?.ocrText || null,
+      entityType: "expense",
+    });
+    const suggestion = buildExpenseOcrSuggestion(ocrText);
+    return res.json({ ok: true, ocrText, suggestion });
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro ao processar OCR da despesa.",
+      detail: error?.detail || null,
+    });
   }
 });
 
@@ -5902,10 +6397,13 @@ app.post("/api/expenses", async (req, res) => {
     const payload = {
       description: String(req.body?.description || "").trim(),
       category: String(req.body?.category || "outras").trim() || "outras",
+      cost_type: String(req.body?.costType || req.body?.cost_type || "variable").trim() || "variable",
       amount: roundQty(amount, 2),
       competency_date: String(req.body?.competencyDate || "").slice(0, 10),
       posted_at: normalizeDateInput(req.body?.postedAt || new Date().toISOString(), new Date().toISOString()),
       notes: req.body?.notes || null,
+      ocr_text: req.body?.ocrText || null,
+      ocr_payload: req.body?.ocrPayload || null,
       attachment_bucket: attachment.bucket,
       attachment_path: attachment.filePath,
       attachment_url: attachment.fileUrl,
@@ -5942,10 +6440,13 @@ app.patch("/api/expenses/:id", async (req, res) => {
     const payload = {
       description: String(req.body?.description || current.description || "").trim(),
       category: String(req.body?.category || current.category || "outras").trim() || "outras",
+      cost_type: String(req.body?.costType || req.body?.cost_type || current.cost_type || "variable").trim() || "variable",
       amount: roundQty(parseLooseNumber(req.body?.amount ?? current.amount, current.amount), 2),
       competency_date: String(req.body?.competencyDate || current.competency_date || "").slice(0, 10),
       posted_at: normalizeDateInput(req.body?.postedAt || current.posted_at, current.posted_at),
       notes: req.body?.notes ?? current.notes ?? null,
+      ocr_text: req.body?.ocrText ?? current.ocr_text ?? null,
+      ocr_payload: req.body?.ocrPayload ?? current.ocr_payload ?? null,
       created_by: req.body?.createdBy || current.created_by || actor.name || null,
     };
 
@@ -6426,6 +6927,7 @@ app.get("/api/clients/admin", async (req, res) => {
 app.post("/api/client-campaigns/preview", async (req, res) => {
   try {
     const message = String(req.body?.message || "").trim();
+    const media = normalizeClientCampaignMedia(req.body || {});
     await requireAssistantAdmin(req);
     if (!message) {
       return res.status(400).json({ error: "message obrigatoria." });
@@ -6451,6 +6953,7 @@ app.post("/api/client-campaigns/preview", async (req, res) => {
       },
       sampleRecipients: audience.sampleRecipients,
       previewText: audience.previewText,
+      mediaType: media.kind,
     });
   } catch (error) {
     return res.status(error?.status || 500).json({
@@ -6463,6 +6966,7 @@ app.post("/api/client-campaigns/preview", async (req, res) => {
 app.post("/api/client-campaigns/test", async (req, res) => {
   try {
     const message = String(req.body?.message || "").trim();
+    const media = normalizeClientCampaignMedia(req.body || {});
     const actor = await requireAssistantAdmin(req);
     const testPhone = normalizePhone(req.body?.testPhone || req.body?.phone || "");
     if (!message) {
@@ -6472,10 +6976,16 @@ app.post("/api/client-campaigns/test", async (req, res) => {
       return res.status(400).json({ error: "testPhone obrigatorio." });
     }
 
-    const sendResult = await sendWhatsAppViaZApi({
-      phone: testPhone,
-      message,
-    });
+    const sendResult = media.kind === "image"
+      ? await sendWhatsAppImageViaZApi({
+        phone: testPhone,
+        imageBase64: media.imageBase64,
+        caption: message,
+      })
+      : await sendWhatsAppViaZApi({
+        phone: testPhone,
+        message,
+      });
 
     await persistWhatsAppAttempt({
       orderId: null,
@@ -6485,6 +6995,7 @@ app.post("/api/client-campaigns/test", async (req, res) => {
       messageText: message,
       payload: {
         actor: actor?.id || null,
+        mediaType: media.kind,
       },
       sendResult,
     });
@@ -6502,6 +7013,7 @@ app.post("/api/client-campaigns/test", async (req, res) => {
       phone: testPhone,
       messageId: sendResult.messageId || null,
       zaapId: sendResult.zaapId || null,
+      mediaType: media.kind,
     });
   } catch (error) {
     return res.status(error?.status || 500).json({
@@ -6515,6 +7027,7 @@ app.post("/api/client-campaigns/send", async (req, res) => {
   try {
     const actor = await requireAssistantAdmin(req);
     const message = String(req.body?.message || "").trim();
+    const media = normalizeClientCampaignMedia(req.body || {});
     if (!message) {
       return res.status(400).json({ error: "message obrigatoria." });
     }
@@ -6549,6 +7062,7 @@ app.post("/api/client-campaigns/send", async (req, res) => {
           totalCount: audience.stats.targetCount,
           updatedAt: new Date().toISOString(),
         },
+        media,
         audience: {
           ...audience.stats,
         },
@@ -6569,6 +7083,7 @@ app.post("/api/client-campaigns/send", async (req, res) => {
       validCount: audience.stats.audienceCount,
       skippedCount: audience.stats.excludedWithoutPhone,
       scheduledAt: nextRunAt,
+      mediaType: media.kind,
     });
   } catch (error) {
     return res.status(error?.status || 500).json({

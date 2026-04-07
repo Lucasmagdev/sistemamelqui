@@ -74,6 +74,11 @@ const textareaClass = "min-h-[110px] w-full rounded-xl border border-amber-400/5
 const selectClass = "flex h-11 w-full rounded-xl border border-amber-400/50 bg-zinc-900 px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-amber-400";
 const EDIT_PRODUCT_ID_STORAGE_KEY = "products-admin-edit-id";
 const editDraftStorageKey = (productId: number | string) => `products-admin-edit-draft:${productId}`;
+const CATEGORY_PRESETS = [
+  { categoria: "Cortes bovinos", categoria_en: "Beef Cuts" },
+  { categoria: "Cortes suinos", categoria_en: "Pork Cuts" },
+  { categoria: "Cortes de aves", categoria_en: "Poultry Cuts" },
+];
 
 type ProductMutationPayload = {
   nome: string;
@@ -88,33 +93,58 @@ type ProductMutationPayload = {
   imageFileName?: string;
 };
 
+const ALLOWED_CATEGORY_PRESETS = [
+  { categoria: "Cortes bovinos", categoria_en: "Beef Cuts" },
+  { categoria: "Cortes suinos", categoria_en: "Pork Cuts" },
+  { categoria: "Cortes de aves", categoria_en: "Poultry Cuts" },
+];
+
+const findCanonicalCategoryPreset = (categoria?: string | null, categoriaEn?: string | null) => {
+  const raw = normalizeProductKey(`${categoria || ""} ${categoriaEn || ""}`);
+
+  if (/(ave|aves|frango|chicken|hen|turkey|poultry)/.test(raw)) {
+    return ALLOWED_CATEGORY_PRESETS[2];
+  }
+
+  if (/(suin|porco|pork|pig|bacon|pernil|lombo|costelinha)/.test(raw)) {
+    return ALLOWED_CATEGORY_PRESETS[1];
+  }
+
+  return ALLOWED_CATEGORY_PRESETS[0];
+};
+
 type ProductMutationResponse = {
   ok: boolean;
   product: Product;
 };
 
-const createEditFormFromProduct = (product: Product, draft?: Partial<ProductFormState> | null): ProductFormState => ({
-  id: product.id,
-  nome: draft?.nome ?? product.nome ?? "",
-  nome_en: draft?.nome_en ?? product.nome_en ?? "",
-  descricao: draft?.descricao ?? product.descricao ?? "",
-  descricao_en: draft?.descricao_en ?? product.descricao_en ?? "",
-  categoria: draft?.categoria ?? product.categoria ?? "",
-  categoria_en: draft?.categoria_en ?? product.categoria_en ?? "",
-  preco: draft?.preco ?? String(product.preco || ""),
-  unidade: draft?.unidade ?? product.unidade ?? "LB",
-  foto: null,
-  foto_url: product.foto_url || "",
-});
+const createEditFormFromProduct = (product: Product, draft?: Partial<ProductFormState> | null): ProductFormState => {
+  const categoryPreset = findCanonicalCategoryPreset(draft?.categoria ?? product.categoria, draft?.categoria_en ?? product.categoria_en);
+
+  return {
+    id: product.id,
+    nome: draft?.nome ?? product.nome ?? "",
+    nome_en: draft?.nome_en ?? product.nome_en ?? "",
+    descricao: draft?.descricao ?? product.descricao ?? "",
+    descricao_en: draft?.descricao_en ?? product.descricao_en ?? "",
+    categoria: categoryPreset.categoria,
+    categoria_en: categoryPreset.categoria_en,
+    preco: draft?.preco ?? String(product.preco || ""),
+    unidade: draft?.unidade ?? product.unidade ?? "LB",
+    foto: null,
+    foto_url: product.foto_url || "",
+  };
+};
 
 const buildProductMutationPayload = async (form: ProductFormState): Promise<ProductMutationPayload> => {
+  const categoryPreset = findCanonicalCategoryPreset(form.categoria, form.categoria_en);
   const payload: ProductMutationPayload = {
     nome: form.nome.trim(),
     nome_en: form.nome_en.trim() || null,
     descricao: form.descricao.trim() || null,
     descricao_en: form.descricao_en.trim() || null,
-    categoria: form.categoria.trim() || null,
-    categoria_en: form.categoria_en.trim() || null,
+    categoria: categoryPreset.categoria,
+    categoria_en: categoryPreset.categoria_en,
     preco: parseFloat(form.preco),
     unidade: form.unidade || "LB",
   };
@@ -139,6 +169,7 @@ function ProductModal({
   onClose,
   onText,
   onFile,
+  onCategoryPreset,
   onSubmit,
 }: {
   open: boolean;
@@ -151,6 +182,7 @@ function ProductModal({
   onClose: () => void;
   onText: (field: keyof ProductFormState, value: string) => void;
   onFile: (file: File | null) => void;
+  onCategoryPreset: (preset: { categoria: string; categoria_en: string }) => void;
   onSubmit: (event: React.FormEvent) => void;
 }) {
   useEffect(() => {
@@ -205,11 +237,31 @@ function ProductModal({
                   </div>
                   <div className="space-y-2">
                     <label className="text-sm font-medium text-amber-200">Categoria</label>
-                    <Input value={form.categoria} onChange={(e) => onText("categoria", e.target.value)} required className={inputClass} />
+                    <select
+                      value={form.categoria}
+                      onChange={(event) => {
+                        const preset = ALLOWED_CATEGORY_PRESETS.find((item) => item.categoria === event.target.value);
+                        if (preset) {
+                          onCategoryPreset(preset);
+                          return;
+                        }
+                        onText("categoria", "");
+                        onText("categoria_en", "");
+                      }}
+                      required
+                      className={selectClass}
+                    >
+                      <option value="">Selecione a categoria</option>
+                      {ALLOWED_CATEGORY_PRESETS.map((preset) => (
+                        <option key={preset.categoria} value={preset.categoria}>
+                          {preset.categoria}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                   <div className="space-y-2">
                     <label className="text-sm font-medium text-amber-200">Categoria em ingles</label>
-                    <Input value={form.categoria_en} onChange={(e) => onText("categoria_en", e.target.value)} className={inputClass} />
+                    <Input value={form.categoria_en} readOnly className={cn(inputClass, "opacity-80")} />
                   </div>
                   <div className="space-y-2">
                     <label className="text-sm font-medium text-amber-200">Unidade</label>
@@ -348,6 +400,10 @@ const ProductsAdminPage: React.FC = () => {
 
   const setCreateText = (field: keyof ProductFormState, value: string) => setCreateForm((current) => ({ ...current, [field]: value }));
   const setEditText = (field: keyof ProductFormState, value: string) => setEditForm((current) => ({ ...current, [field]: value }));
+  const applyCreateCategoryPreset = (preset: { categoria: string; categoria_en: string }) =>
+    setCreateForm((current) => ({ ...current, categoria: preset.categoria, categoria_en: preset.categoria_en }));
+  const applyEditCategoryPreset = (preset: { categoria: string; categoria_en: string }) =>
+    setEditForm((current) => ({ ...current, categoria: preset.categoria, categoria_en: preset.categoria_en }));
 
   const upsertProduct = (nextProduct: Product) => {
     setProducts((current) => {
@@ -661,6 +717,7 @@ const ProductsAdminPage: React.FC = () => {
         }}
         onText={setCreateText}
         onFile={setCreateFile}
+        onCategoryPreset={applyCreateCategoryPreset}
         onSubmit={handleCreateSubmit}
       />
 
@@ -680,6 +737,7 @@ const ProductsAdminPage: React.FC = () => {
         }}
         onText={setEditText}
         onFile={setEditFile}
+        onCategoryPreset={applyEditCategoryPreset}
         onSubmit={handleEditSubmit}
       />
     </div>

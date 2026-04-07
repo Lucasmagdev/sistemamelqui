@@ -40,6 +40,8 @@ const statusLabel = (status: number) => {
       return 'Entrega';
     case 5:
       return 'Concluido';
+    case 6:
+      return 'Cancelado';
     default:
       return `Status ${status}`;
   }

@@ -45,13 +45,38 @@ import {
   toStoragePhone,
 } from '@/lib/phone';
 
-type CategoryKey = 'all' | 'offers' | 'bbq' | 'premium' | 'subscription' | 'contact';
-const menuCategorias: CategoryKey[] = ['all', 'offers', 'bbq', 'premium', 'subscription', 'contact'];
-const categoryDbValueByKey: Record<Exclude<CategoryKey, 'all' | 'contact'>, string> = {
-  offers: 'Ofertas da semana',
-  bbq: 'Kit churrasco',
-  premium: 'Linha premium',
-  subscription: 'Assinatura',
+type CategoryKey = string;
+const DEFAULT_CATEGORY_PRESETS = [
+  { categoria: 'Cortes bovinos', categoria_en: 'Beef Cuts' },
+  { categoria: 'Cortes suinos', categoria_en: 'Pork Cuts' },
+  { categoria: 'Cortes de aves', categoria_en: 'Poultry Cuts' },
+];
+
+const normalizeCategoryValue = (categoria?: string | null, categoriaEn?: string | null) => {
+  const raw = `${categoria || ''} ${categoriaEn || ''}`
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+
+  if (/(ave|aves|frango|chicken|hen|turkey|poultry)/.test(raw)) {
+    return DEFAULT_CATEGORY_PRESETS[2];
+  }
+
+  if (/(suin|porco|pork|pig|bacon|pernil|lombo|costelinha)/.test(raw)) {
+    return DEFAULT_CATEGORY_PRESETS[1];
+  }
+
+  return DEFAULT_CATEGORY_PRESETS[0];
+};
+
+const isClientVisibleProduct = (produto: any) => {
+  const hasName = String(produto?.nome || produto?.nome_en || '').trim().length > 0;
+  const hasDescription = String(produto?.descricao || produto?.descricao_en || '').trim().length > 0;
+  const hasUnit = String(produto?.unidade || '').trim().length > 0;
+  const hasValidPrice = Number(produto?.preco) > 0;
+  const hasImage = String(produto?.foto_url || '').trim().length > 0;
+
+  return hasName && hasDescription && hasUnit && hasValidPrice && hasImage;
 };
 
 
@@ -65,7 +90,7 @@ type ModoVisualizacao = 'grid' | 'compact' | 'list';
 type Ordenacao = 'menor-maior' | 'maior-menor';
 type TipoCorte = 'piece' | 'steak' | 'cubes' | 'ground' | 'other';
 type EntregaModo = 'entrega' | 'retirada';
-type Pagamento = 'veo';
+type Pagamento = 'vemo';
 
 interface ItemCarrinho {
   id: string;
@@ -249,15 +274,6 @@ export default function ClientePage() {
     previousHighlight: isEn ? 'Previous highlight' : 'Destaque anterior',
     nextHighlight: isEn ? 'Next highlight' : 'Proximo destaque',
   };
-  const categoryLabel = (category: CategoryKey) =>
-    ({
-      all: tr('Todos os cortes', 'All cuts'),
-      offers: tr('Ofertas da semana', 'Weekly offers'),
-      bbq: tr('Kit churrasco', 'BBQ kit'),
-      premium: tr('Linha premium', 'Premium line'),
-      subscription: tr('Assinatura', 'Subscription'),
-      contact: tr('Contato', 'Contact'),
-    })[category];
   const cutTypeLabel = (type: TipoCorte) =>
     ({
       piece: tr('Peca inteira', 'Whole piece'),
@@ -356,7 +372,7 @@ export default function ClientePage() {
   const [modoEntrega, setModoEntrega] = useState<EntregaModo>('entrega');
   const [dataEntrega, setDataEntrega] = useState('');
   const [horarioEntrega, setHorarioEntrega] = useState('');
-  const [pagamento, setPagamento] = useState<Pagamento>('veo');
+  const [pagamento, setPagamento] = useState<Pagamento>('vemo');
   const [trocoPara, setTrocoPara] = useState('');
 
   useEffect(() => {
@@ -423,7 +439,10 @@ export default function ClientePage() {
         return;
       }
       // Adiciona campos extras para manter compatibilidade visual
-      const produtos = (data || []).map((produto: any) => {
+      const produtos = (data || [])
+        .filter((produto: any) => isClientVisibleProduct(produto))
+        .map((produto: any) => {
+        const normalizedCategory = normalizeCategoryValue(produto.categoria, produto.categoria_en);
         const nomeLocalizado = isEn
           ? (produto.nome_en || produto.nome || '')
           : (produto.nome || produto.nome_en || '');
@@ -434,13 +453,16 @@ export default function ClientePage() {
         return {
           id: produto.id,
           nome: nomeLocalizado,
+          nome_pt: produto.nome || produto.nome_en || '',
+          nome_en: produto.nome_en || produto.nome || '',
           descricao: descricaoLocalizada,
           imagem: resolvePriorityProductImage(produto.nome, produto.foto_url, [produto.nome_en]),
           preco: produto.preco,
           precoAnterior: produto.precoAnterior || null,
           destaque: produto.destaque || false,
           selo: produto.selo || '',
-          categoria: produto.categoria || '',
+          categoria: normalizedCategory.categoria,
+          categoria_en: normalizedCategory.categoria_en,
         };
       });
       setProdutosCatalogo(produtos);
@@ -526,12 +548,25 @@ export default function ClientePage() {
     return () => observer.disconnect();
   }, [showcaseVisible]);
 
+  const categoryOptions = useMemo(() => {
+    return [
+      { key: 'all', label: tr('Todos os cortes', 'All cuts') },
+      ...DEFAULT_CATEGORY_PRESETS.map((preset) => ({
+        key: preset.categoria,
+        label: isEn ? preset.categoria_en : preset.categoria,
+      })),
+      { key: 'contact', label: tr('Contato', 'Contact') },
+    ];
+  }, [isEn]);
+
+  const categoryLabel = (category: CategoryKey) =>
+    categoryOptions.find((item) => item.key === category)?.label || category;
+
   const produtosFiltrados = useMemo(() => {
     let resultado = [...produtosCatalogo];
 
     if (categoriaAtiva !== 'all' && categoriaAtiva !== 'contact') {
-      const dbCategory = categoryDbValueByKey[categoriaAtiva];
-      resultado = resultado.filter((produto) => produto.categoria === dbCategory);
+      resultado = resultado.filter((produto) => produto.categoria === categoriaAtiva);
     }
 
     if (mostrarApenasOfertas) {
@@ -665,7 +700,7 @@ export default function ClientePage() {
     }
 
     if (etapaCheckout === 2) {
-      // pagamento fixo em veo, sem validacao adicional
+      // pagamento fixo em vemo, sem validacao adicional
     }
 
     return true;
@@ -939,17 +974,17 @@ export default function ClientePage() {
           {menuAberto ? (
             <div className="border-t border-border bg-background px-4 py-3 md:px-6">
               <div className="flex flex-wrap gap-2">
-                {menuCategorias.map((categoria) => (
+                {categoryOptions.map((categoria) => (
                   <button
-                    key={`menu-${categoria}`}
+                    key={`menu-${categoria.key}`}
                     type="button"
                     onClick={() => {
-                      selecionarCategoria(categoria);
+                      selecionarCategoria(categoria.key);
                       setMenuAberto(false);
                     }}
                     className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:border-primary/40 hover:text-primary"
                   >
-                    {categoryLabel(categoria)}
+                    {categoria.label}
                   </button>
                 ))}
               </div>
@@ -958,19 +993,19 @@ export default function ClientePage() {
 
           <div className="border-t border-border px-3 py-2.5 md:px-6">
             <div className="flex gap-1.5 overflow-x-auto pb-0.5">
-              {menuCategorias.map((categoria) => (
+              {categoryOptions.map((categoria) => (
                 <button
-                  key={categoria}
+                  key={categoria.key}
                   type="button"
-                  onClick={() => selecionarCategoria(categoria)}
+                  onClick={() => selecionarCategoria(categoria.key)}
                   className={cn(
                     'shrink-0 rounded-lg px-3.5 py-1.5 text-xs font-semibold uppercase tracking-wide transition',
-                    categoria === categoriaAtiva
+                    categoria.key === categoriaAtiva
                       ? 'gold-gradient-bg text-accent-foreground shadow-sm'
                       : 'bg-muted/80 text-muted-foreground hover:bg-muted hover:text-foreground',
                   )}
                 >
-                  {categoryLabel(categoria)}
+                  {categoria.label}
                 </button>
               ))}
             </div>
@@ -1402,10 +1437,10 @@ export default function ClientePage() {
                     <div className="flex flex-wrap gap-2">
                       <button
                         type="button"
-                        onClick={() => setPagamento('veo')}
+                        onClick={() => setPagamento('vemo')}
                         className={cn('rounded-lg px-4 py-2 text-sm font-semibold', 'gold-gradient-bg text-accent-foreground')}
                       >
-                        Veo
+                        Vemo
                       </button>
                     </div>
                   </div>
@@ -1433,7 +1468,7 @@ export default function ClientePage() {
                       </div>
                       <div className="flex justify-between py-2">
                         <span className="text-muted-foreground">{ui.payment}</span>
-                        <span className="font-medium text-foreground">Veo</span>
+                        <span className="font-medium text-foreground">Vemo</span>
                       </div>
                       <div className="flex justify-between py-2">
                         <span className="font-semibold text-muted-foreground">{ui.total}</span>

@@ -7,7 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Check, Copy, MessageSquareText, PowerOff, QrCode, RefreshCw, Smartphone, Trash2, Truck, Upload, Wifi, WifiOff } from 'lucide-react';
+import { Check, Copy, MessageSquareText, PowerOff, QrCode, RefreshCw, Smartphone, Trash2, Truck, Upload, Users, Wifi, WifiOff } from 'lucide-react';
 import { toast } from 'sonner';
 
 type TemplateLocale = {
@@ -49,6 +49,22 @@ type ZapiQrResponse = {
   mimeType: string | null;
   reason: string | null;
   fetchedAt: string;
+};
+
+type ZapiGroupOption = {
+  id: string;
+  name: string;
+};
+
+type ZapiGroupsResponse = {
+  ok: boolean;
+  configured: boolean;
+  reason: string | null;
+  groups: ZapiGroupOption[];
+  config?: {
+    orderConfirmedGroupId: string | null;
+    orderConfirmedGroupName: string | null;
+  };
 };
 
 const emptyTemplates: ZapiTemplates = {
@@ -119,13 +135,24 @@ export default function ConfiguracoesPage() {
   const [disconnectingZapi, setDisconnectingZapi] = useState(false);
   const [zapiQrFetchedAt, setZapiQrFetchedAt] = useState<string | null>(null);
   const [zapiQrReason, setZapiQrReason] = useState<string | null>(null);
+  const [zapiGroups, setZapiGroups] = useState<ZapiGroupOption[]>([]);
+  const [selectedGroupId, setSelectedGroupId] = useState('');
+  const [selectedGroupName, setSelectedGroupName] = useState('');
+  const [loadingGroups, setLoadingGroups] = useState(false);
+  const [savingGroups, setSavingGroups] = useState(false);
+
+  useEffect(() => {
+    setNome(config.nomeEmpresa);
+    setCor(config.corPrimaria);
+    setLogoUrl(config.logoUrl || '');
+  }, [config.corPrimaria, config.logoUrl, config.nomeEmpresa]);
 
   useEffect(() => {
     let active = true;
-    const loadVeoQr = async () => {
+    const loadVemoQr = async () => {
       try {
         setLoadingVeoQr(true);
-        const res = await backendRequest<{ ok: true; hasQrCode: boolean; base64: string | null; paymentLink: string | null }>('/api/admin/veo-qr-code');
+        const res = await backendRequest<{ ok: true; hasQrCode: boolean; base64: string | null; paymentLink: string | null }>('/api/admin/vemo-qr-code');
         if (!active) return;
         setVeoQrBase64(res.base64 || null);
         setVeoPaymentLink(res.paymentLink || '');
@@ -135,7 +162,7 @@ export default function ConfiguracoesPage() {
         if (active) setLoadingVeoQr(false);
       }
     };
-    void loadVeoQr();
+    void loadVemoQr();
     return () => { active = false; };
   }, []);
 
@@ -245,13 +272,13 @@ export default function ConfiguracoesPage() {
     if (!veoQrBase64 && !veoPaymentLink.trim()) return;
     try {
       setSavingVeoQr(true);
-      await backendRequest('/api/admin/veo-qr-code', {
+      await backendRequest('/api/admin/vemo-qr-code', {
         method: 'PATCH',
         body: JSON.stringify({ base64: veoQrBase64 || '', paymentLink: veoPaymentLink.trim() }),
       });
-      toast.success('Configuracao do Veo salva!');
+      toast.success('Configuracao do Vemo salva!');
     } catch (error: any) {
-      toast.error(error.message || 'Erro ao salvar configuracao do Veo');
+      toast.error(error.message || 'Erro ao salvar configuracao do Vemo');
     } finally {
       setSavingVeoQr(false);
     }
@@ -260,13 +287,13 @@ export default function ConfiguracoesPage() {
   const handleRemoveVeoQr = async () => {
     try {
       setSavingVeoQr(true);
-      await backendRequest('/api/admin/veo-qr-code', { method: 'DELETE' });
+      await backendRequest('/api/admin/vemo-qr-code', { method: 'DELETE' });
       setVeoQrBase64(null);
       setVeoPaymentLink('');
       if (veoFileRef.current) veoFileRef.current.value = '';
-      toast.success('Configuracao do Veo removida!');
+      toast.success('Configuracao do Vemo removida!');
     } catch (error: any) {
-      toast.error(error.message || 'Erro ao remover configuracao do Veo');
+      toast.error(error.message || 'Erro ao remover configuracao do Vemo');
     } finally {
       setSavingVeoQr(false);
     }
@@ -323,6 +350,24 @@ export default function ConfiguracoesPage() {
     };
   }, []);
 
+  const loadZapiGroups = useCallback(async () => {
+    try {
+      setLoadingGroups(true);
+      const response = await backendRequest<ZapiGroupsResponse>('/api/admin/zapi-groups');
+      setZapiGroups(response.groups || []);
+      setSelectedGroupId(response.config?.orderConfirmedGroupId || '');
+      setSelectedGroupName(response.config?.orderConfirmedGroupName || '');
+    } catch (error: any) {
+      toast.error(error.message || 'Erro ao carregar grupos da Z-API');
+    } finally {
+      setLoadingGroups(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadZapiGroups();
+  }, [loadZapiGroups]);
+
   const previews = useMemo(() => ({
     confirmed: {
       pt: renderPreview(templates.confirmed.pt),
@@ -334,9 +379,33 @@ export default function ConfiguracoesPage() {
     },
   }), [templates]);
 
-  const handleSaveBrand = () => {
-    updateConfig({ nomeEmpresa: nome, corPrimaria: cor, logoUrl });
-    toast.success('Configuracoes locais salvas!');
+  const handleSaveBrand = async () => {
+    try {
+      await updateConfig({ nomeEmpresa: nome, corPrimaria: cor, logoUrl });
+      toast.success('Branding salvo com sucesso!');
+    } catch (error: any) {
+      toast.error(error.message || 'Erro ao salvar branding');
+    }
+  };
+
+  const handleSaveGroup = async () => {
+    try {
+      setSavingGroups(true);
+      const selected = zapiGroups.find((group) => group.id === selectedGroupId);
+      await backendRequest('/api/admin/zapi-groups', {
+        method: 'PATCH',
+        body: JSON.stringify({
+          orderConfirmedGroupId: selectedGroupId,
+          orderConfirmedGroupName: selected?.name || selectedGroupName || '',
+        }),
+      });
+      setSelectedGroupName(selected?.name || selectedGroupName || '');
+      toast.success('Grupo de pedido confirmado salvo!');
+    } catch (error: any) {
+      toast.error(error.message || 'Erro ao salvar grupo da Z-API');
+    } finally {
+      setSavingGroups(false);
+    }
   };
 
   const handleTemplateChange = (type: keyof ZapiTemplates, locale: keyof TemplateLocale, value: string) => {
@@ -457,7 +526,7 @@ export default function ConfiguracoesPage() {
           <Input value={config.tenantId} disabled className="bg-muted" />
         </div>
         <Button onClick={handleSaveBrand} className="gold-gradient-bg text-accent-foreground font-semibold hover:opacity-90 gold-shadow">
-          Salvar configuracoes locais
+          Salvar branding
         </Button>
       </div>
 
@@ -467,8 +536,8 @@ export default function ConfiguracoesPage() {
             <QrCode className="h-5 w-5 text-primary" />
           </div>
           <div>
-            <h2 className="text-xl font-semibold text-foreground">QR Code Veo</h2>
-            <p className="text-sm text-muted-foreground">Imagem enviada automaticamente ao cliente quando o pedido for confirmado com pagamento Veo. Voce tambem pode incluir um link de pagamento na mesma mensagem.</p>
+            <h2 className="text-xl font-semibold text-foreground">QR Code Vemo</h2>
+            <p className="text-sm text-muted-foreground">Imagem enviada automaticamente ao cliente quando o pedido for confirmado com pagamento Vemo. Voce tambem pode incluir um link de pagamento na mesma mensagem.</p>
           </div>
         </div>
 
@@ -486,7 +555,7 @@ export default function ConfiguracoesPage() {
                 className="block w-full text-sm text-muted-foreground file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-primary/10 file:text-primary hover:file:bg-primary/20 cursor-pointer"
               />
               <div className="space-y-2">
-                <Label>Link de pagamento Veo</Label>
+                <Label>Link de pagamento Vemo</Label>
                 <Input
                   value={veoPaymentLink}
                   onChange={(e) => setVeoPaymentLink(e.target.value)}
@@ -516,7 +585,7 @@ export default function ConfiguracoesPage() {
             {veoQrBase64 && (
               <div className="flex flex-col items-center gap-2">
                 <p className="text-xs text-muted-foreground">Previa</p>
-                <img src={veoQrBase64} alt="QR Code Veo" className="h-40 w-40 rounded-xl border border-border object-contain bg-white p-2" />
+                <img src={veoQrBase64} alt="QR Code Vemo" className="h-40 w-40 rounded-xl border border-border object-contain bg-white p-2" />
               </div>
             )}
           </div>
@@ -688,6 +757,55 @@ export default function ConfiguracoesPage() {
             )}
           </div>
         )}
+      </div>
+
+      <div className="rounded-xl border border-border bg-card p-6 card-elevated space-y-5">
+        <div className="flex items-center gap-3">
+          <div className="rounded-xl border border-border/70 bg-muted/40 p-2.5">
+            <Users className="h-5 w-5 text-primary" />
+          </div>
+          <div>
+            <h2 className="text-xl font-semibold text-foreground">Grupo para pedido confirmado</h2>
+            <p className="text-sm text-muted-foreground">Selecione o grupo da Z-API que vai receber o resumo quando um pedido for confirmado.</p>
+          </div>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto_auto]">
+          <div className="space-y-1.5">
+            <Label>Grupo do WhatsApp</Label>
+            <select
+              value={selectedGroupId}
+              onChange={(event) => {
+                const nextId = event.target.value;
+                const nextGroup = zapiGroups.find((group) => group.id === nextId);
+                setSelectedGroupId(nextId);
+                setSelectedGroupName(nextGroup?.name || '');
+              }}
+              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+              disabled={loadingGroups}
+            >
+              <option value="">Nao enviar para grupo</option>
+              {zapiGroups.map((group) => (
+                <option key={group.id} value={group.id}>
+                  {group.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <Button type="button" variant="outline" onClick={() => void loadZapiGroups()} disabled={loadingGroups} className="self-end border-border/80 bg-background/70">
+            <RefreshCw className={`mr-2 h-4 w-4 ${loadingGroups ? 'animate-spin' : ''}`} />
+            Atualizar grupos
+          </Button>
+          <Button type="button" onClick={handleSaveGroup} disabled={savingGroups} className="self-end gold-gradient-bg text-accent-foreground font-semibold hover:opacity-90 gold-shadow">
+            {savingGroups ? 'Salvando...' : 'Salvar grupo'}
+          </Button>
+        </div>
+
+        {selectedGroupName ? (
+          <div className="rounded-xl border border-border/70 bg-background/50 p-4 text-sm text-muted-foreground">
+            Grupo selecionado: <span className="font-semibold text-foreground">{selectedGroupName}</span>
+          </div>
+        ) : null}
       </div>
 
       <div className="rounded-xl border border-border bg-card p-6 card-elevated space-y-6">

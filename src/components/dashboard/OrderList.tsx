@@ -1,5 +1,5 @@
 import React from "react";
-import { ChevronDown, ChevronUp, CheckCheck } from "lucide-react";
+import { ChevronDown, ChevronUp, CheckCheck, FileText, Printer, XCircle } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 import { toast } from "sonner";
 import { backendRequest } from "@/lib/backendClient";
@@ -129,9 +129,12 @@ export type Order = {
 interface OrderCardProps {
   order: Order;
   onStatusChange?: () => void;
+  onPrintDocument?: (orderId: string) => void;
+  onDownloadDocument?: (orderId: string) => void;
+  onCancelOrder?: (orderId: string) => void;
 }
 
-export const OrderCard: React.FC<OrderCardProps> = ({ order, onStatusChange }) => {
+export const OrderCard: React.FC<OrderCardProps> = ({ order, onStatusChange, onPrintDocument, onDownloadDocument, onCancelOrder }) => {
   const [status, setStatus] = React.useState(order.status);
   const [prepOpen, setPrepOpen] = React.useState(order.status === 2);
   const [prepItems, setPrepItems] = React.useState<PrepItem[]>([]);
@@ -274,6 +277,36 @@ export const OrderCard: React.FC<OrderCardProps> = ({ order, onStatusChange }) =
             >
               Ver WhatsApp
             </button>
+            {onPrintDocument ? (
+              <button
+                type="button"
+                onClick={() => onPrintDocument(order.id)}
+                className="inline-flex items-center gap-1 rounded-md border border-sky-500/30 px-2.5 py-1.5 text-xs font-semibold text-sky-300 transition hover:bg-sky-500/10"
+              >
+                <Printer className="h-3.5 w-3.5" />
+                Imprimir
+              </button>
+            ) : null}
+            {onDownloadDocument ? (
+              <button
+                type="button"
+                onClick={() => onDownloadDocument(order.id)}
+                className="inline-flex items-center gap-1 rounded-md border border-violet-500/30 px-2.5 py-1.5 text-xs font-semibold text-violet-300 transition hover:bg-violet-500/10"
+              >
+                <FileText className="h-3.5 w-3.5" />
+                PDF
+              </button>
+            ) : null}
+            {onCancelOrder && status !== 6 ? (
+              <button
+                type="button"
+                onClick={() => onCancelOrder(order.id)}
+                className="inline-flex items-center gap-1 rounded-md border border-rose-500/30 px-2.5 py-1.5 text-xs font-semibold text-rose-300 transition hover:bg-rose-500/10"
+              >
+                <XCircle className="h-3.5 w-3.5" />
+                Cancelar
+              </button>
+            ) : null}
             {status === 2 ? (
               <button
                 type="button"
@@ -467,13 +500,23 @@ interface OrderListProps {
   onStatusChange?: () => void;
   moeda?: string;
   unidadePeso?: string;
+  onPrintDocument?: (orderId: string) => void;
+  onDownloadDocument?: (orderId: string) => void;
+  onCancelOrder?: (orderId: string) => void;
 }
 
-export const OrderList: React.FC<OrderListProps> = ({ orders, onStatusChange }) => {
+export const OrderList: React.FC<OrderListProps> = ({ orders, onStatusChange, onPrintDocument, onDownloadDocument, onCancelOrder }) => {
   return (
     <div>
       {orders.map((order) => (
-        <OrderCard key={order.id} order={order} onStatusChange={onStatusChange} />
+        <OrderCard
+          key={order.id}
+          order={order}
+          onStatusChange={onStatusChange}
+          onPrintDocument={onPrintDocument}
+          onDownloadDocument={onDownloadDocument}
+          onCancelOrder={onCancelOrder}
+        />
       ))}
     </div>
   );

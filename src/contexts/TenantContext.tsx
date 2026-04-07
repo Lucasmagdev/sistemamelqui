@@ -5,6 +5,7 @@ interface TenantConfig {
   nomeEmpresa: string;
   corPrimaria: string;
   logoUrl?: string;
+  publicStoreUrl?: string;
   tenantId: string;
 }
 
@@ -19,6 +20,7 @@ const defaultConfig: TenantConfig = {
   nomeEmpresa: 'Sabor Imperial',
   corPrimaria: '#D4AF37',
   logoUrl: '/brand/logo-sabor-imperial.png',
+  publicStoreUrl: '',
   tenantId: 'tenant-001',
 };
 
@@ -30,6 +32,7 @@ type BrandingResponse = {
     nomeEmpresa?: string;
     corPrimaria?: string;
     logoUrl?: string;
+    publicStoreUrl?: string;
   };
 };
 
@@ -44,6 +47,7 @@ export function TenantProvider({ children }: { children: ReactNode }) {
       nomeEmpresa: response?.branding?.nomeEmpresa || defaultConfig.nomeEmpresa,
       corPrimaria: response?.branding?.corPrimaria || defaultConfig.corPrimaria,
       logoUrl: response?.branding?.logoUrl || defaultConfig.logoUrl,
+      publicStoreUrl: response?.branding?.publicStoreUrl || '',
     }));
   };
 
@@ -70,6 +74,7 @@ export function TenantProvider({ children }: { children: ReactNode }) {
       nomeEmpresa: partial.nomeEmpresa ?? config.nomeEmpresa,
       corPrimaria: partial.corPrimaria ?? config.corPrimaria,
       logoUrl: partial.logoUrl ?? config.logoUrl,
+      publicStoreUrl: partial.publicStoreUrl ?? config.publicStoreUrl,
     };
 
     const response = await backendRequest<BrandingResponse>('/api/admin/storefront/branding', {
@@ -82,6 +87,7 @@ export function TenantProvider({ children }: { children: ReactNode }) {
       nomeEmpresa: response?.branding?.nomeEmpresa || defaultConfig.nomeEmpresa,
       corPrimaria: response?.branding?.corPrimaria || defaultConfig.corPrimaria,
       logoUrl: response?.branding?.logoUrl || defaultConfig.logoUrl,
+      publicStoreUrl: response?.branding?.publicStoreUrl || '',
     };
     setConfig(nextConfig);
     return nextConfig;

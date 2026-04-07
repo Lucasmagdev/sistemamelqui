@@ -113,6 +113,7 @@ export default function ConfiguracoesPage() {
   const [nome, setNome] = useState(config.nomeEmpresa);
   const [cor, setCor] = useState(config.corPrimaria);
   const [logoUrl, setLogoUrl] = useState(config.logoUrl || '');
+  const [publicStoreUrl, setPublicStoreUrl] = useState(config.publicStoreUrl || '');
   const [templates, setTemplates] = useState<ZapiTemplates>(emptyTemplates);
   const [defaultTemplates, setDefaultTemplates] = useState<ZapiTemplates>(emptyTemplates);
   const [placeholders, setPlaceholders] = useState<string[]>([]);
@@ -145,7 +146,8 @@ export default function ConfiguracoesPage() {
     setNome(config.nomeEmpresa);
     setCor(config.corPrimaria);
     setLogoUrl(config.logoUrl || '');
-  }, [config.corPrimaria, config.logoUrl, config.nomeEmpresa]);
+    setPublicStoreUrl(config.publicStoreUrl || '');
+  }, [config.corPrimaria, config.logoUrl, config.nomeEmpresa, config.publicStoreUrl]);
 
   useEffect(() => {
     let active = true;
@@ -381,7 +383,7 @@ export default function ConfiguracoesPage() {
 
   const handleSaveBrand = async () => {
     try {
-      await updateConfig({ nomeEmpresa: nome, corPrimaria: cor, logoUrl });
+      await updateConfig({ nomeEmpresa: nome, corPrimaria: cor, logoUrl, publicStoreUrl });
       toast.success('Branding salvo com sucesso!');
     } catch (error: any) {
       toast.error(error.message || 'Erro ao salvar branding');
@@ -520,6 +522,13 @@ export default function ConfiguracoesPage() {
         <div className="space-y-1.5">
           <Label>Logo (URL)</Label>
           <Input value={logoUrl} placeholder="https://..." onChange={(e) => setLogoUrl(e.target.value)} />
+        </div>
+        <div className="space-y-1.5">
+          <Label>URL publica da loja</Label>
+          <Input value={publicStoreUrl} placeholder="https://seudominio.com" onChange={(e) => setPublicStoreUrl(e.target.value)} />
+          <p className="text-xs text-muted-foreground">
+            Essa URL sera usada no QR Code da nota digital, mesmo quando o PDF for gerado localmente.
+          </p>
         </div>
         <div className="space-y-1.5">
           <Label>Tenant ID</Label>

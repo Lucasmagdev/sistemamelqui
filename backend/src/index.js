@@ -357,6 +357,7 @@ const STORE_BRANDING_SETTINGS_KEYS = {
   companyName: "storefront_company_name",
   primaryColor: "storefront_primary_color",
   logoUrl: "storefront_logo_url",
+  publicStoreUrl: "storefront_public_url",
 };
 const ZAPI_GROUP_SETTINGS_KEYS = {
   orderConfirmedGroupId: "zapi_group_order_confirmed_id",
@@ -366,7 +367,18 @@ const DEFAULT_STORE_BRANDING = {
   nomeEmpresa: "Sabor Imperial",
   corPrimaria: "#D4AF37",
   logoUrl: "/brand/logo-sabor-imperial.png",
+  publicStoreUrl: String(process.env.FRONTEND_URL || "").trim() || null,
 };
+
+function normalizePublicStoreUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  try {
+    return new URL(raw).origin;
+  } catch {
+    return raw.replace(/\/+$/, "");
+  }
+}
 
 const ZAPI_TEMPLATE_PLACEHOLDERS = [
   "{{nome}}",
@@ -515,16 +527,18 @@ async function saveSettingValue(tenantId, key, value) {
 }
 
 async function loadStoreBranding(tenantId = 1) {
-  const [companyName, primaryColor, logoUrl] = await Promise.all([
+  const [companyName, primaryColor, logoUrl, publicStoreUrl] = await Promise.all([
     loadSettingValue(tenantId, [STORE_BRANDING_SETTINGS_KEYS.companyName], DEFAULT_STORE_BRANDING.nomeEmpresa),
     loadSettingValue(tenantId, [STORE_BRANDING_SETTINGS_KEYS.primaryColor], DEFAULT_STORE_BRANDING.corPrimaria),
     loadSettingValue(tenantId, [STORE_BRANDING_SETTINGS_KEYS.logoUrl], DEFAULT_STORE_BRANDING.logoUrl),
+    loadSettingValue(tenantId, [STORE_BRANDING_SETTINGS_KEYS.publicStoreUrl], DEFAULT_STORE_BRANDING.publicStoreUrl),
   ]);
 
   return {
     nomeEmpresa: String(companyName || DEFAULT_STORE_BRANDING.nomeEmpresa).trim() || DEFAULT_STORE_BRANDING.nomeEmpresa,
     corPrimaria: String(primaryColor || DEFAULT_STORE_BRANDING.corPrimaria).trim() || DEFAULT_STORE_BRANDING.corPrimaria,
     logoUrl: String(logoUrl || DEFAULT_STORE_BRANDING.logoUrl).trim() || DEFAULT_STORE_BRANDING.logoUrl,
+    publicStoreUrl: normalizePublicStoreUrl(publicStoreUrl || DEFAULT_STORE_BRANDING.publicStoreUrl),
   };
 }
 
@@ -533,6 +547,7 @@ async function saveStoreBranding(tenantId, branding = {}) {
     saveSettingValue(tenantId, STORE_BRANDING_SETTINGS_KEYS.companyName, String(branding.nomeEmpresa || DEFAULT_STORE_BRANDING.nomeEmpresa).trim() || DEFAULT_STORE_BRANDING.nomeEmpresa),
     saveSettingValue(tenantId, STORE_BRANDING_SETTINGS_KEYS.primaryColor, String(branding.corPrimaria || DEFAULT_STORE_BRANDING.corPrimaria).trim() || DEFAULT_STORE_BRANDING.corPrimaria),
     saveSettingValue(tenantId, STORE_BRANDING_SETTINGS_KEYS.logoUrl, String(branding.logoUrl || DEFAULT_STORE_BRANDING.logoUrl).trim() || DEFAULT_STORE_BRANDING.logoUrl),
+    saveSettingValue(tenantId, STORE_BRANDING_SETTINGS_KEYS.publicStoreUrl, normalizePublicStoreUrl(branding.publicStoreUrl || DEFAULT_STORE_BRANDING.publicStoreUrl) || ""),
   ]);
 
   return loadStoreBranding(tenantId);
@@ -741,14 +756,14 @@ function buildMessage({ type, name, code, orderItems, orderTotal, locale, delive
         ? [
             `Hi ${safeName}, your order ${code} was completed successfully.`,
             "",
-            "Could you reply to this message with a quick review of your experience?",
-            "Your feedback helps us improve the service.",
+            "Your digital order note is available for consultation.",
+            "Thank you for choosing us.",
           ].join("\n")
         : [
             `Ola ${safeName}, seu pedido ${code} foi concluido com sucesso.`,
             "",
-            "Voce pode responder esta mensagem com uma avaliacao rapida da sua experiencia?",
-            "Seu feedback ajuda a melhorar nosso atendimento.",
+            "Sua nota digital do pedido esta disponivel para consulta.",
+            "Agradecemos a preferencia.",
           ].join("\n"),
     );
   }

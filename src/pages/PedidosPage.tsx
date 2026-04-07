@@ -256,7 +256,7 @@ export default function PedidosPage() {
     try {
       const response = await backendRequest<OrderDetailResponse>(`/api/orders/${orderId}/detail`);
       if (action === "print") {
-        printOrderDocument(response.detail);
+        await printOrderDocument(response.detail);
       } else {
         await downloadOrderDocumentPdf(response.detail);
       }

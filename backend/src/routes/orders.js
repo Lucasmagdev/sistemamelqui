@@ -9,6 +9,10 @@ function isMissingColumnError(error, column) {
     message.includes(`schema cache`) && message.includes(column);
 }
 
+function normalizeReviewCode(value) {
+  return String(value || "").trim().toUpperCase();
+}
+
 async function updateOrderWithFallback(supabase, orderId, patch) {
   let payload = { ...(patch || {}) };
 
@@ -174,6 +178,61 @@ export function createOrdersRouter(deps) {
       paymentMethodLabel: formatPaymentMethodLabel(order.payment_method, normalizeLocale(order.locale || "pt")),
       deliveryAddress: client ? resolveDeliveryAddress(client) : null,
       items: normalizedItems,
+    };
+  };
+
+  const loadPublicDigitalOrder = async (orderId, providedCode) => {
+    const order = await loadOrder(orderId);
+    const resolvedCode = normalizeReviewCode(resolveOrderCode(order));
+    const requestedCode = normalizeReviewCode(providedCode);
+
+    if (!requestedCode || requestedCode !== resolvedCode) {
+      throw createHttpError(404, "Pedido nao encontrado para nota digital.");
+    }
+
+    let itemsResult = await supabase
+      .from("order_items")
+      .select("*")
+      .eq("pedido_id", orderId)
+      .order("id", { ascending: true });
+
+    if (itemsResult.error && isMissingColumnError(itemsResult.error, "pedido_id")) {
+      itemsResult = await supabase
+        .from("order_items")
+        .select("*")
+        .eq("order_id", orderId)
+        .order("id", { ascending: true });
+    }
+
+    if (itemsResult.error) {
+      throw createHttpError(500, "Erro ao carregar itens do pedido.", itemsResult.error.message);
+    }
+
+    const { clientCandidates } = await loadOrderClientCandidates(order);
+    const client = clientCandidates[0] || null;
+    const branding = await loadStoreBranding(Number(order.tenant_id || 1));
+
+    const items = (itemsResult.data || []).map((item) => {
+      const quantity = Number(item.quantidade ?? item.quantity ?? 0);
+      const unitPrice = Number(item.preco_unitario ?? item.unit_price ?? 0);
+      return {
+        id: item.id,
+        name: item.nome || item.name || `Item ${item.id}`,
+        quantity,
+        unit: item.unidade || item.unit || "LB",
+        unitPrice,
+        totalPrice: roundQty(quantity * unitPrice, 2),
+        cutType: item.tipo_corte || null,
+        notes: item.observacoes || null,
+      };
+    });
+
+    return {
+      order,
+      client,
+      items,
+      branding,
+      orderCode: resolvedCode,
     };
   };
 
@@ -365,6 +424,53 @@ export function createOrdersRouter(deps) {
     } catch (error) {
       return res.status(error?.status || 500).json({
         error: error?.message || "Erro ao carregar detalhe do pedido.",
+        detail: error?.detail || null,
+      });
+    }
+  });
+
+  router.get("/public/digital-note/:id", async (req, res) => {
+    try {
+      const orderId = Number(req.params.id);
+      if (!orderId) {
+        return res.status(400).json({ error: "Pedido invalido para nota digital." });
+      }
+
+      const detail = await loadPublicDigitalOrder(orderId, req.query?.code);
+      const total = (detail.items || []).reduce((acc, item) => acc + Number(item.totalPrice || 0), 0);
+
+      return res.json({
+        ok: true,
+        note: {
+          orderId: detail.order.id,
+          orderCode: detail.orderCode,
+          placedAt: detail.order.data_pedido || null,
+          status: detail.order.status ?? 0,
+          paymentMethodLabel: formatPaymentMethodLabel(detail.order.payment_method, normalizeLocale(detail.order.locale || "pt")),
+          deliveryAddress: detail.client ? resolveDeliveryAddress(detail.client) : null,
+          client: detail.client
+            ? {
+                nome: detail.client.nome || null,
+                telefone: detail.client.telefone || null,
+                email: detail.client.email || null,
+                cidade: detail.client.cidade || null,
+              }
+            : null,
+          branding: {
+            nomeEmpresa: detail.branding?.nomeEmpresa || null,
+            logoUrl: detail.branding?.logoUrl || null,
+            cnpj: detail.branding?.cnpj || null,
+            inscricaoEstadual: detail.branding?.inscricaoEstadual || null,
+            endereco: detail.branding?.endereco || null,
+            publicStoreUrl: detail.branding?.publicStoreUrl || null,
+          },
+          items: detail.items || [],
+          total,
+        },
+      });
+    } catch (error) {
+      return res.status(error?.status || 500).json({
+        error: error?.message || "Erro ao carregar nota digital do pedido.",
         detail: error?.detail || null,
       });
     }

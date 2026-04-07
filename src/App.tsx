@@ -12,6 +12,7 @@ import LoginPage from "@/pages/LoginPage";
 import ClientePage from "@/pages/ClientePage";
 import NotFound from "@/pages/NotFound";
 import CadastroPage from "@/pages/CadastroPage";
+import OrderDigitalNotePage from "@/pages/OrderDigitalNotePage";
 
 const DashboardPage = lazy(() => import("@/pages/DashboardPage"));
 const EstoquePage = lazy(() => import("@/pages/EstoquePage"));
@@ -63,6 +64,7 @@ const App = () => (
             <BrowserRouter>
               <Routes>
                 <Route path="/" element={<ClientePage />} />
+                <Route path="/nota-digital-pedido/:id" element={<OrderDigitalNotePage />} />
                 <Route path="/rota/:token" element={<Suspense fallback={<RouteFallback />}><DeliveryRoutePage /></Suspense>} />
                 <Route path="/login" element={<LoginPage />} />
                 <Route path="/cadastro" element={<CadastroPage />} />

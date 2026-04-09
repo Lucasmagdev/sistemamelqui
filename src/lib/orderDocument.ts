@@ -147,9 +147,6 @@ const buildDeliveryLines = (detail: OrderDocumentDetail) =>
     detail.order?.notes ? `Observacoes: ${detail.order.notes}` : null,
   ].filter(Boolean) as string[];
 
-const buildTransparencyText = () =>
-  "Lei da Transparencia (Lei 12.741/2012): tributos nao calculados neste documento.";
-
 const buildConservationText = () =>
   "Agradecemos a preferencia. Conserve os alimentos sob refrigeracao ou congelamento conforme a orientacao de preparo.";
 
@@ -303,10 +300,6 @@ export const buildOrderDocumentHtml = async (detail: OrderDocumentDetail) => {
                 <div style="display:flex;justify-content:space-between;gap:18px;">
                   <span class="muted">Metodo de pagamento</span>
                   <span style="font-weight:700;">${escapeHtml(detail.paymentMethodLabel || "-")}</span>
-                </div>
-                <div style="display:flex;justify-content:space-between;gap:18px;">
-                  <span class="muted">Tributos informativos</span>
-                  <span style="font-size:12px;text-align:right;max-width:280px;">${escapeHtml(buildTransparencyText())}</span>
                 </div>
                 <div style="border-top:0.5pt solid #bdbdbd;padding-top:12px;display:flex;justify-content:space-between;align-items:flex-end;gap:18px;">
                   <div>

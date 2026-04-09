@@ -237,12 +237,6 @@ export default function OrderDigitalNotePage() {
                     <span className="text-muted-foreground">Metodo de pagamento</span>
                     <span className="font-semibold text-foreground">{note.paymentMethodLabel || "-"}</span>
                   </div>
-                  <div className="flex items-start justify-between gap-4">
-                    <span className="text-muted-foreground">Tributos informativos</span>
-                    <span className="max-w-[320px] text-right text-xs text-muted-foreground">
-                      Lei da Transparencia (Lei 12.741/2012): tributos nao calculados neste documento.
-                    </span>
-                  </div>
                   <div className="flex items-end justify-between gap-4 border-t border-border/70 pt-4">
                     <div>
                       <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-muted-foreground">Total geral</div>

@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useTenant } from "@/contexts/TenantContext";
 import { backendRequest } from "@/lib/backendClient";
+import { adminSalePaymentOptions, getPaymentMethodLabel } from "@/lib/paymentMethods";
 import { useOperationalReportQuery, useStockProductsQuery, useStoreSalesHistoryQuery } from "@/hooks/useAdminQueries";
 
 const today = new Date().toISOString().slice(0, 10);
@@ -28,15 +29,7 @@ const normalizeUnit = (value: string | undefined | null): Unit => {
 const getAllowedSaleUnits = (stockUnit: string | undefined | null): Unit[] =>
   normalizeUnit(stockUnit) === "UN" ? ["UN"] : ["LB", "KG"];
 
-const paymentMethodLabel = (value: string | undefined | null) => {
-  switch (value) {
-    case "veo":
-    case "vemo":
-      return "Vemo";
-    default:
-      return "Nao informado";
-  }
-};
+const paymentMethodLabel = (value: string | undefined | null) => getPaymentMethodLabel(value, "pt");
 
 const quantityLabel = (value: number | string | null | undefined, unit: string | undefined | null) =>
   `${Number(value || 0).toLocaleString("pt-BR", { maximumFractionDigits: 3 })} ${normalizeUnit(unit)}`;
@@ -513,7 +506,9 @@ export default function VendasPage() {
               <div>
                 <label className="mb-1.5 block text-sm font-medium text-muted-foreground">Forma de pagamento</label>
                 <select value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value)} className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
-                  <option value="vemo">Vemo</option>
+                  {adminSalePaymentOptions.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
                 </select>
               </div>
             </div>

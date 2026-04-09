@@ -607,10 +607,11 @@ export function createOrdersRouter(deps) {
           }
 
           if (notification?.qr?.attempted) {
+            const qrPaymentMethod = String(normalizePaymentMethod(updatedOrder.payment_method) || "wallet").toLowerCase();
             await persistWhatsAppAttempt({
               orderId,
               target: "client",
-              eventType: "order_confirmed_client_vemo_qr",
+              eventType: `order_confirmed_client_${qrPaymentMethod}_qr`,
               destinationPhone: notification.qr.destinationPhone || normalizedPhone,
               messageText: notification.qr.caption || null,
               payload: {

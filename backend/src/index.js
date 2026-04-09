@@ -353,6 +353,8 @@ const ZAPI_MESSAGE_SETTINGS_KEYS = {
 
 const VEMO_QR_SETTING_KEYS = ["vemo_qr_code_base64", "veo_qr_code_base64"];
 const VEMO_PAYMENT_LINK_SETTING_KEYS = ["vemo_payment_link", "veo_payment_link"];
+const ZELLE_QR_SETTING_KEYS = ["zelle_qr_code_base64"];
+const ZELLE_PAYMENT_LINK_SETTING_KEYS = ["zelle_payment_link"];
 const STORE_BRANDING_SETTINGS_KEYS = {
   companyName: "storefront_company_name",
   primaryColor: "storefront_primary_color",
@@ -487,6 +489,30 @@ async function loadSettingValue(tenantId, keys = [], fallback = null) {
   const value = row?.valor;
   if (value === undefined || value === null || value === "") return fallback;
   return value;
+}
+
+async function hasSettingValue(tenantId, keys = []) {
+  const settingKeys = Array.from(new Set((Array.isArray(keys) ? keys : [keys]).map((key) => String(key || "").trim()).filter(Boolean)));
+  if (!settingKeys.length) return false;
+
+  const { data, error } = await supabase
+    .from("settings")
+    .select("id, chave, tenant_id")
+    .in("chave", settingKeys)
+    .or(`tenant_id.eq.${tenantId},tenant_id.is.null`)
+    .order("tenant_id", { ascending: false })
+    .order("id", { ascending: false });
+
+  if (error) {
+    throw createHttpError(500, "Erro ao verificar configuracao.", error.message);
+  }
+
+  for (const key of settingKeys) {
+    const row = (data || []).find((item) => String(item.chave || "").trim() === key);
+    if (row) return true;
+  }
+
+  return false;
 }
 
 async function saveSettingValue(tenantId, key, value) {
@@ -702,7 +728,25 @@ async function saveVemoPaymentLink(tenantId, paymentLink) {
   await saveSettingValue(tenantId, VEMO_PAYMENT_LINK_SETTING_KEYS[0], String(paymentLink || "").trim());
 }
 
-function buildVemoPaymentCaption({ orderCode, orderTotal, locale, paymentLink }) {
+async function loadZelleQrCode(tenantId = 1) {
+  const value = await loadSettingValue(tenantId, ZELLE_QR_SETTING_KEYS, null);
+  return value ? String(value) : null;
+}
+
+async function loadZellePaymentLink(tenantId = 1) {
+  const value = await loadSettingValue(tenantId, ZELLE_PAYMENT_LINK_SETTING_KEYS, null);
+  return String(value || "").trim() || null;
+}
+
+async function saveZelleQrCode(tenantId, base64) {
+  await saveSettingValue(tenantId, ZELLE_QR_SETTING_KEYS[0], String(base64 || "").trim());
+}
+
+async function saveZellePaymentLink(tenantId, paymentLink) {
+  await saveSettingValue(tenantId, ZELLE_PAYMENT_LINK_SETTING_KEYS[0], String(paymentLink || "").trim());
+}
+
+function buildWalletPaymentCaption({ methodName, orderCode, orderTotal, locale, paymentLink }) {
   const isEn = locale === "en";
   const codeLine = orderCode ? `${isEn ? "Order" : "Pedido"}: ${orderCode}` : "";
   const totalLabel = formatMoney(orderTotal);
@@ -715,7 +759,7 @@ function buildVemoPaymentCaption({ orderCode, orderTotal, locale, paymentLink })
     : "";
 
   return [
-    isEn ? "Vemo payment" : "Pagamento Vemo",
+    isEn ? `${methodName} payment` : `Pagamento ${methodName}`,
     codeLine,
     "",
     isEn ? "Scan the QR Code to complete your payment." : "Escaneie o QR Code para concluir o pagamento.",
@@ -737,9 +781,10 @@ function renderNotificationTemplate(template, values) {
   return cleanupRenderedMessage(output);
 }
 
-function buildMessage({ type, name, code, orderItems, orderTotal, locale, deliveryAddress, templates }) {
+function buildMessage({ type, name, code, orderItems, orderTotal, locale, deliveryAddress, templates, paymentMethod }) {
   const isEn = locale === "en";
   const safeName = String(name || "").trim() || (isEn ? "customer" : "cliente");
+  const normalizedPaymentMethod = normalizePaymentMethod(paymentMethod);
   const itemsLines = (orderItems || []).map((item) => `- ${item.nome}: ${formatQuantity(item.quantidade)}`);
   const totalLabel = formatMoney(orderTotal) || "";
   const itemsBlock = itemsLines.length > 0
@@ -768,6 +813,30 @@ function buildMessage({ type, name, code, orderItems, orderTotal, locale, delive
     );
   }
 
+  if (type === "confirmed" && normalizedPaymentMethod === "cartao") {
+    return cleanupRenderedMessage(
+      isEn
+        ? [
+            `Order update: Hi ${safeName}, your order ${code} was confirmed successfully!`,
+            "",
+            "Payment method: Card.",
+            "Payment will be made in person at pickup or delivery.",
+            "",
+            itemsBlock,
+            totalBlock,
+          ].filter(Boolean).join("\n")
+        : [
+            `Atualizacao do pedido: Ola ${safeName}, seu pedido ${code} foi confirmado com sucesso!`,
+            "",
+            "Pagamento: Cartao.",
+            "O pagamento sera feito presencialmente na retirada ou entrega.",
+            "",
+            itemsBlock,
+            totalBlock,
+          ].filter(Boolean).join("\n"),
+    );
+  }
+
   const templateByType = templates?.[type] || DEFAULT_ZAPI_MESSAGE_TEMPLATES[type] || {};
   const template = normalizeTemplateText(templateByType?.[isEn ? "en" : "pt"], DEFAULT_ZAPI_MESSAGE_TEMPLATES[type]?.[isEn ? "en" : "pt"] || "");
 
@@ -792,6 +861,8 @@ function formatPaymentMethodLabel(paymentMethod, locale = "pt") {
       return isEn ? "Card" : "Cartao";
     case "dinheiro":
       return isEn ? "Cash" : "Dinheiro";
+    case "zelle":
+      return "Zelle";
     case "vemo":
       return "Vemo";
     default:
@@ -1351,6 +1422,7 @@ async function sendStatusNotification({ previousStatus, newStatus, clientName, c
   const phone = normalizePhone(clientPhone);
   if (!phone) return { sent: false, queued: false, reason: "missing-phone", eventType };
 
+  const normalizedPaymentMethod = normalizePaymentMethod(paymentMethod);
   const templates = type === "review_request" ? null : await loadZapiMessageTemplates(Number(tenantId || 1));
   const message = buildMessage({
     type,
@@ -1361,6 +1433,7 @@ async function sendStatusNotification({ previousStatus, newStatus, clientName, c
     locale,
     deliveryAddress,
     templates,
+    paymentMethod: normalizedPaymentMethod,
   });
 
   const sendResult = await sendWhatsAppViaZApi({ phone, message });
@@ -1376,21 +1449,26 @@ async function sendStatusNotification({ previousStatus, newStatus, clientName, c
   }
 
   let qr = null;
-  if (type === "confirmed" && normalizePaymentMethod(paymentMethod) === "vemo") {
-    const paymentLink = await loadVemoPaymentLink(Number(tenantId || 1));
-    const qrCaption = buildVemoPaymentCaption({
+  if (type === "confirmed" && (normalizedPaymentMethod === "vemo" || normalizedPaymentMethod === "zelle")) {
+    const paymentLink = normalizedPaymentMethod === "zelle"
+      ? await loadZellePaymentLink(Number(tenantId || 1))
+      : await loadVemoPaymentLink(Number(tenantId || 1));
+    const qrCaption = buildWalletPaymentCaption({
+      methodName: normalizedPaymentMethod === "zelle" ? "Zelle" : "Vemo",
       orderCode,
       orderTotal,
       locale,
       paymentLink,
     });
-    const qrBase64 = await loadVemoQrCode(Number(tenantId || 1));
+    const qrBase64 = normalizedPaymentMethod === "zelle"
+      ? await loadZelleQrCode(Number(tenantId || 1))
+      : await loadVemoQrCode(Number(tenantId || 1));
     if (!qrBase64) {
       qr = {
         attempted: true,
         sent: false,
         queued: false,
-        reason: "missing-vemo-qr-code",
+        reason: `missing-${normalizedPaymentMethod}-qr-code`,
         detail: null,
         caption: qrCaption,
         paymentLink,
@@ -1423,7 +1501,7 @@ async function sendStatusNotification({ previousStatus, newStatus, clientName, c
               attempted: true,
               sent: false,
               queued: false,
-              reason: qrResult.reason || "vemo-qr-send-failed",
+              reason: qrResult.reason || `${normalizedPaymentMethod}-qr-send-failed`,
               detail: qrResult.detail || null,
               caption: qrCaption,
               paymentLink,
@@ -1436,7 +1514,7 @@ async function sendStatusNotification({ previousStatus, newStatus, clientName, c
           attempted: true,
           sent: false,
           queued: false,
-          reason: "vemo-qr-send-exception",
+          reason: `${normalizedPaymentMethod}-qr-send-exception`,
           detail: error?.message || null,
           caption: qrCaption,
           paymentLink,
@@ -5576,11 +5654,13 @@ app.post("/api/admin/zapi-disconnect", async (req, res) => {
 app.get("/api/admin/vemo-qr-code", async (req, res) => {
   try {
     const actor = await requireAssistantAdmin(req);
+    const metadataOnly = String(req.query?.metadata || "").trim() === "1";
     const [base64, paymentLink] = await Promise.all([
-      loadVemoQrCode(actor.tenantId),
+      metadataOnly ? Promise.resolve(null) : loadVemoQrCode(actor.tenantId),
       loadVemoPaymentLink(actor.tenantId),
     ]);
-    return res.json({ ok: true, hasQrCode: Boolean(base64), base64: base64 || null, paymentLink: paymentLink || null });
+    const hasQrCode = metadataOnly ? await hasSettingValue(actor.tenantId, VEMO_QR_SETTING_KEYS) : Boolean(base64);
+    return res.json({ ok: true, hasQrCode, base64: base64 || null, paymentLink: paymentLink || null });
   } catch (error) {
     return res.status(error?.status || 500).json({ error: error?.message || "Erro ao carregar QR code Vemo." });
   }
@@ -5626,6 +5706,62 @@ app.delete("/api/admin/vemo-qr-code", async (req, res) => {
     return res.json({ ok: true, hasQrCode: false, base64: null, paymentLink: null });
   } catch (error) {
     return res.status(error?.status || 500).json({ error: error?.message || "Erro ao remover QR code Vemo." });
+  }
+});
+
+app.get("/api/admin/zelle-qr-code", async (req, res) => {
+  try {
+    const actor = await requireAssistantAdmin(req);
+    const metadataOnly = String(req.query?.metadata || "").trim() === "1";
+    const [base64, paymentLink] = await Promise.all([
+      metadataOnly ? Promise.resolve(null) : loadZelleQrCode(actor.tenantId),
+      loadZellePaymentLink(actor.tenantId),
+    ]);
+    const hasQrCode = metadataOnly ? await hasSettingValue(actor.tenantId, ZELLE_QR_SETTING_KEYS) : Boolean(base64);
+    return res.json({ ok: true, hasQrCode, base64: base64 || null, paymentLink: paymentLink || null });
+  } catch (error) {
+    return res.status(error?.status || 500).json({ error: error?.message || "Erro ao carregar QR code Zelle." });
+  }
+});
+
+app.patch("/api/admin/zelle-qr-code", async (req, res) => {
+  try {
+    const actor = await requireAssistantAdmin(req);
+    const hasBase64 = Object.prototype.hasOwnProperty.call(req.body || {}, "base64");
+    const hasPaymentLink = Object.prototype.hasOwnProperty.call(req.body || {}, "paymentLink");
+
+    if (!hasBase64 && !hasPaymentLink) {
+      return res.status(400).json({ error: "Informe ao menos base64 ou paymentLink para atualizar o Zelle." });
+    }
+
+    if (hasBase64) {
+      await saveZelleQrCode(actor.tenantId, String(req.body?.base64 || "").trim());
+    }
+
+    if (hasPaymentLink) {
+      await saveZellePaymentLink(actor.tenantId, String(req.body?.paymentLink || "").trim());
+    }
+
+    const [base64, paymentLink] = await Promise.all([
+      loadZelleQrCode(actor.tenantId),
+      loadZellePaymentLink(actor.tenantId),
+    ]);
+    return res.json({ ok: true, hasQrCode: Boolean(base64), base64: base64 || null, paymentLink: paymentLink || null });
+  } catch (error) {
+    return res.status(error?.status || 500).json({ error: error?.message || "Erro ao salvar QR code Zelle." });
+  }
+});
+
+app.delete("/api/admin/zelle-qr-code", async (req, res) => {
+  try {
+    const actor = await requireAssistantAdmin(req);
+    await Promise.all([
+      saveZelleQrCode(actor.tenantId, ""),
+      saveZellePaymentLink(actor.tenantId, ""),
+    ]);
+    return res.json({ ok: true, hasQrCode: false, base64: null, paymentLink: null });
+  } catch (error) {
+    return res.status(error?.status || 500).json({ error: error?.message || "Erro ao remover QR code Zelle." });
   }
 });
 

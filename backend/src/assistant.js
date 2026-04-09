@@ -408,7 +408,7 @@ async function classifyWithModel({ question, normalizeSearchText, callGeminiText
       "Responda somente JSON valido, sem markdown.",
       'Campo "tool" permitido: "count_orders", "sum_order_revenue", "get_max_order", "get_orders_by_status", "sum_store_sales", "sum_total_sales", "count_total_sales", "sum_employee_payments", "list_employee_payments", "sum_expenses", "group_expenses_by_category", "get_top_clients", "get_client_order_summary", ou null.',
       'Campo "status" permitido: 0,1,2,3,4,5 ou null.',
-      'Campo "payment_method" permitido: "pix", "cartao", "dinheiro" ou null.',
+      'Campo "payment_method" permitido: "pix", "cartao", "dinheiro", "vemo", "zelle" ou null.',
       'Campo "source" permitido: "delivery", "store" ou null.',
       'Campo "expense_category" permitido: "carne", "limpeza", "aluguel", "outras" ou null.',
       'Campos opcionais: "client_name", "employee_name".',
@@ -439,6 +439,12 @@ async function classifyWithModel({ question, normalizeSearchText, callGeminiText
 
 function classifyHeuristically({ question, normalizeSearchText }) {
   const normalized = normalizeSearchText(question);
+  const detectedPaymentMethod =
+    normalized.includes("zelle")
+      ? "zelle"
+      : normalized.includes("vemo") || normalized.includes("veo")
+        ? "vemo"
+        : findAliasValue(PAYMENT_METHOD_ALIASES, normalized);
   const asksCount = /(quantos?|quantas?|qtd|quantidade|numero de|numero total|contagem|foram feitos|houve|tivemos)/.test(normalized);
   const asksRevenue = /(quanto vendeu|quanto vendemos|faturamento|receita|total vendido|valor vendido|quanto foi vendido)/.test(normalized);
   const asksList = /(listar|liste|mostre|mostrar|quais foram|quais sao|quais são)/.test(normalized);
@@ -479,7 +485,7 @@ function classifyHeuristically({ question, normalizeSearchText }) {
     return {
       tool: "count_orders",
       status: findAliasValue(STATUS_ALIASES, normalized),
-      paymentMethod: findAliasValue(PAYMENT_METHOD_ALIASES, normalized),
+      paymentMethod: detectedPaymentMethod,
       source: asksStore ? "store" : asksDelivery ? "delivery" : null,
       clientName: extractNamedEntity(question, "client"),
     };
@@ -493,12 +499,12 @@ function classifyHeuristically({ question, normalizeSearchText }) {
 
   if (asksRevenue || asksSales) {
     if (asksStore && !asksDelivery) {
-      return { tool: "sum_store_sales", paymentMethod: findAliasValue(PAYMENT_METHOD_ALIASES, normalized) };
+      return { tool: "sum_store_sales", paymentMethod: detectedPaymentMethod };
     }
     if (asksDelivery && !asksStore) {
       return {
         tool: "sum_order_revenue",
-        paymentMethod: findAliasValue(PAYMENT_METHOD_ALIASES, normalized),
+        paymentMethod: detectedPaymentMethod,
         source: "delivery",
         clientName: extractNamedEntity(question, "client"),
       };
@@ -506,12 +512,12 @@ function classifyHeuristically({ question, normalizeSearchText }) {
     if (asksOrders && !asksStore) {
       return {
         tool: "sum_order_revenue",
-        paymentMethod: findAliasValue(PAYMENT_METHOD_ALIASES, normalized),
+        paymentMethod: detectedPaymentMethod,
         status: findAliasValue(STATUS_ALIASES, normalized),
         clientName: extractNamedEntity(question, "client"),
       };
     }
-    return { tool: "sum_total_sales", paymentMethod: findAliasValue(PAYMENT_METHOD_ALIASES, normalized) };
+    return { tool: "sum_total_sales", paymentMethod: detectedPaymentMethod };
   }
 
   return null;
@@ -530,11 +536,17 @@ async function planIntent({ question, normalizeSearchText, callGeminiText }) {
 
 function normalizePlannedFilters(plan, question, normalizeSearchText) {
   const normalizedQuestion = normalizeSearchText(question);
+  const detectedPaymentMethod =
+    normalizedQuestion.includes("zelle")
+      ? "zelle"
+      : normalizedQuestion.includes("vemo") || normalizedQuestion.includes("veo")
+        ? "vemo"
+        : findAliasValue(PAYMENT_METHOD_ALIASES, normalizedQuestion);
   return {
     tool: plan.tool,
     domain: TOOL_TO_DOMAIN[plan.tool] || "central",
     status: Number.isInteger(plan.status) ? plan.status : findAliasValue(STATUS_ALIASES, normalizedQuestion),
-    paymentMethod: normalizeFilterValue(plan.paymentMethod || plan.payment_method || findAliasValue(PAYMENT_METHOD_ALIASES, normalizedQuestion)),
+    paymentMethod: normalizeFilterValue(plan.paymentMethod || plan.payment_method || detectedPaymentMethod),
     source: normalizeFilterValue(plan.source || (normalizedQuestion.includes("delivery") ? "delivery" : normalizedQuestion.includes("loja") || normalizedQuestion.includes("presencial") ? "store" : null)),
     expenseCategory: normalizeFilterValue(plan.expenseCategory || plan.expense_category || findAliasValue(EXPENSE_CATEGORY_ALIASES, normalizedQuestion)),
     clientName: normalizeFilterValue(plan.clientName || plan.client_name || extractNamedEntity(question, "client")),

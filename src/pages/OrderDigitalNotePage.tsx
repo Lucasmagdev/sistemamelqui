@@ -106,9 +106,9 @@ export default function OrderDigitalNotePage() {
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between print:hidden">
           <div>
             <div className="text-xs font-semibold uppercase tracking-[0.28em] text-primary">Nota digital</div>
-            <h1 className="mt-2 text-3xl font-extrabold tracking-tight text-foreground">Espelho do pedido</h1>
+            <h1 className="mt-2 text-3xl font-extrabold tracking-tight text-foreground">Nota do pedido</h1>
             <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-              Documento digital de conferencia com os dados do pedido, itens, pagamento e entrega.
+              Documento digital com os dados do pedido, itens, pagamento e entrega.
             </p>
           </div>
           <div className="flex gap-3">
@@ -146,7 +146,7 @@ export default function OrderDigitalNotePage() {
                   )}
                   <div className="space-y-2">
                     <div className="text-2xl font-extrabold tracking-tight text-foreground">{companyName}</div>
-                    <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-muted-foreground">Espelho de pedido</div>
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-muted-foreground">Nota do pedido</div>
                     <div className="space-y-1 text-sm text-muted-foreground">
                       {note.branding?.cnpj ? <div>CNPJ {note.branding.cnpj}</div> : null}
                       {note.branding?.inscricaoEstadual ? <div>IE {note.branding.inscricaoEstadual}</div> : null}
@@ -224,10 +224,9 @@ export default function OrderDigitalNotePage() {
 
             <div className="grid gap-4 border-t border-border/70 px-6 py-6 sm:grid-cols-[0.95fr_1.05fr] sm:px-8 print:px-6">
               <div className="rounded-2xl border border-border/70 px-5 py-4">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-muted-foreground">Documento digital</div>
+                <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-muted-foreground">Informacoes</div>
                 <div className="mt-3 space-y-2 text-sm text-muted-foreground">
-                  <div>Este espelho digital resume os dados do pedido para consulta e conferencia.</div>
-                  <div>Documento sem valor fiscal.</div>
+                  <div>Este documento digital resume os dados do pedido para consulta.</div>
                   <div>Obrigado pela preferencia. Conserve os alimentos sob refrigeracao ou congelamento conforme a orientacao de preparo.</div>
                 </div>
               </div>
@@ -241,13 +240,13 @@ export default function OrderDigitalNotePage() {
                   <div className="flex items-start justify-between gap-4">
                     <span className="text-muted-foreground">Tributos informativos</span>
                     <span className="max-w-[320px] text-right text-xs text-muted-foreground">
-                      Lei da Transparencia (Lei 12.741/2012): tributos nao calculados neste espelho de conferencia.
+                      Lei da Transparencia (Lei 12.741/2012): tributos nao calculados neste documento.
                     </span>
                   </div>
                   <div className="flex items-end justify-between gap-4 border-t border-border/70 pt-4">
                     <div>
                       <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-muted-foreground">Total geral</div>
-                      <div className="mt-1 text-xs text-muted-foreground">Documento espelho de conferencia.</div>
+                      <div className="mt-1 text-xs text-muted-foreground">Resumo do pedido.</div>
                     </div>
                     <div className="font-mono text-3xl font-extrabold tracking-tight text-foreground">{money(note.total)}</div>
                   </div>

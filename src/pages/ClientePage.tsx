@@ -36,6 +36,7 @@ import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { useI18n } from '@/contexts/I18nContext';
 import { backendRequest } from '@/lib/backendClient';
+import { checkoutPaymentOptions, getPaymentMethodLabel } from '@/lib/paymentMethods';
 import { resolvePriorityProductImage } from '@/lib/productImageOverrides';
 import {
   formatPhoneForDisplay,
@@ -90,7 +91,7 @@ type ModoVisualizacao = 'grid' | 'compact' | 'list';
 type Ordenacao = 'menor-maior' | 'maior-menor';
 type TipoCorte = 'piece' | 'steak' | 'cubes' | 'ground' | 'other';
 type EntregaModo = 'entrega' | 'retirada';
-type Pagamento = 'vemo';
+type Pagamento = 'vemo' | 'zelle' | 'cartao';
 
 interface ItemCarrinho {
   id: string;
@@ -231,8 +232,12 @@ export default function ClientePage() {
     city: isEn ? 'City' : 'Cidade',
     zipCode: isEn ? 'ZIP Code' : 'CEP',
     card: isEn ? 'Card' : 'Cartao',
+    zelle: 'Zelle',
+    vemo: 'Vemo',
     cash: isEn ? 'Cash' : 'Dinheiro',
     changeFor: isEn ? 'Change for how much?' : 'Troco para quanto?',
+    paymentDigitalHint: isEn ? 'You will receive QR code and payment link after confirmation.' : 'Voce recebera QR code e link de pagamento apos a confirmacao.',
+    paymentCardHint: isEn ? 'Payment will be made in person at pickup or delivery.' : 'O pagamento sera feito presencialmente na retirada ou entrega.',
     confirmOrder: isEn ? 'Confirm your order' : 'Confirme seu pedido',
     customer: isEn ? 'Customer' : 'Cliente',
     delivery: isEn ? 'Delivery' : 'Entrega',
@@ -282,6 +287,7 @@ export default function ClientePage() {
       ground: tr('Moido', 'Ground'),
       other: tr('Outro', 'Other'),
     })[type];
+  const paymentOptions = checkoutPaymentOptions(isEn ? 'en' : 'pt');
   const navigate = useNavigate();
   const [usuarioLogado, setUsuarioLogado] = useState(false);
   const [emailLogado, setEmailLogado] = useState('');
@@ -700,7 +706,10 @@ export default function ClientePage() {
     }
 
     if (etapaCheckout === 2) {
-      // pagamento fixo em vemo, sem validacao adicional
+      if (!pagamento) {
+        toast.error(ui.payment);
+        return false;
+      }
     }
 
     return true;
@@ -1434,14 +1443,28 @@ export default function ClientePage() {
 
                 {etapaCheckout === 2 ? (
                   <div className="space-y-3">
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setPagamento('vemo')}
-                        className={cn('rounded-lg px-4 py-2 text-sm font-semibold', 'gold-gradient-bg text-accent-foreground')}
-                      >
-                        Vemo
-                      </button>
+                    <div className="grid gap-3 md:grid-cols-3">
+                      {paymentOptions.map((option) => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          onClick={() => setPagamento(option.value)}
+                          className={cn(
+                            'rounded-xl border px-4 py-3 text-left transition',
+                            pagamento === option.value
+                              ? 'border-primary/40 gold-gradient-bg text-accent-foreground'
+                              : 'border-border bg-card text-foreground hover:border-primary/40',
+                          )}
+                        >
+                          <div className="text-sm font-semibold">{option.label}</div>
+                          <div className={cn('mt-1 text-xs leading-5', pagamento === option.value ? 'text-accent-foreground/85' : 'text-muted-foreground')}>
+                            {option.description}
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                    <div className="rounded-xl border border-border bg-card p-4 text-xs leading-6 text-muted-foreground">
+                      {pagamento === 'cartao' ? ui.paymentCardHint : ui.paymentDigitalHint}
                     </div>
                   </div>
                 ) : null}
@@ -1468,7 +1491,7 @@ export default function ClientePage() {
                       </div>
                       <div className="flex justify-between py-2">
                         <span className="text-muted-foreground">{ui.payment}</span>
-                        <span className="font-medium text-foreground">Vemo</span>
+                        <span className="font-medium text-foreground">{getPaymentMethodLabel(pagamento, isEn ? 'en' : 'pt')}</span>
                       </div>
                       <div className="flex justify-between py-2">
                         <span className="font-semibold text-muted-foreground">{ui.total}</span>

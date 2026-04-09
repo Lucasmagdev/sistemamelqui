@@ -143,13 +143,12 @@ const buildClientLines = (detail: OrderDocumentDetail) =>
 
 const buildDeliveryLines = (detail: OrderDocumentDetail) =>
   [
-    `Data/Hora: ${formatDateTime(detail.order?.data_pedido)}`,
     detail.deliveryAddress ? `Endereco: ${detail.deliveryAddress}` : null,
     detail.order?.notes ? `Observacoes: ${detail.order.notes}` : null,
   ].filter(Boolean) as string[];
 
 const buildTransparencyText = () =>
-  "Lei da Transparencia (Lei 12.741/2012): tributos nao calculados neste espelho de conferencia.";
+  "Lei da Transparencia (Lei 12.741/2012): tributos nao calculados neste documento.";
 
 const buildConservationText = () =>
   "Agradecemos a preferencia. Conserve os alimentos sob refrigeracao ou congelamento conforme a orientacao de preparo.";
@@ -196,7 +195,7 @@ export const buildOrderDocumentHtml = async (detail: OrderDocumentDetail) => {
   return `
     <html>
       <head>
-        <title>Espelho ${escapeHtml(detail.orderCode)}</title>
+        <title>Nota ${escapeHtml(detail.orderCode)}</title>
         <style>
           body {
             font-family: Inter, Roboto, "Segoe UI", Arial, sans-serif;
@@ -252,7 +251,7 @@ export const buildOrderDocumentHtml = async (detail: OrderDocumentDetail) => {
                   ${logoDataUrl ? `<img src="${logoDataUrl}" alt="Logo" style="width:60px;height:60px;object-fit:contain;" />` : ""}
                   <div>
                     <div style="font-size:22px;font-weight:800;line-height:1.1;">${escapeHtml(detail.branding.nomeEmpresa || "Sabor Imperial")}</div>
-                    <div class="tinycaps" style="margin-top:6px;">Espelho de Pedido</div>
+                    <div class="tinycaps" style="margin-top:6px;">Nota do Pedido</div>
                     ${companyMeta.length ? `<div style="margin-top:10px;font-size:12px;line-height:1.6;">${companyMeta.map((line) => `<div>${escapeHtml(line)}</div>`).join("")}</div>` : ""}
                   </div>
                 </div>
@@ -261,7 +260,6 @@ export const buildOrderDocumentHtml = async (detail: OrderDocumentDetail) => {
                 <div class="tinycaps">Identificacao</div>
                 <div class="mono" style="margin-top:6px;font-size:22px;font-weight:800;">${escapeHtml(detail.orderCode)}</div>
                 <div class="mono" style="margin-top:6px;font-size:12px;">${escapeHtml(formatDateTime(detail.order?.data_pedido))}</div>
-                <div style="margin-top:8px;font-size:12px;font-weight:700;">${escapeHtml(statusLabel(detail.order?.status))}</div>
               </div>
             </div>
           </div>
@@ -313,7 +311,7 @@ export const buildOrderDocumentHtml = async (detail: OrderDocumentDetail) => {
                 <div style="border-top:0.5pt solid #bdbdbd;padding-top:12px;display:flex;justify-content:space-between;align-items:flex-end;gap:18px;">
                   <div>
                     <div class="tinycaps">Total Geral</div>
-                    <div class="muted" style="margin-top:4px;font-size:12px;">Documento espelho de conferencia, sem valor fiscal.</div>
+                    <div class="muted" style="margin-top:4px;font-size:12px;">Documento do pedido.</div>
                   </div>
                   <div class="mono" style="font-size:26px;font-weight:800;line-height:1;">${escapeHtml(money(total))}</div>
                 </div>
@@ -404,7 +402,7 @@ export const downloadOrderDocumentPdf = async (detail: OrderDocumentDetail) => {
   doc.text(detail.branding.nomeEmpresa || "Sabor Imperial", headerLeft, y + 18);
   doc.setFontSize(9);
   doc.setTextColor(98, 98, 98);
-  doc.text("ESPELHO DE PEDIDO", headerLeft, y + 34);
+  doc.text("NOTA DO PEDIDO", headerLeft, y + 34);
 
   let metaY = y + 50;
   companyMeta.forEach((line) => {
@@ -419,11 +417,8 @@ export const downloadOrderDocumentPdf = async (detail: OrderDocumentDetail) => {
   doc.setFont(monoFont, "normal");
   doc.setFontSize(10);
   doc.text(formatDateTime(detail.order?.data_pedido), right, y + 34, { align: "right" });
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(10);
-  doc.text(statusLabel(detail.order?.status), right, y + 50, { align: "right" });
 
-  y = Math.max(metaY, y + 72) + 12;
+  y = Math.max(metaY, y + 56) + 12;
   doc.setDrawColor(204, 204, 204);
   doc.setLineWidth(0.5);
   doc.line(margin, y, right, y);
@@ -587,7 +582,7 @@ export const downloadOrderDocumentPdf = async (detail: OrderDocumentDetail) => {
   doc.setFont("helvetica", "italic");
   doc.setFontSize(8.5);
   doc.setTextColor(110, 110, 110);
-  doc.text("Documento espelho de conferencia - sem valor fiscal.", margin, pageHeight - 18);
+  doc.text("Documento do pedido.", margin, pageHeight - 18);
 
-  doc.save(`${detail.orderCode.toLowerCase()}-espelho-pedido.pdf`);
+  doc.save(`${detail.orderCode.toLowerCase()}-nota-pedido.pdf`);
 };

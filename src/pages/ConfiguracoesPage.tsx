@@ -124,9 +124,20 @@ export default function ConfiguracoesPage() {
   const [copiedPlaceholder, setCopiedPlaceholder] = useState<string | null>(null);
   const [veoQrBase64, setVeoQrBase64] = useState<string | null>(null);
   const [veoPaymentLink, setVeoPaymentLink] = useState('');
+  const [veoHasQrCode, setVeoHasQrCode] = useState(false);
   const [loadingVeoQr, setLoadingVeoQr] = useState(true);
+  const [loadingVeoPreview, setLoadingVeoPreview] = useState(false);
   const [savingVeoQr, setSavingVeoQr] = useState(false);
+  const [veoQrError, setVeoQrError] = useState<string | null>(null);
   const veoFileRef = useRef<HTMLInputElement>(null);
+  const [zelleQrBase64, setZelleQrBase64] = useState<string | null>(null);
+  const [zellePaymentLink, setZellePaymentLink] = useState('');
+  const [zelleHasQrCode, setZelleHasQrCode] = useState(false);
+  const [loadingZelleQr, setLoadingZelleQr] = useState(true);
+  const [loadingZellePreview, setLoadingZellePreview] = useState(false);
+  const [savingZelleQr, setSavingZelleQr] = useState(false);
+  const [zelleQrError, setZelleQrError] = useState<string | null>(null);
+  const zelleFileRef = useRef<HTMLInputElement>(null);
   const [zapiConnection, setZapiConnection] = useState<ZapiConnectionResponse | null>(null);
   const [loadingZapiConnection, setLoadingZapiConnection] = useState(true);
   const [refreshingZapiConnection, setRefreshingZapiConnection] = useState(false);
@@ -154,17 +165,48 @@ export default function ConfiguracoesPage() {
     const loadVemoQr = async () => {
       try {
         setLoadingVeoQr(true);
-        const res = await backendRequest<{ ok: true; hasQrCode: boolean; base64: string | null; paymentLink: string | null }>('/api/admin/vemo-qr-code');
+        setVeoQrError(null);
+        const res = await Promise.race([
+          backendRequest<{ ok: true; hasQrCode: boolean; base64: string | null; paymentLink: string | null }>('/api/admin/vemo-qr-code?metadata=1'),
+          new Promise<never>((_, reject) => window.setTimeout(() => reject(new Error('Tempo esgotado ao carregar Vemo.')), 8000)),
+        ]);
         if (!active) return;
         setVeoQrBase64(res.base64 || null);
         setVeoPaymentLink(res.paymentLink || '');
-      } catch {
-        // silently ignore, qr can be unset
+        setVeoHasQrCode(Boolean(res.hasQrCode));
+      } catch (error: any) {
+        if (!active) return;
+        setVeoQrError(error?.message || 'Nao foi possivel carregar a configuracao do Vemo.');
       } finally {
         if (active) setLoadingVeoQr(false);
       }
     };
     void loadVemoQr();
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const loadZelleQr = async () => {
+      try {
+        setLoadingZelleQr(true);
+        setZelleQrError(null);
+        const res = await Promise.race([
+          backendRequest<{ ok: true; hasQrCode: boolean; base64: string | null; paymentLink: string | null }>('/api/admin/zelle-qr-code?metadata=1'),
+          new Promise<never>((_, reject) => window.setTimeout(() => reject(new Error('Tempo esgotado ao carregar Zelle.')), 8000)),
+        ]);
+        if (!active) return;
+        setZelleQrBase64(res.base64 || null);
+        setZellePaymentLink(res.paymentLink || '');
+        setZelleHasQrCode(Boolean(res.hasQrCode));
+      } catch (error: any) {
+        if (!active) return;
+        setZelleQrError(error?.message || 'Nao foi possivel carregar a configuracao do Zelle.');
+      } finally {
+        if (active) setLoadingZelleQr(false);
+      }
+    };
+    void loadZelleQr();
     return () => { active = false; };
   }, []);
 
@@ -270,6 +312,23 @@ export default function ConfiguracoesPage() {
     reader.readAsDataURL(file);
   };
 
+  const handleLoadVeoPreview = async () => {
+    try {
+      setLoadingVeoPreview(true);
+      setVeoQrError(null);
+      const res = await backendRequest<{ ok: true; hasQrCode: boolean; base64: string | null; paymentLink: string | null }>('/api/admin/vemo-qr-code');
+      setVeoQrBase64(res.base64 || null);
+      setVeoHasQrCode(Boolean(res.hasQrCode));
+      if (!res.base64) {
+        toast.info('Nenhum preview de QR code Vemo foi encontrado.');
+      }
+    } catch (error: any) {
+      setVeoQrError(error?.message || 'Nao foi possivel carregar o preview do Vemo.');
+    } finally {
+      setLoadingVeoPreview(false);
+    }
+  };
+
   const handleSaveVeoQr = async () => {
     if (!veoQrBase64 && !veoPaymentLink.trim()) return;
     try {
@@ -278,6 +337,7 @@ export default function ConfiguracoesPage() {
         method: 'PATCH',
         body: JSON.stringify({ base64: veoQrBase64 || '', paymentLink: veoPaymentLink.trim() }),
       });
+      setVeoHasQrCode(Boolean(veoQrBase64 || veoPaymentLink.trim()));
       toast.success('Configuracao do Vemo salva!');
     } catch (error: any) {
       toast.error(error.message || 'Erro ao salvar configuracao do Vemo');
@@ -292,6 +352,7 @@ export default function ConfiguracoesPage() {
       await backendRequest('/api/admin/vemo-qr-code', { method: 'DELETE' });
       setVeoQrBase64(null);
       setVeoPaymentLink('');
+      setVeoHasQrCode(false);
       if (veoFileRef.current) veoFileRef.current.value = '';
       toast.success('Configuracao do Vemo removida!');
     } catch (error: any) {
@@ -323,6 +384,67 @@ export default function ConfiguracoesPage() {
       toast.error(error.message || 'Erro ao desconectar a instancia Z-API');
     } finally {
       setDisconnectingZapi(false);
+    }
+  };
+
+  const handleZelleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      setZelleQrBase64(result);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleLoadZellePreview = async () => {
+    try {
+      setLoadingZellePreview(true);
+      setZelleQrError(null);
+      const res = await backendRequest<{ ok: true; hasQrCode: boolean; base64: string | null; paymentLink: string | null }>('/api/admin/zelle-qr-code');
+      setZelleQrBase64(res.base64 || null);
+      setZelleHasQrCode(Boolean(res.hasQrCode));
+      if (!res.base64) {
+        toast.info('Nenhum preview de QR code Zelle foi encontrado.');
+      }
+    } catch (error: any) {
+      setZelleQrError(error?.message || 'Nao foi possivel carregar o preview do Zelle.');
+    } finally {
+      setLoadingZellePreview(false);
+    }
+  };
+
+  const handleSaveZelleQr = async () => {
+    if (!zelleQrBase64 && !zellePaymentLink.trim()) return;
+    try {
+      setSavingZelleQr(true);
+      await backendRequest('/api/admin/zelle-qr-code', {
+        method: 'PATCH',
+        body: JSON.stringify({ base64: zelleQrBase64 || '', paymentLink: zellePaymentLink.trim() }),
+      });
+      setZelleHasQrCode(Boolean(zelleQrBase64 || zellePaymentLink.trim()));
+      toast.success('Configuracao do Zelle salva!');
+    } catch (error: any) {
+      toast.error(error.message || 'Erro ao salvar configuracao do Zelle');
+    } finally {
+      setSavingZelleQr(false);
+    }
+  };
+
+  const handleRemoveZelleQr = async () => {
+    try {
+      setSavingZelleQr(true);
+      await backendRequest('/api/admin/zelle-qr-code', { method: 'DELETE' });
+      setZelleQrBase64(null);
+      setZellePaymentLink('');
+      setZelleHasQrCode(false);
+      if (zelleFileRef.current) zelleFileRef.current.value = '';
+      toast.success('Configuracao do Zelle removida!');
+    } catch (error: any) {
+      toast.error(error.message || 'Erro ao remover configuracao do Zelle');
+    } finally {
+      setSavingZelleQr(false);
     }
   };
 
@@ -552,6 +674,10 @@ export default function ConfiguracoesPage() {
 
         {loadingVeoQr ? (
           <p className="text-sm text-muted-foreground">Carregando...</p>
+        ) : veoQrError ? (
+          <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 text-sm text-amber-100">
+            {veoQrError}
+          </div>
         ) : (
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
             <div className="flex flex-col gap-3 flex-1">
@@ -573,6 +699,16 @@ export default function ConfiguracoesPage() {
                 <p className="text-xs text-muted-foreground">
                   Esse link vai junto com o QR code na mensagem enviada ao cliente.
                 </p>
+                {veoHasQrCode && !veoQrBase64 ? (
+                  <div className="flex items-center justify-between gap-3 rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-2">
+                    <p className="text-xs text-emerald-300">
+                      QR code Vemo cadastrado no sistema.
+                    </p>
+                    <Button type="button" variant="outline" onClick={handleLoadVeoPreview} disabled={loadingVeoPreview} className="border-border/80">
+                      {loadingVeoPreview ? 'Carregando preview...' : 'Ver preview'}
+                    </Button>
+                  </div>
+                ) : null}
               </div>
               <div className="flex gap-2">
                 <Button
@@ -583,7 +719,7 @@ export default function ConfiguracoesPage() {
                   <Upload className="mr-2 h-4 w-4" />
                   {savingVeoQr ? 'Salvando...' : 'Salvar configuracao'}
                 </Button>
-                {(veoQrBase64 || veoPaymentLink.trim()) && (
+                {(veoHasQrCode || veoQrBase64 || veoPaymentLink.trim()) && (
                   <Button variant="outline" onClick={handleRemoveVeoQr} disabled={savingVeoQr} className="border-border/80">
                     <Trash2 className="mr-2 h-4 w-4" />
                     Remover
@@ -595,6 +731,82 @@ export default function ConfiguracoesPage() {
               <div className="flex flex-col items-center gap-2">
                 <p className="text-xs text-muted-foreground">Previa</p>
                 <img src={veoQrBase64} alt="QR Code Vemo" className="h-40 w-40 rounded-xl border border-border object-contain bg-white p-2" />
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      <div className="rounded-xl border border-border bg-card p-6 card-elevated space-y-5">
+        <div className="flex items-center gap-3">
+          <div className="rounded-xl border border-border/70 bg-muted/40 p-2.5">
+            <QrCode className="h-5 w-5 text-primary" />
+          </div>
+          <div>
+            <h2 className="text-xl font-semibold text-foreground">QR Code Zelle</h2>
+            <p className="text-sm text-muted-foreground">Imagem enviada automaticamente ao cliente quando o pedido for confirmado com pagamento Zelle. Voce tambem pode incluir um link de pagamento na mesma mensagem.</p>
+          </div>
+        </div>
+
+        {loadingZelleQr ? (
+          <p className="text-sm text-muted-foreground">Carregando...</p>
+        ) : zelleQrError ? (
+          <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 text-sm text-amber-100">
+            {zelleQrError}
+          </div>
+        ) : (
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
+            <div className="flex flex-col gap-3 flex-1">
+              <Label>Imagem do QR code</Label>
+              <input
+                ref={zelleFileRef}
+                type="file"
+                accept="image/*"
+                onChange={handleZelleFileChange}
+                className="block w-full text-sm text-muted-foreground file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-primary/10 file:text-primary hover:file:bg-primary/20 cursor-pointer"
+              />
+              <div className="space-y-2">
+                <Label>Link de pagamento Zelle</Label>
+                <Input
+                  value={zellePaymentLink}
+                  onChange={(e) => setZellePaymentLink(e.target.value)}
+                  placeholder="https://..."
+                />
+                <p className="text-xs text-muted-foreground">
+                  Esse link vai junto com o QR code na mensagem enviada ao cliente.
+                </p>
+                {zelleHasQrCode && !zelleQrBase64 ? (
+                  <div className="flex items-center justify-between gap-3 rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-2">
+                    <p className="text-xs text-emerald-300">
+                      QR code Zelle cadastrado no sistema.
+                    </p>
+                    <Button type="button" variant="outline" onClick={handleLoadZellePreview} disabled={loadingZellePreview} className="border-border/80">
+                      {loadingZellePreview ? 'Carregando preview...' : 'Ver preview'}
+                    </Button>
+                  </div>
+                ) : null}
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  onClick={handleSaveZelleQr}
+                  disabled={savingZelleQr || (!zelleQrBase64 && !zellePaymentLink.trim())}
+                  className="gold-gradient-bg text-accent-foreground font-semibold hover:opacity-90 gold-shadow"
+                >
+                  <Upload className="mr-2 h-4 w-4" />
+                  {savingZelleQr ? 'Salvando...' : 'Salvar configuracao'}
+                </Button>
+                {(zelleHasQrCode || zelleQrBase64 || zellePaymentLink.trim()) && (
+                  <Button variant="outline" onClick={handleRemoveZelleQr} disabled={savingZelleQr} className="border-border/80">
+                    <Trash2 className="mr-2 h-4 w-4" />
+                    Remover
+                  </Button>
+                )}
+              </div>
+            </div>
+            {zelleQrBase64 && (
+              <div className="flex flex-col items-center gap-2">
+                <p className="text-xs text-muted-foreground">Previa</p>
+                <img src={zelleQrBase64} alt="QR Code Zelle" className="h-40 w-40 rounded-xl border border-border object-contain bg-white p-2" />
               </div>
             )}
           </div>

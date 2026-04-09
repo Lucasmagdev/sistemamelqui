@@ -3,6 +3,7 @@ import { backendBaseUrl, backendRequest } from '@/lib/backendClient';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { getPaymentMethodLabel } from '@/lib/paymentMethods';
 import { toast } from 'sonner';
 import {
   ResponsiveContainer,
@@ -133,7 +134,7 @@ export default function RelatoriosPage() {
               <ResponsiveContainer width="100%" height={280}>
                 <PieChart>
                   <Pie
-                    data={(report.sales_by_payment || []).map((item: any) => ({ ...item, name: item.payment_method }))}
+                    data={(report.sales_by_payment || []).map((item: any) => ({ ...item, name: getPaymentMethodLabel(item.payment_method, 'pt') }))}
                     dataKey="total"
                     nameKey="name"
                     cx="50%"

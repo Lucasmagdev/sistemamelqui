@@ -1,0 +1,53 @@
+{
+  "name": "Sabor Imperial",
+  "short_name": "Sabor Imperial",
+  "description": "Sistema administrativo e loja premium Sabor Imperial.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone", "browser"],
+  "background_color": "#0f0f0f",
+  "theme_color": "#d4af37",
+  "orientation": "portrait-primary",
+  "categories": ["business", "food", "shopping"],
+  "icons": [
+    {
+      "src": "/icons/pwa-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/pwa-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/pwa-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icons/pwa-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Painel Administrativo",
+      "short_name": "Admin",
+      "description": "Abrir o painel administrativo.",
+      "url": "/admin",
+      "icons": [{ "src": "/icons/pwa-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "Novo Pedido",
+      "short_name": "Pedido",
+      "description": "Cadastrar um novo pedido.",
+      "url": "/admin/pedidos/novo",
+      "icons": [{ "src": "/icons/pwa-192.png", "sizes": "192x192", "type": "image/png" }]
+    }
+  ]
+}

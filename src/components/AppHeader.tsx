@@ -6,6 +6,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { useI18n } from '@/contexts/I18nContext';
 import type { TranslationKey } from '@/i18n/messages';
+import AdminTutorialButton from '@/components/AdminTutorialButton';
 
 const pageTitleByPath: Record<string, TranslationKey> = {
   '/admin': 'nav.dashboard',
@@ -13,12 +14,13 @@ const pageTitleByPath: Record<string, TranslationKey> = {
   '/admin/lotes/novo': 'page.batchRegistration',
   '/admin/pedidos': 'nav.orders',
   '/admin/pedidos/novo': 'common.newOrder',
+  '/admin/clientes': 'nav.customers',
+  '/admin/produtos': 'nav.products',
   '/admin/alertas': 'page.alerts',
   '/admin/vendas': 'nav.sales',
   '/admin/financeiro': 'nav.finance',
   '/admin/funcionarios': 'nav.employees',
   '/admin/relatorios': 'nav.reports',
-  '/admin/assistente': 'nav.assistant',
   '/admin/configuracoes': 'page.settings',
 };
 
@@ -47,6 +49,7 @@ export default function AppHeader() {
         <h2 className="text-base font-semibold text-foreground">{currentPageTitle}</h2>
       </div>
       <div className="flex items-center gap-3">
+        <AdminTutorialButton />
         <Button
           variant="outline"
           size="sm"

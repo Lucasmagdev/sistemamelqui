@@ -11,7 +11,6 @@ import {
   Users,
   Wallet,
   Store,
-  Bot,
   UserRoundCog,
   Settings,
 } from 'lucide-react';
@@ -32,7 +31,6 @@ const navItems: NavItem[] = [
   { titleKey: 'nav.finance', url: '/admin/financeiro', icon: Wallet },
   { titleKey: 'nav.employees', url: '/admin/funcionarios', icon: UserRoundCog },
   { titleKey: 'nav.reports', url: '/admin/relatorios', icon: BarChart3 },
-  { titleKey: 'nav.assistant', url: '/admin/assistente', icon: Bot },
   { titleKey: 'page.settings', url: '/admin/configuracoes', icon: Settings },
 ];
 

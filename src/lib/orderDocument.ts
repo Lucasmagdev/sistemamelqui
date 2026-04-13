@@ -521,16 +521,6 @@ export const downloadOrderDocumentPdf = async (detail: OrderDocumentDetail) => {
   drawLabelValueRow("Metodo de pagamento", detail.paymentMethodLabel || "-", y, summaryX, right);
   y += 18;
 
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(9);
-  doc.setTextColor(98, 98, 98);
-  const transparencyLines = doc.splitTextToSize(buildTransparencyText(), summaryWidth);
-  transparencyLines.forEach((line: string) => {
-    doc.text(line, summaryX, y);
-    y += 11;
-  });
-
-  y += 4;
   doc.setDrawColor(160, 160, 160);
   doc.line(summaryX, y, right, y);
   y += 18;

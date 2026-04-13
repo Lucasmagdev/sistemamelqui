@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import { AlertTriangle, Boxes, Pencil, Plus, RefreshCw, Search, Tag, X } from "lucide-react";
+import { AlertTriangle, Boxes, Pencil, Plus, RefreshCw, Search, Tag, Trash2, X } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
@@ -116,6 +116,11 @@ const findCanonicalCategoryPreset = (categoria?: string | null, categoriaEn?: st
 type ProductMutationResponse = {
   ok: boolean;
   product: Product;
+};
+
+type ProductDeleteResponse = {
+  ok: boolean;
+  productId: number;
 };
 
 const createEditFormFromProduct = (product: Product, draft?: Partial<ProductFormState> | null): ProductFormState => {
@@ -336,6 +341,7 @@ const ProductsAdminPage: React.FC = () => {
   const [products, setProducts] = useState<Product[]>([]);
   const [fetching, setFetching] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [deletingProductId, setDeletingProductId] = useState<number | null>(null);
   const [feedback, setFeedback] = useState<string>("");
   const [filterNome, setFilterNome] = useState("");
   const [filterCategoria, setFilterCategoria] = useState("");
@@ -473,6 +479,40 @@ const ProductsAdminPage: React.FC = () => {
       toast.error(error?.message || "Erro ao atualizar produto");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleDeleteProduct = async (product: Product) => {
+    const productId = Number(product.id);
+    if (!productId) return;
+
+    const confirmed = window.confirm(
+      `Excluir o produto "${product.nome || `ID ${productId}`}"?\n\nEssa acao so deve ser usada para cadastros criados por engano. Se o produto ja tiver pedidos, vendas ou lotes vinculados, o sistema vai bloquear a exclusao.`,
+    );
+
+    if (!confirmed) return;
+
+    setDeletingProductId(productId);
+    setFeedback("");
+    try {
+      await backendRequest<ProductDeleteResponse>(`/api/admin/products/${productId}`, {
+        method: "DELETE",
+      });
+
+      setProducts((current) => current.filter((item) => Number(item.id) !== productId));
+      if (Number(editProduct?.id) === productId) {
+        clearPersistedEditState(productId);
+        setEditProduct(null);
+        setEditForm(emptyForm());
+        setEditPreviewUrl(null);
+      }
+      setFeedback("Produto excluido com sucesso.");
+      toast.success("Produto excluido com sucesso.");
+    } catch (error: any) {
+      setFeedback(`Erro ao excluir produto: ${error.message}`);
+      toast.error(error?.message || "Erro ao excluir produto");
+    } finally {
+      setDeletingProductId(null);
     }
   };
 
@@ -634,9 +674,20 @@ const ProductsAdminPage: React.FC = () => {
                             <p className="text-base font-semibold text-white">{product.nome}</p>
                             <p className="text-sm text-zinc-400">{product.categoria || "Sem categoria"}</p>
                           </div>
-                          <Button size="sm" className="bg-amber-400 text-black hover:bg-amber-300" onClick={() => openEditModal(product)}>
-                            <Pencil className="h-4 w-4" />
-                          </Button>
+                          <div className="flex gap-2">
+                            <Button size="sm" className="bg-amber-400 text-black hover:bg-amber-300" onClick={() => openEditModal(product)}>
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="border-red-500/40 bg-red-500/10 text-red-200 hover:bg-red-500/20 hover:text-red-100"
+                              onClick={() => void handleDeleteProduct(product)}
+                              disabled={deletingProductId === Number(product.id)}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
                         </div>
                         <div className="mt-3 flex flex-wrap gap-2 text-xs">
                           <span className="rounded-full border border-white/10 px-2.5 py-1 text-zinc-200">{money(product.preco)}</span>
@@ -687,10 +738,22 @@ const ProductsAdminPage: React.FC = () => {
                           </div>
                         </td>
                         <td className="px-4 py-4 text-right">
-                          <Button size="sm" className="bg-amber-400 text-black hover:bg-amber-300" onClick={() => openEditModal(product)}>
-                            <Pencil className="mr-2 h-4 w-4" />
-                            Editar
-                          </Button>
+                          <div className="flex justify-end gap-2">
+                            <Button size="sm" className="bg-amber-400 text-black hover:bg-amber-300" onClick={() => openEditModal(product)}>
+                              <Pencil className="mr-2 h-4 w-4" />
+                              Editar
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="border-red-500/40 bg-red-500/10 text-red-200 hover:bg-red-500/20 hover:text-red-100"
+                              onClick={() => void handleDeleteProduct(product)}
+                              disabled={deletingProductId === Number(product.id)}
+                            >
+                              <Trash2 className="mr-2 h-4 w-4" />
+                              {deletingProductId === Number(product.id) ? "Excluindo..." : "Excluir"}
+                            </Button>
+                          </div>
                         </td>
                       </tr>
                     );

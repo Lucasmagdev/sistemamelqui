@@ -6065,6 +6065,60 @@ app.patch("/api/admin/products/:id", async (req, res) => {
   }
 });
 
+app.delete("/api/admin/products/:id", async (req, res) => {
+  try {
+    await requireAssistantAdmin(req);
+    const productId = Number(req.params.id);
+    if (!Number.isInteger(productId) || productId <= 0) {
+      return res.status(400).json({ error: "Produto invalido." });
+    }
+
+    const { data: existingProduct, error: existingError } = await supabase
+      .from("products")
+      .select("id, nome, foto_url")
+      .eq("id", productId)
+      .maybeSingle();
+
+    if (existingError) {
+      return res.status(500).json({
+        error: "Erro ao carregar produto.",
+        detail: existingError.message,
+      });
+    }
+
+    if (!existingProduct) {
+      return res.status(404).json({ error: "Produto nao encontrado." });
+    }
+
+    const { error } = await supabase
+      .from("products")
+      .delete()
+      .eq("id", productId);
+
+    if (error) {
+      const message = String(error.message || "").toLowerCase();
+      const isReferenceError = error.code === "23503" || message.includes("foreign key") || message.includes("violates");
+      return res.status(isReferenceError ? 409 : 500).json({
+        error: isReferenceError
+          ? "Nao foi possivel excluir este produto porque ele ja esta vinculado a pedidos, vendas, lotes ou movimentacoes."
+          : "Erro ao excluir produto.",
+        detail: error.message || null,
+      });
+    }
+
+    if (existingProduct.foto_url) {
+      void removeStorageObjectByPublicUrl("produtos", existingProduct.foto_url);
+    }
+
+    return res.json({ ok: true, productId });
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      error: error?.message || "Erro ao excluir produto.",
+      detail: error?.detail || null,
+    });
+  }
+});
+
 app.use("/api/stock", createStockRouter({
   supabase,
   requireAssistantAdmin,

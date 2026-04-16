@@ -48,9 +48,10 @@ import {
 
 type CategoryKey = string;
 const DEFAULT_CATEGORY_PRESETS = [
-  { categoria: 'Cortes bovinos', categoria_en: 'Beef Cuts' },
-  { categoria: 'Cortes suinos', categoria_en: 'Pork Cuts' },
-  { categoria: 'Cortes de aves', categoria_en: 'Poultry Cuts' },
+  { categoria: 'Cortes bovinos', categoria_pt: 'Cortes bovinos', categoria_en: 'Beef Cuts' },
+  { categoria: 'Cortes de carne fresca', categoria_pt: 'Cortes de carne fresca abatida na semana', categoria_en: 'Fresh Weekly Cuts' },
+  { categoria: 'Cortes suinos', categoria_pt: 'Cortes de carne suína', categoria_en: 'Pork Cuts' },
+  { categoria: 'Cortes de aves', categoria_pt: 'Cortes de aves', categoria_en: 'Poultry Cuts' },
 ];
 
 const normalizeCategoryValue = (categoria?: string | null, categoriaEn?: string | null) => {
@@ -60,14 +61,18 @@ const normalizeCategoryValue = (categoria?: string | null, categoriaEn?: string 
     .toLowerCase();
 
   if (/(ave|aves|frango|chicken|hen|turkey|poultry)/.test(raw)) {
-    return DEFAULT_CATEGORY_PRESETS[2];
+    return DEFAULT_CATEGORY_PRESETS[3]; // Cortes de aves
   }
 
   if (/(suin|porco|pork|pig|bacon|pernil|lombo|costelinha)/.test(raw)) {
-    return DEFAULT_CATEGORY_PRESETS[1];
+    return DEFAULT_CATEGORY_PRESETS[2]; // Cortes suinos
   }
 
-  return DEFAULT_CATEGORY_PRESETS[0];
+  if (/(fresca|fresco|fresh|semanal|weekly|abatida)/.test(raw)) {
+    return DEFAULT_CATEGORY_PRESETS[1]; // Cortes de carne fresca
+  }
+
+  return DEFAULT_CATEGORY_PRESETS[0]; // Cortes bovinos (default)
 };
 
 const isClientVisibleProduct = (produto: any) => {
@@ -559,7 +564,7 @@ export default function ClientePage() {
       { key: 'all', label: tr('Todos os cortes', 'All cuts') },
       ...DEFAULT_CATEGORY_PRESETS.map((preset) => ({
         key: preset.categoria,
-        label: isEn ? preset.categoria_en : preset.categoria,
+        label: isEn ? preset.categoria_en : preset.categoria_pt,
       })),
       { key: 'contact', label: tr('Contato', 'Contact') },
     ];
@@ -584,9 +589,13 @@ export default function ClientePage() {
       resultado = resultado.filter((produto) => produto.nome.toLowerCase().includes(termo));
     }
 
-    resultado.sort((a, b) =>
-      ordenacao === 'menor-maior' ? a.preco - b.preco : b.preco - a.preco,
-    );
+    resultado.sort((a, b) => {
+      const aIsBlackAngus = /black\s*angu/i.test(a.nome_pt || a.nome || '');
+      const bIsBlackAngus = /black\s*angu/i.test(b.nome_pt || b.nome || '');
+      if (aIsBlackAngus && !bIsBlackAngus) return -1;
+      if (!aIsBlackAngus && bIsBlackAngus) return 1;
+      return ordenacao === 'menor-maior' ? a.preco - b.preco : b.preco - a.preco;
+    });
 
     return resultado.slice(0, showCount);
   }, [busca, categoriaAtiva, mostrarApenasOfertas, ordenacao, produtosCatalogo, showCount]);
@@ -672,7 +681,7 @@ export default function ClientePage() {
 
   const selecionarCategoria = (categoria: CategoryKey) => {
     if (categoria === 'contact') {
-      toast.info(ui.contactSoon);
+      window.location.href = 'tel:+14014459336';
       return;
     }
     setCategoriaAtiva(categoria);

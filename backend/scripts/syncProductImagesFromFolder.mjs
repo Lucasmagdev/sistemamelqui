@@ -85,6 +85,30 @@ const SOURCE_TARGETS = {
   testiculodeboi: [
     { productId: 56, exportFileName: "Testiculo_de_Boi.jpg" },
   ],
+  aguapolandspringpacotecom40unidades: [
+    { productId: 112, exportFileName: "Agua_Poland_Spring_pacote_com_40_unidades.png" },
+  ],
+  carvao10kgnaturalpremium: [
+    { productId: 114, exportFileName: "Carvao_Natural_Premium_10KG.png" },
+  ],
+  carvaonatural7kg: [
+    { productId: 113, exportFileName: "Carvao_Natural_7KG.png" },
+  ],
+  faforatradicional300gbomgosto: [
+    { productId: 108, exportFileName: "Farofa_Bom_Gosto_Tradicional_300g.png" },
+  ],
+  farofasaborcostelinha: [
+    { productId: 109, exportFileName: "Farofa_Bom_Gosto_Costelinha_300g.jpg" },
+  ],
+  linguicadefrango: [
+    { productId: 48, exportFileName: "Linguica_de_Frango_Suasage.png" },
+  ],
+  palmitodepupunha: [
+    { productId: 110, exportFileName: "Palmito_de_Pupunha_Predilecta_540g.png" },
+  ],
+  temperogoyaadobo165oz: [
+    { productId: 111, exportFileName: "Tempero_Goya_Adobo_16_5oz.png" },
+  ],
 };
 
 function parseArgs(argv) {

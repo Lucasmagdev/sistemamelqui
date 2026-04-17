@@ -5880,28 +5880,123 @@ app.patch("/api/admin/zapi-message-templates", async (req, res) => {
   }
 });
 
-const PRODUCT_CATEGORY_PRESETS = [
-  { categoria: "Cortes bovinos", categoria_en: "Beef Cuts" },
-  { categoria: "Cortes suinos", categoria_en: "Pork Cuts" },
-  { categoria: "Cortes de aves", categoria_en: "Poultry Cuts" },
-];
-
 function normalizeProductCategoryPair(categoria, categoriaEn) {
-  const raw = String(`${categoria || ""} ${categoriaEn || ""}`)
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase();
-
-  if (/(ave|aves|frango|chicken|hen|turkey|poultry)/.test(raw)) {
-    return PRODUCT_CATEGORY_PRESETS[2];
-  }
-
-  if (/(suin|porco|pork|pig|bacon|pernil|lombo|costelinha)/.test(raw)) {
-    return PRODUCT_CATEGORY_PRESETS[1];
-  }
-
-  return PRODUCT_CATEGORY_PRESETS[0];
+  return {
+    categoria: String(categoria || "").trim() || null,
+    categoria_en: String(categoriaEn || "").trim() || null,
+  };
 }
+
+// --- Rotas de categorias de produtos ---
+
+app.get("/api/admin/product-categories", async (req, res) => {
+  try {
+    const actor = await requireAssistantAdmin(req);
+    const tenantId = Number(actor.tenantId);
+
+    const { data, error } = await supabase
+      .from("product_categories")
+      .select("id, nome_pt, nome_en, created_at")
+      .eq("tenant_id", tenantId)
+      .order("id", { ascending: true });
+
+    if (error) {
+      return res.status(500).json({ error: "Erro ao carregar categorias.", detail: error.message });
+    }
+
+    return res.json({ ok: true, categories: data || [] });
+  } catch (error) {
+    return res.status(error?.status || 500).json({ error: error?.message || "Erro ao carregar categorias." });
+  }
+});
+
+app.post("/api/admin/product-categories", async (req, res) => {
+  try {
+    const actor = await requireAssistantAdmin(req);
+    const tenantId = Number(actor.tenantId);
+    const nomePt = String(req.body?.nome_pt || "").trim();
+    const nomeEn = String(req.body?.nome_en || "").trim();
+
+    if (!nomePt || !nomeEn) {
+      return res.status(400).json({ error: "Nome em portugues e em ingles sao obrigatorios." });
+    }
+
+    const { data, error } = await supabase
+      .from("product_categories")
+      .insert([{ nome_pt: nomePt, nome_en: nomeEn, tenant_id: tenantId }])
+      .select("id, nome_pt, nome_en, created_at")
+      .single();
+
+    if (error || !data) {
+      return res.status(500).json({ error: "Erro ao criar categoria.", detail: error?.message });
+    }
+
+    return res.json({ ok: true, category: data });
+  } catch (error) {
+    return res.status(error?.status || 500).json({ error: error?.message || "Erro ao criar categoria." });
+  }
+});
+
+app.patch("/api/admin/product-categories/:id", async (req, res) => {
+  try {
+    const actor = await requireAssistantAdmin(req);
+    const tenantId = Number(actor.tenantId);
+    const categoryId = Number(req.params.id);
+
+    if (!Number.isInteger(categoryId) || categoryId <= 0) {
+      return res.status(400).json({ error: "Categoria invalida." });
+    }
+
+    const nomePt = String(req.body?.nome_pt || "").trim();
+    const nomeEn = String(req.body?.nome_en || "").trim();
+
+    if (!nomePt || !nomeEn) {
+      return res.status(400).json({ error: "Nome em portugues e em ingles sao obrigatorios." });
+    }
+
+    const { data, error } = await supabase
+      .from("product_categories")
+      .update({ nome_pt: nomePt, nome_en: nomeEn })
+      .eq("id", categoryId)
+      .eq("tenant_id", tenantId)
+      .select("id, nome_pt, nome_en, created_at")
+      .single();
+
+    if (error || !data) {
+      return res.status(500).json({ error: "Erro ao atualizar categoria.", detail: error?.message });
+    }
+
+    return res.json({ ok: true, category: data });
+  } catch (error) {
+    return res.status(error?.status || 500).json({ error: error?.message || "Erro ao atualizar categoria." });
+  }
+});
+
+app.delete("/api/admin/product-categories/:id", async (req, res) => {
+  try {
+    const actor = await requireAssistantAdmin(req);
+    const tenantId = Number(actor.tenantId);
+    const categoryId = Number(req.params.id);
+
+    if (!Number.isInteger(categoryId) || categoryId <= 0) {
+      return res.status(400).json({ error: "Categoria invalida." });
+    }
+
+    const { error } = await supabase
+      .from("product_categories")
+      .delete()
+      .eq("id", categoryId)
+      .eq("tenant_id", tenantId);
+
+    if (error) {
+      return res.status(500).json({ error: "Erro ao excluir categoria.", detail: error.message });
+    }
+
+    return res.json({ ok: true, categoryId });
+  } catch (error) {
+    return res.status(error?.status || 500).json({ error: error?.message || "Erro ao excluir categoria." });
+  }
+});
 
 app.post("/api/admin/products", async (req, res) => {
   try {

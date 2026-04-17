@@ -12,6 +12,12 @@ import { cn } from "@/lib/utils";
 import { supabase } from "@/lib/supabaseClient";
 import { toast } from "sonner";
 
+type Category = {
+  id: number;
+  nome_pt: string;
+  nome_en: string;
+};
+
 type Product = {
   id: number;
   nome: string;
@@ -74,11 +80,6 @@ const textareaClass = "min-h-[110px] w-full rounded-xl border border-amber-400/5
 const selectClass = "flex h-11 w-full rounded-xl border border-amber-400/50 bg-zinc-900 px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-amber-400";
 const EDIT_PRODUCT_ID_STORAGE_KEY = "products-admin-edit-id";
 const editDraftStorageKey = (productId: number | string) => `products-admin-edit-draft:${productId}`;
-const CATEGORY_PRESETS = [
-  { categoria: "Cortes bovinos", categoria_en: "Beef Cuts" },
-  { categoria: "Cortes suinos", categoria_en: "Pork Cuts" },
-  { categoria: "Cortes de aves", categoria_en: "Poultry Cuts" },
-];
 
 type ProductMutationPayload = {
   nome: string;
@@ -93,26 +94,6 @@ type ProductMutationPayload = {
   imageFileName?: string;
 };
 
-const ALLOWED_CATEGORY_PRESETS = [
-  { categoria: "Cortes bovinos", categoria_en: "Beef Cuts" },
-  { categoria: "Cortes suinos", categoria_en: "Pork Cuts" },
-  { categoria: "Cortes de aves", categoria_en: "Poultry Cuts" },
-];
-
-const findCanonicalCategoryPreset = (categoria?: string | null, categoriaEn?: string | null) => {
-  const raw = normalizeProductKey(`${categoria || ""} ${categoriaEn || ""}`);
-
-  if (/(ave|aves|frango|chicken|hen|turkey|poultry)/.test(raw)) {
-    return ALLOWED_CATEGORY_PRESETS[2];
-  }
-
-  if (/(suin|porco|pork|pig|bacon|pernil|lombo|costelinha)/.test(raw)) {
-    return ALLOWED_CATEGORY_PRESETS[1];
-  }
-
-  return ALLOWED_CATEGORY_PRESETS[0];
-};
-
 type ProductMutationResponse = {
   ok: boolean;
   product: Product;
@@ -123,17 +104,20 @@ type ProductDeleteResponse = {
   productId: number;
 };
 
-const createEditFormFromProduct = (product: Product, draft?: Partial<ProductFormState> | null): ProductFormState => {
-  const categoryPreset = findCanonicalCategoryPreset(draft?.categoria ?? product.categoria, draft?.categoria_en ?? product.categoria_en);
+type CategoryMutationResponse = {
+  ok: boolean;
+  category: Category;
+};
 
+const createEditFormFromProduct = (product: Product, draft?: Partial<ProductFormState> | null): ProductFormState => {
   return {
     id: product.id,
     nome: draft?.nome ?? product.nome ?? "",
     nome_en: draft?.nome_en ?? product.nome_en ?? "",
     descricao: draft?.descricao || product.descricao || "",
     descricao_en: draft?.descricao_en || product.descricao_en || "",
-    categoria: categoryPreset.categoria,
-    categoria_en: categoryPreset.categoria_en,
+    categoria: draft?.categoria ?? product.categoria ?? "",
+    categoria_en: draft?.categoria_en ?? product.categoria_en ?? "",
     preco: draft?.preco ?? String(product.preco || ""),
     unidade: draft?.unidade ?? product.unidade ?? "LB",
     foto: null,
@@ -142,14 +126,13 @@ const createEditFormFromProduct = (product: Product, draft?: Partial<ProductForm
 };
 
 const buildProductMutationPayload = async (form: ProductFormState): Promise<ProductMutationPayload> => {
-  const categoryPreset = findCanonicalCategoryPreset(form.categoria, form.categoria_en);
   const payload: ProductMutationPayload = {
     nome: form.nome.trim(),
     nome_en: form.nome_en.trim() || null,
     descricao: form.descricao.trim() || null,
     descricao_en: form.descricao_en.trim() || null,
-    categoria: categoryPreset.categoria,
-    categoria_en: categoryPreset.categoria_en,
+    categoria: form.categoria.trim() || null,
+    categoria_en: form.categoria_en.trim() || null,
     preco: parseFloat(form.preco),
     unidade: form.unidade || "LB",
   };
@@ -171,10 +154,11 @@ function ProductModal({
   previewUrl,
   loading,
   submitLabel,
+  categories,
   onClose,
   onText,
   onFile,
-  onCategoryPreset,
+  onCategorySelect,
   onSubmit,
 }: {
   open: boolean;
@@ -184,10 +168,11 @@ function ProductModal({
   previewUrl: string | null;
   loading: boolean;
   submitLabel: string;
+  categories: Category[];
   onClose: () => void;
   onText: (field: keyof ProductFormState, value: string) => void;
   onFile: (file: File | null) => void;
-  onCategoryPreset: (preset: { categoria: string; categoria_en: string }) => void;
+  onCategorySelect: (category: Category | null) => void;
   onSubmit: (event: React.FormEvent) => void;
 }) {
   useEffect(() => {
@@ -245,21 +230,16 @@ function ProductModal({
                     <select
                       value={form.categoria}
                       onChange={(event) => {
-                        const preset = ALLOWED_CATEGORY_PRESETS.find((item) => item.categoria === event.target.value);
-                        if (preset) {
-                          onCategoryPreset(preset);
-                          return;
-                        }
-                        onText("categoria", "");
-                        onText("categoria_en", "");
+                        const selected = categories.find((c) => c.nome_pt === event.target.value) ?? null;
+                        onCategorySelect(selected);
                       }}
                       required
                       className={selectClass}
                     >
                       <option value="">Selecione a categoria</option>
-                      {ALLOWED_CATEGORY_PRESETS.map((preset) => (
-                        <option key={preset.categoria} value={preset.categoria}>
-                          {preset.categoria}
+                      {categories.map((cat) => (
+                        <option key={cat.id} value={cat.nome_pt}>
+                          {cat.nome_pt}
                         </option>
                       ))}
                     </select>
@@ -336,11 +316,15 @@ function ProductModal({
   ), document.body);
 }
 
+const emptyCategory = () => ({ nome_pt: "", nome_en: "" });
+
 const ProductsAdminPage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const [products, setProducts] = useState<Product[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
   const [fetching, setFetching] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [categoryLoading, setCategoryLoading] = useState(false);
   const [deletingProductId, setDeletingProductId] = useState<number | null>(null);
   const [feedback, setFeedback] = useState<string>("");
   const [filterNome, setFilterNome] = useState("");
@@ -352,6 +336,12 @@ const ProductsAdminPage: React.FC = () => {
   const [editForm, setEditForm] = useState<ProductFormState>(emptyForm);
   const [createPreviewUrl, setCreatePreviewUrl] = useState<string | null>(null);
   const [editPreviewUrl, setEditPreviewUrl] = useState<string | null>(null);
+
+  // Gerenciador de categorias
+  const [showCategoryManager, setShowCategoryManager] = useState(false);
+  const [newCategory, setNewCategory] = useState(emptyCategory());
+  const [editingCategory, setEditingCategory] = useState<Category | null>(null);
+  const [editCategoryForm, setEditCategoryForm] = useState(emptyCategory());
 
   const setEditSearchParam = (productId: number | null) => {
     const nextParams = new URLSearchParams(searchParams);
@@ -380,9 +370,76 @@ const ProductsAdminPage: React.FC = () => {
     setFetching(false);
   };
 
+  const refreshCategories = async () => {
+    try {
+      const response = await backendRequest<{ ok: boolean; categories: Category[] }>("/api/admin/product-categories");
+      setCategories(response?.categories || []);
+    } catch {
+      // silencioso — categorias não bloqueiam a página
+    }
+  };
+
   useEffect(() => {
     void refreshProducts();
+    void refreshCategories();
   }, []);
+
+  const handleCreateCategory = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setCategoryLoading(true);
+    try {
+      const response = await backendRequest<CategoryMutationResponse>("/api/admin/product-categories", {
+        method: "POST",
+        body: JSON.stringify({ nome_pt: newCategory.nome_pt.trim(), nome_en: newCategory.nome_en.trim() }),
+      });
+      if (response?.category) {
+        setCategories((current) => [...current, response.category]);
+        setNewCategory(emptyCategory());
+        toast.success("Categoria criada com sucesso.");
+      }
+    } catch (error: any) {
+      toast.error(error?.message || "Erro ao criar categoria.");
+    } finally {
+      setCategoryLoading(false);
+    }
+  };
+
+  const handleUpdateCategory = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!editingCategory) return;
+    setCategoryLoading(true);
+    try {
+      const response = await backendRequest<CategoryMutationResponse>(`/api/admin/product-categories/${editingCategory.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ nome_pt: editCategoryForm.nome_pt.trim(), nome_en: editCategoryForm.nome_en.trim() }),
+      });
+      if (response?.category) {
+        setCategories((current) => current.map((c) => (c.id === response.category.id ? response.category : c)));
+        setEditingCategory(null);
+        setEditCategoryForm(emptyCategory());
+        toast.success("Categoria atualizada.");
+      }
+    } catch (error: any) {
+      toast.error(error?.message || "Erro ao atualizar categoria.");
+    } finally {
+      setCategoryLoading(false);
+    }
+  };
+
+  const handleDeleteCategory = async (category: Category) => {
+    const confirmed = window.confirm(`Excluir a categoria "${category.nome_pt}"?\n\nOs produtos que usam essa categoria nao serao afetados, mas ficaram sem categoria ativa no gerenciador.`);
+    if (!confirmed) return;
+    setCategoryLoading(true);
+    try {
+      await backendRequest(`/api/admin/product-categories/${category.id}`, { method: "DELETE" });
+      setCategories((current) => current.filter((c) => c.id !== category.id));
+      toast.success("Categoria excluida.");
+    } catch (error: any) {
+      toast.error(error?.message || "Erro ao excluir categoria.");
+    } finally {
+      setCategoryLoading(false);
+    }
+  };
 
   const duplicateGroups = useMemo(() => {
     const groups = products.reduce((acc, product) => {
@@ -406,10 +463,11 @@ const ProductsAdminPage: React.FC = () => {
 
   const setCreateText = (field: keyof ProductFormState, value: string) => setCreateForm((current) => ({ ...current, [field]: value }));
   const setEditText = (field: keyof ProductFormState, value: string) => setEditForm((current) => ({ ...current, [field]: value }));
-  const applyCreateCategoryPreset = (preset: { categoria: string; categoria_en: string }) =>
-    setCreateForm((current) => ({ ...current, categoria: preset.categoria, categoria_en: preset.categoria_en }));
-  const applyEditCategoryPreset = (preset: { categoria: string; categoria_en: string }) =>
-    setEditForm((current) => ({ ...current, categoria: preset.categoria, categoria_en: preset.categoria_en }));
+
+  const applyCreateCategory = (category: Category | null) =>
+    setCreateForm((current) => ({ ...current, categoria: category?.nome_pt ?? "", categoria_en: category?.nome_en ?? "" }));
+  const applyEditCategory = (category: Category | null) =>
+    setEditForm((current) => ({ ...current, categoria: category?.nome_pt ?? "", categoria_en: category?.nome_en ?? "" }));
 
   const upsertProduct = (nextProduct: Product) => {
     setProducts((current) => {
@@ -566,7 +624,7 @@ const ProductsAdminPage: React.FC = () => {
     openEditModal(product, draft);
   }, [editProduct, fetching, products, searchParams]);
 
-  const totalCategories = new Set(products.map((product) => String(product.categoria || "").trim()).filter(Boolean)).size;
+  const totalCategories = categories.length;
 
   return (
     <div className="space-y-6">
@@ -574,7 +632,7 @@ const ProductsAdminPage: React.FC = () => {
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.28em] text-amber-300/80">Catalogo admin</p>
           <h1 className="mt-2 text-3xl font-black text-white sm:text-4xl">Produtos</h1>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">Melhorei a area de novo produto e editar para ficar larga, clara e usavel no celular e no desktop.</p>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">Gerencie produtos e categorias do catalogo.</p>
         </div>
         <div className="flex flex-col gap-2 sm:flex-row">
           <Button variant="outline" className="border-white/15 bg-transparent text-white hover:bg-white/5" onClick={() => void refreshProducts()}>
@@ -613,6 +671,122 @@ const ProductsAdminPage: React.FC = () => {
           );
         })}
       </div>
+
+      {/* Gerenciador de categorias */}
+      <Card className="border-white/10 bg-zinc-950/60">
+        <CardHeader className="pb-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="text-xl text-white">Categorias</CardTitle>
+              <CardDescription>Gerencie as categorias disponiveis para os produtos.</CardDescription>
+            </div>
+            <Button
+              variant="outline"
+              className="border-white/15 bg-transparent text-white hover:bg-white/5"
+              onClick={() => setShowCategoryManager((v) => !v)}
+            >
+              {showCategoryManager ? "Fechar" : "Gerenciar"}
+            </Button>
+          </div>
+        </CardHeader>
+
+        {showCategoryManager && (
+          <CardContent className="space-y-5">
+            {/* Lista de categorias */}
+            {categories.length === 0 ? (
+              <p className="text-sm text-zinc-500">Nenhuma categoria cadastrada.</p>
+            ) : (
+              <div className="space-y-2">
+                {categories.map((cat) => (
+                  <div key={cat.id}>
+                    {editingCategory?.id === cat.id ? (
+                      <form onSubmit={handleUpdateCategory} className="flex flex-col gap-2 rounded-2xl border border-amber-400/30 bg-zinc-900 p-3 sm:flex-row sm:items-center">
+                        <Input
+                          value={editCategoryForm.nome_pt}
+                          onChange={(e) => setEditCategoryForm((f) => ({ ...f, nome_pt: e.target.value }))}
+                          placeholder="Nome em portugues"
+                          required
+                          className={cn(inputClass, "flex-1")}
+                        />
+                        <Input
+                          value={editCategoryForm.nome_en}
+                          onChange={(e) => setEditCategoryForm((f) => ({ ...f, nome_en: e.target.value }))}
+                          placeholder="Nome em ingles"
+                          required
+                          className={cn(inputClass, "flex-1")}
+                        />
+                        <div className="flex gap-2">
+                          <Button type="submit" className="bg-amber-400 text-black hover:bg-amber-300" disabled={categoryLoading}>
+                            Salvar
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="border-white/15 bg-transparent text-white hover:bg-white/5"
+                            onClick={() => { setEditingCategory(null); setEditCategoryForm(emptyCategory()); }}
+                          >
+                            Cancelar
+                          </Button>
+                        </div>
+                      </form>
+                    ) : (
+                      <div className="flex items-center justify-between rounded-2xl border border-white/8 bg-zinc-900/50 px-4 py-3">
+                        <div>
+                          <span className="font-medium text-white">{cat.nome_pt}</span>
+                          <span className="ml-3 text-sm text-zinc-500">{cat.nome_en}</span>
+                        </div>
+                        <div className="flex gap-2">
+                          <Button
+                            size="sm"
+                            className="bg-amber-400 text-black hover:bg-amber-300"
+                            onClick={() => { setEditingCategory(cat); setEditCategoryForm({ nome_pt: cat.nome_pt, nome_en: cat.nome_en }); }}
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="border-red-500/40 bg-red-500/10 text-red-200 hover:bg-red-500/20 hover:text-red-100"
+                            onClick={() => void handleDeleteCategory(cat)}
+                            disabled={categoryLoading}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Formulário nova categoria */}
+            <div className="border-t border-white/10 pt-4">
+              <p className="mb-3 text-sm font-semibold text-amber-200">Nova categoria</p>
+              <form onSubmit={handleCreateCategory} className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <Input
+                  value={newCategory.nome_pt}
+                  onChange={(e) => setNewCategory((f) => ({ ...f, nome_pt: e.target.value }))}
+                  placeholder="Nome em portugues"
+                  required
+                  className={cn(inputClass, "flex-1")}
+                />
+                <Input
+                  value={newCategory.nome_en}
+                  onChange={(e) => setNewCategory((f) => ({ ...f, nome_en: e.target.value }))}
+                  placeholder="Nome em ingles"
+                  required
+                  className={cn(inputClass, "flex-1")}
+                />
+                <Button type="submit" className="bg-amber-400 text-black hover:bg-amber-300" disabled={categoryLoading}>
+                  <Plus className="mr-2 h-4 w-4" />
+                  Criar
+                </Button>
+              </form>
+            </div>
+          </CardContent>
+        )}
+      </Card>
 
       <Card className="border-white/10 bg-zinc-950/60">
         <CardHeader className="pb-4">
@@ -773,6 +947,7 @@ const ProductsAdminPage: React.FC = () => {
         previewUrl={createPreviewUrl}
         loading={loading}
         submitLabel="Cadastrar produto"
+        categories={categories}
         onClose={() => {
           setShowCreateModal(false);
           setCreateForm(emptyForm());
@@ -780,7 +955,7 @@ const ProductsAdminPage: React.FC = () => {
         }}
         onText={setCreateText}
         onFile={setCreateFile}
-        onCategoryPreset={applyCreateCategoryPreset}
+        onCategorySelect={applyCreateCategory}
         onSubmit={handleCreateSubmit}
       />
 
@@ -792,6 +967,7 @@ const ProductsAdminPage: React.FC = () => {
         previewUrl={editPreviewUrl}
         loading={loading}
         submitLabel="Salvar alteracoes"
+        categories={categories}
         onClose={() => {
           clearPersistedEditState(editProduct?.id ?? editForm.id ?? null);
           setEditProduct(null);
@@ -800,7 +976,7 @@ const ProductsAdminPage: React.FC = () => {
         }}
         onText={setEditText}
         onFile={setEditFile}
-        onCategoryPreset={applyEditCategoryPreset}
+        onCategorySelect={applyEditCategory}
         onSubmit={handleEditSubmit}
       />
     </div>

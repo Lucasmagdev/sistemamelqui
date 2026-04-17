@@ -47,33 +47,7 @@ import {
 } from '@/lib/phone';
 
 type CategoryKey = string;
-const DEFAULT_CATEGORY_PRESETS = [
-  { categoria: 'Cortes bovinos', categoria_pt: 'Cortes bovinos', categoria_en: 'Beef Cuts' },
-  { categoria: 'Cortes de carne fresca', categoria_pt: 'Cortes de carne fresca abatida na semana', categoria_en: 'Fresh Weekly Cuts' },
-  { categoria: 'Cortes suinos', categoria_pt: 'Cortes de carne suína', categoria_en: 'Pork Cuts' },
-  { categoria: 'Cortes de aves', categoria_pt: 'Cortes de aves', categoria_en: 'Poultry Cuts' },
-];
-
-const normalizeCategoryValue = (categoria?: string | null, categoriaEn?: string | null) => {
-  const raw = `${categoria || ''} ${categoriaEn || ''}`
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase();
-
-  if (/(ave|aves|frango|chicken|hen|turkey|poultry)/.test(raw)) {
-    return DEFAULT_CATEGORY_PRESETS[3]; // Cortes de aves
-  }
-
-  if (/(suin|porco|pork|pig|bacon|pernil|lombo|costelinha)/.test(raw)) {
-    return DEFAULT_CATEGORY_PRESETS[2]; // Cortes suinos
-  }
-
-  if (/(fresca|fresco|fresh|semanal|weekly|abatida)/.test(raw)) {
-    return DEFAULT_CATEGORY_PRESETS[1]; // Cortes de carne fresca
-  }
-
-  return DEFAULT_CATEGORY_PRESETS[0]; // Cortes bovinos (default)
-};
+type DynamicCategory = { id: number; nome_pt: string; nome_en: string };
 
 const isClientVisibleProduct = (produto: any) => {
   const hasName = String(produto?.nome || produto?.nome_en || '').trim().length > 0;
@@ -432,6 +406,7 @@ export default function ClientePage() {
 
   const [produtosCatalogo, setProdutosCatalogo] = useState<any[]>([]);
   const [carregandoProdutos, setCarregandoProdutos] = useState(true);
+  const [dynamicCategories, setDynamicCategories] = useState<DynamicCategory[]>([]);
   const [heroSlideIndex, setHeroSlideIndex] = useState(0);
   const [heroCarouselPaused, setHeroCarouselPaused] = useState(false);
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
@@ -440,42 +415,48 @@ export default function ClientePage() {
   useEffect(() => {
     async function fetchProdutos() {
       setCarregandoProdutos(true);
-      const { data, error } = await supabase
-        .from('products')
-        .select('*')
-        .or('tenant_id.eq.1,tenant_id.is.null');
-      if (error) {
+
+      const [produtosResult, categoriasResult] = await Promise.all([
+        supabase.from('products').select('*').or('tenant_id.eq.1,tenant_id.is.null'),
+        supabase.from('product_categories').select('id, nome_pt, nome_en').order('id', { ascending: true }),
+      ]);
+
+      if (produtosResult.error) {
         toast.error(ui.productsLoadError);
         setCarregandoProdutos(false);
         return;
       }
-      // Adiciona campos extras para manter compatibilidade visual
-      const produtos = (data || [])
+
+      if (categoriasResult.data) {
+        setDynamicCategories(categoriasResult.data as DynamicCategory[]);
+      }
+
+      const produtos = (produtosResult.data || [])
         .filter((produto: any) => isClientVisibleProduct(produto))
         .map((produto: any) => {
-        const normalizedCategory = normalizeCategoryValue(produto.categoria, produto.categoria_en);
-        const nomeLocalizado = isEn
-          ? (produto.nome_en || produto.nome || '')
-          : (produto.nome || produto.nome_en || '');
-        const descricaoLocalizada = isEn
-          ? (produto.descricao_en || produto.descricao || '')
-          : (produto.descricao || produto.descricao_en || '');
+          const nomeLocalizado = isEn
+            ? (produto.nome_en || produto.nome || '')
+            : (produto.nome || produto.nome_en || '');
+          const descricaoLocalizada = isEn
+            ? (produto.descricao_en || produto.descricao || '')
+            : (produto.descricao || produto.descricao_en || '');
 
-        return {
-          id: produto.id,
-          nome: nomeLocalizado,
-          nome_pt: produto.nome || produto.nome_en || '',
-          nome_en: produto.nome_en || produto.nome || '',
-          descricao: descricaoLocalizada,
-          imagem: resolvePriorityProductImage(produto.nome, produto.foto_url, [produto.nome_en]),
-          preco: produto.preco,
-          precoAnterior: produto.precoAnterior || null,
-          destaque: produto.destaque || false,
-          selo: produto.selo || '',
-          categoria: normalizedCategory.categoria,
-          categoria_en: normalizedCategory.categoria_en,
-        };
-      });
+          return {
+            id: produto.id,
+            nome: nomeLocalizado,
+            nome_pt: produto.nome || produto.nome_en || '',
+            nome_en: produto.nome_en || produto.nome || '',
+            descricao: descricaoLocalizada,
+            imagem: resolvePriorityProductImage(produto.nome, produto.foto_url, [produto.nome_en]),
+            preco: produto.preco,
+            precoAnterior: produto.precoAnterior || null,
+            destaque: produto.destaque || false,
+            selo: produto.selo || '',
+            categoria: produto.categoria || '',
+            categoria_en: produto.categoria_en || '',
+          };
+        });
+
       setProdutosCatalogo(produtos);
       setCarregandoProdutos(false);
     }
@@ -562,13 +543,13 @@ export default function ClientePage() {
   const categoryOptions = useMemo(() => {
     return [
       { key: 'all', label: tr('Todos os cortes', 'All cuts') },
-      ...DEFAULT_CATEGORY_PRESETS.map((preset) => ({
-        key: preset.categoria,
-        label: isEn ? preset.categoria_en : preset.categoria_pt,
+      ...dynamicCategories.map((cat) => ({
+        key: cat.nome_pt,
+        label: isEn ? cat.nome_en : cat.nome_pt,
       })),
       { key: 'contact', label: tr('Contato', 'Contact') },
     ];
-  }, [isEn]);
+  }, [isEn, dynamicCategories]);
 
   const categoryLabel = (category: CategoryKey) =>
     categoryOptions.find((item) => item.key === category)?.label || category;

@@ -554,6 +554,15 @@ export default function ClientePage() {
   const categoryLabel = (category: CategoryKey) =>
     categoryOptions.find((item) => item.key === category)?.label || category;
 
+  const categoryCovers = useMemo(() => {
+    const covers: Record<string, string> = {};
+    for (const cat of dynamicCategories) {
+      const produto = produtosCatalogo.find((p) => p.categoria === cat.nome_pt && p.imagem);
+      if (produto) covers[cat.nome_pt] = produto.imagem;
+    }
+    return covers;
+  }, [dynamicCategories, produtosCatalogo]);
+
   const produtosFiltrados = useMemo(() => {
     let resultado = [...produtosCatalogo];
 
@@ -1011,9 +1020,50 @@ export default function ClientePage() {
           </div>
         </header>
 
+        {/* Grade de categorias — só mobile, só quando nenhuma categoria está selecionada */}
+        {categoriaAtiva === 'all' && dynamicCategories.length > 0 && (
+          <section className="md:hidden px-4 py-4">
+            <p className="mb-3 text-center text-sm font-semibold uppercase tracking-widest text-muted-foreground">
+              {tr('Escolha a categoria', 'Choose a category')}
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              {dynamicCategories.map((cat) => {
+                const key = cat.nome_pt;
+                const label = isEn ? cat.nome_en : cat.nome_pt;
+                const cover = categoryCovers[key];
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => selecionarCategoria(key)}
+                    className="relative overflow-hidden rounded-xl aspect-[4/3] bg-muted shadow-sm active:scale-95 transition-transform"
+                  >
+                    {cover && (
+                      <img
+                        src={cover}
+                        alt={label}
+                        className="absolute inset-0 h-full w-full object-cover"
+                      />
+                    )}
+                    <div className="absolute inset-0 bg-black/45" />
+                    <span className="absolute inset-0 flex items-end p-3">
+                      <span className="text-left text-sm font-bold leading-tight text-white drop-shadow">
+                        {label}
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+        )}
+
         <main className="space-y-4 px-4 py-4 md:px-6 md:py-5">
-          {/* Hero */}
-          <section className="relative overflow-hidden rounded-2xl border border-border bg-card p-5 md:p-6 lg:p-7">
+          {/* Hero — esconde no mobile quando categoria selecionada */}
+          <section className={cn(
+            "relative overflow-hidden rounded-2xl border border-border bg-card p-5 md:p-6 lg:p-7",
+            categoriaAtiva !== 'all' && "hidden md:block"
+          )}>
             <div className="absolute left-0 top-0 h-[2px] w-full" style={{ background: 'var(--gold-gradient)' }} />
             <div className="pointer-events-none absolute inset-0">
               <div className="motion-orb absolute -left-16 top-8 h-36 w-36 rounded-full bg-primary/10 blur-3xl" />

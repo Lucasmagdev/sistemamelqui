@@ -26,3 +26,16 @@ backend/.env
 *.njsproj
 *.sln
 *.sw?
+
+# Generated exports and reports
+backend/exports/
+backend/reports/
+
+# Photos and media uploads
+novas fotos/
+
+# Claude Code local settings
+.claude/
+
+# Runtime logs folder
+.logs/

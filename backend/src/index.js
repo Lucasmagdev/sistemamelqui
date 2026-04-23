@@ -1,6 +1,8 @@
 ﻿import "dotenv/config";
 import express from "express";
 import { createClient } from "@supabase/supabase-js";
+import { SquareClient, SquareEnvironment } from "square";
+import rateLimit from "express-rate-limit";
 import { createAssistantService } from "./assistant.js";
 import { config } from "./config.js";
 import { createCorsMiddleware } from "./middleware/cors.js";
@@ -7607,6 +7609,139 @@ app.post("/api/assistant/query", async (req, res) => {
     });
   }
 });
+
+// ── Square Payment ─────────────────────────────────────────────────────────────
+const squarePaymentLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 5,
+  message: { error: "Muitas tentativas de pagamento. Aguarde 1 minuto." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const SQUARE_ENABLED = !!process.env.SQUARE_ACCESS_TOKEN;
+
+const squareClient = SQUARE_ENABLED
+  ? new SquareClient({
+      token: process.env.SQUARE_ACCESS_TOKEN,
+      environment:
+        process.env.SQUARE_ENVIRONMENT === "production"
+          ? SquareEnvironment.Production
+          : SquareEnvironment.Sandbox,
+    })
+  : null;
+
+let squareLocationId = process.env.SQUARE_LOCATION_ID || null;
+
+if (SQUARE_ENABLED && !squareLocationId) {
+  squareClient.locations
+    .list()
+    .then((response) => {
+      const loc = response.locations?.[0];
+      if (loc) {
+        squareLocationId = loc.id;
+        console.log(`[Square] Location ID auto-detectado: ${squareLocationId}`);
+      }
+    })
+    .catch((err) => {
+      console.error(
+        "[Square] Falha ao buscar Location ID:",
+        err?.errors?.[0]?.detail || err.message
+      );
+    });
+}
+
+app.post("/api/square/payment", squarePaymentLimiter, async (req, res) => {
+  if (!SQUARE_ENABLED || !squareClient || !squareLocationId) {
+    return res
+      .status(503)
+      .json({ error: "Square não configurado. Adicione as credenciais no .env." });
+  }
+
+  const { sourceId, amount, currency = "USD", orderId, note } = req.body;
+
+  if (!sourceId || !amount) {
+    return res.status(400).json({ error: "sourceId e amount são obrigatórios." });
+  }
+
+  const amountNum = Number(amount);
+  if (isNaN(amountNum) || amountNum < 0.5 || amountNum > 10000) {
+    return res.status(400).json({ error: "Valor inválido. Mínimo $0.50, máximo $10.000." });
+  }
+
+  try {
+    const idempotencyKey = `order-${orderId || Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2)}`;
+
+    const response = await squareClient.payments.create({
+      sourceId,
+      idempotencyKey,
+      amountMoney: {
+        amount: BigInt(Math.round(Number(amount) * 100)),
+        currency,
+      },
+      locationId: squareLocationId,
+      note: note || "Imperial Meat - Pedido Online",
+    });
+
+    console.log(`[Square] Pagamento aprovado | orderId=${orderId} | amount=$${amountNum} | paymentId=${response.payment.id}`);
+    return res.json({
+      ok: true,
+      paymentId: response.payment.id,
+      status: response.payment.status,
+    });
+  } catch (err) {
+    const detail = err?.errors?.[0]?.detail || err?.message || "Erro Square";
+    return res.status(500).json({ error: detail });
+  }
+});
+
+app.get("/api/square/config", (_req, res) => {
+  return res.json({
+    enabled: SQUARE_ENABLED && !!squareLocationId,
+    applicationId: process.env.SQUARE_APPLICATION_ID || null,
+    locationId: squareLocationId,
+    environment: process.env.SQUARE_ENVIRONMENT || "sandbox",
+  });
+});
+// Square webhook — recebe notificações assíncronas de pagamento
+app.post("/api/square/webhook", express.raw({ type: "application/json" }), async (req, res) => {
+  const signature = req.headers["x-square-hmacsha256-signature"];
+  const webhookSecret = process.env.SQUARE_WEBHOOK_SIGNATURE_KEY;
+
+  if (webhookSecret && signature) {
+    const crypto = await import("crypto");
+    const url = `${process.env.FRONTEND_URL?.replace("imperial-meat.netlify.app", "") || ""}${req.protocol}://${req.get("host")}${req.originalUrl}`;
+    const hmac = crypto.createHmac("sha256", webhookSecret);
+    hmac.update(webhookSecret + req.body.toString());
+    const expected = hmac.digest("base64");
+    if (signature !== expected) {
+      return res.status(403).json({ error: "Assinatura inválida" });
+    }
+  }
+
+  let event;
+  try {
+    event = JSON.parse(req.body.toString());
+  } catch {
+    return res.status(400).json({ error: "Body inválido" });
+  }
+
+  const type = event?.type;
+  const payment = event?.data?.object?.payment;
+
+  if (type === "payment.completed" && payment) {
+    console.log(`[Square Webhook] payment.completed | paymentId=${payment.id} | amount=$${(payment.amount_money?.amount || 0) / 100} | orderId=${payment.order_id}`);
+  } else if (type === "payment.failed" && payment) {
+    console.log(`[Square Webhook] payment.failed | paymentId=${payment.id} | orderId=${payment.order_id}`);
+  } else {
+    console.log(`[Square Webhook] evento recebido: ${type}`);
+  }
+
+  return res.status(200).json({ ok: true });
+});
+// ───────────────────────────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
   console.log(`Backend rodando em http://localhost:${PORT}`);

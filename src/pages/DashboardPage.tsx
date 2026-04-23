@@ -2,7 +2,7 @@ import DashboardBackground3D from '@/components/dashboard/DashboardBackground3D'
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { supabase } from '@/lib/supabaseClient';
-import { BarChart3, DollarSign, Layers, ShoppingCart, TrendingUp } from 'lucide-react';
+import { BarChart3, CreditCard, DollarSign, Layers, ShoppingCart, TrendingUp } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import {
   Bar,
@@ -24,6 +24,7 @@ type OrderRow = {
   data_pedido: string | null;
   status: number | null;
   valor_total: number | null;
+  payment_method: string | null;
 };
 
 type ClientRow = {
@@ -88,7 +89,7 @@ export default function DashboardPage() {
 
       const { data: orderData, error: orderError } = await supabase
         .from('orders')
-        .select('id, cliente_id, data_pedido, status, valor_total')
+        .select('id, cliente_id, data_pedido, status, valor_total, payment_method')
         .order('data_pedido', { ascending: false });
 
       if (orderError) {
@@ -139,6 +140,9 @@ export default function DashboardPage() {
       ? recentConcludedOrders.reduce((sum, order) => sum + (order.valor_total || 0), 0) / recentConcludedOrders.length
       : 0;
 
+    const squareOrders = recentConcludedOrders.filter((o) => o.payment_method === 'square');
+    const squareRevenue30 = squareOrders.reduce((sum, o) => sum + (o.valor_total || 0), 0);
+
     return {
       totalOrders: orders.length,
       totalClients: Object.keys(clientsMap).length,
@@ -146,6 +150,8 @@ export default function DashboardPage() {
       todayOrders,
       pendingOrders,
       ticketAvg,
+      squareRevenue30,
+      squareOrders30: squareOrders.length,
     };
   }, [orders, clientsMap]);
 
@@ -245,6 +251,13 @@ export default function DashboardPage() {
       icon: TrendingUp,
       iconClassName: 'bg-amber-500/15 text-amber-400',
     },
+    {
+      label: 'Square (cartão online)',
+      value: formatCurrency(stats.squareRevenue30),
+      context: `${stats.squareOrders30} pedidos nos ultimos 30 dias`,
+      icon: CreditCard,
+      iconClassName: 'bg-blue-500/15 text-blue-400',
+    },
   ];
 
   return (
@@ -266,7 +279,7 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      <section className="relative z-10 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+      <section className="relative z-10 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
         {kpiCards.map((item) => {
           const Icon = item.icon;
           return (

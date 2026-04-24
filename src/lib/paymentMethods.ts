@@ -1,4 +1,4 @@
-export type SupportedPaymentMethod = "vemo" | "zelle" | "cartao" | "pix" | "dinheiro";
+export type SupportedPaymentMethod = "vemo" | "zelle" | "cartao" | "pix" | "dinheiro" | "square";
 
 export const normalizePaymentMethodValue = (value: string | null | undefined) => {
   const raw = String(value || "").trim().toLowerCase();
@@ -25,6 +25,8 @@ export const getPaymentMethodLabel = (
       return "Pix";
     case "dinheiro":
       return isEn ? "Cash" : "Dinheiro";
+    case "square":
+      return isEn ? "Credit/Debit Card (Square)" : "Cartão de Crédito/Débito (Square)";
     default:
       return value ? String(value) : isEn ? "Not informed" : "Nao informado";
   }
@@ -47,6 +49,11 @@ export const checkoutPaymentOptions = (locale: "pt" | "en" = "pt") => {
       value: "cartao",
       label: isEn ? "Card" : "Cartao",
       description: isEn ? "Payment in person at pickup or delivery." : "Pagamento presencial na retirada ou entrega.",
+    },
+    {
+      value: "square",
+      label: isEn ? "Credit/Debit Card (Online)" : "Cartão Online (Square)",
+      description: isEn ? "Pay securely by card right now. Encrypted by Square." : "Pague com cartão agora. Criptografado pela Square.",
     },
   ] as const;
 };

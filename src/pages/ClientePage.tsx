@@ -38,6 +38,8 @@ import { useI18n } from '@/contexts/I18nContext';
 import { backendRequest } from '@/lib/backendClient';
 import { checkoutPaymentOptions, getPaymentMethodLabel } from '@/lib/paymentMethods';
 import { resolvePriorityProductImage } from '@/lib/productImageOverrides';
+import { CalculadoraChurrasco } from '@/components/CalculadoraChurrasco';
+import { SquarePaymentForm } from '@/components/SquarePaymentForm';
 import {
   formatPhoneForDisplay,
   inferPhoneCountry,
@@ -70,7 +72,7 @@ type ModoVisualizacao = 'grid' | 'compact' | 'list';
 type Ordenacao = 'menor-maior' | 'maior-menor';
 type TipoCorte = 'piece' | 'steak' | 'cubes' | 'ground' | 'other';
 type EntregaModo = 'entrega' | 'retirada';
-type Pagamento = 'vemo' | 'zelle' | 'cartao';
+type Pagamento = 'vemo' | 'zelle' | 'cartao' | 'square';
 
 interface ItemCarrinho {
   id: string;
@@ -281,6 +283,7 @@ export default function ClientePage() {
   const [modoVisualizacao, setModoVisualizacao] = useState<ModoVisualizacao>('grid');
   const [itensCarrinho, setItensCarrinho] = useState<ItemCarrinho[]>([]);
   const [carrinhoAberto, setCarrinhoAberto] = useState(false);
+  const [calculadoraAberta, setCalculadoraAberta] = useState(false);
   const [checkoutAberto, setCheckoutAberto] = useState(false);
   // Preencher dados do usuario logado ao abrir checkout.
   useEffect(() => {
@@ -332,6 +335,7 @@ export default function ClientePage() {
   }, [checkoutAberto]);
   const [etapaCheckout, setEtapaCheckout] = useState(1);
   const [pedidoFinalizado, setPedidoFinalizado] = useState<{ numero: string; total: number } | null>(null);
+  const [squarePaymentId, setSquarePaymentId] = useState<string | null>(null);
   const [produtoParaCompra, setProdutoParaCompra] = useState<{
     id: string;
     nome: string;
@@ -825,7 +829,7 @@ export default function ClientePage() {
 
   return (
     <div className="min-h-screen bg-background p-0 pb-[calc(7.5rem+env(safe-area-inset-bottom))] md:p-2 md:pb-2 xl:p-3">
-      <div className="w-full overflow-hidden border-y border-border bg-card md:rounded-2xl md:border">
+      <div className="w-full overflow-clip border-y border-border bg-card md:rounded-2xl md:border">
         {/* Signature gold accent line */}
         <div className="h-[2px] w-full" style={{ background: 'var(--gold-gradient)' }} />
 
@@ -843,9 +847,47 @@ export default function ClientePage() {
           </div>
         </div>
 
-        <header className="border-b border-border bg-card/95">
+        {/* Mobile sticky topbar — só marca + carrinho + menu */}
+        <div className="sticky top-0 z-30 flex items-center justify-between border-b border-border bg-card/95 px-4 py-2.5 backdrop-blur md:hidden">
+          <div className="flex items-center gap-2.5">
+            <div className="relative">
+              <img
+                src={config.logoUrl}
+                alt={config.nomeEmpresa}
+                className="h-9 w-9 rounded-xl border border-border object-cover"
+              />
+              <div className="absolute inset-0 rounded-xl ring-1 ring-primary/20" />
+            </div>
+            <span className="text-base font-bold text-foreground">{config.nomeEmpresa}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setCarrinhoAberto((estadoAtual) => !estadoAtual)}
+              className="relative rounded-xl border border-border bg-background p-2 text-primary"
+              aria-label={ui.cart}
+            >
+              <ShoppingCart className="h-5 w-5" />
+              {resumoCarrinho.totalItens > 0 && (
+                <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[9px] font-bold text-primary-foreground">
+                  {resumoCarrinho.totalItens}
+                </span>
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={() => setMenuAberto((estadoAtual) => !estadoAtual)}
+              className="rounded-xl border border-border bg-background p-2 text-foreground"
+              aria-label={ui.menu}
+            >
+              <Menu className="h-5 w-5" />
+            </button>
+          </div>
+        </div>
+
+        <header className="border-b border-border bg-card/95 md:sticky md:top-0 md:z-30 md:backdrop-blur">
           <div className="flex flex-wrap items-center gap-4 px-4 py-3 md:px-6 md:py-4">
-            <div className="flex w-full items-center justify-between text-primary md:w-auto">
+            <div className="hidden w-full items-center justify-between text-primary md:flex md:w-auto">
               <div className="flex items-center gap-3">
                 <div className="relative">
                   <img
@@ -860,7 +902,7 @@ export default function ClientePage() {
                   <span className="hidden text-[11px] text-primary md:block">{ui.selectedCuts}</span>
                 </div>
               </div>
-              <div className="flex items-center gap-2 md:hidden">
+              <div className="hidden items-center gap-2 md:flex">
                 <button
                   type="button"
                   onClick={() => setCarrinhoAberto((estadoAtual) => !estadoAtual)}
@@ -1058,6 +1100,21 @@ export default function ClientePage() {
           </section>
         )}
 
+        {/* Botão voltar categorias — mobile only */}
+        {categoriaAtiva !== 'all' && (
+          <div className="flex items-center gap-2 px-4 pt-3 md:hidden">
+            <button
+              type="button"
+              onClick={() => selecionarCategoria('all')}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-card px-3 py-2 text-sm font-semibold text-foreground shadow-sm active:scale-95 transition-transform"
+            >
+              <ChevronLeft className="h-4 w-4 text-primary" />
+              {tr('Categorias', 'Categories')}
+            </button>
+            <span className="text-sm font-medium text-primary truncate">{categoriaAtiva}</span>
+          </div>
+        )}
+
         <main className="space-y-4 px-4 py-4 md:px-6 md:py-5">
           {/* Hero — esconde no mobile quando categoria selecionada */}
           <section className={cn(
@@ -1120,6 +1177,15 @@ export default function ClientePage() {
                       {ui.repeatOrder}
                     </Button>
                   ) : null}
+                  <button
+                    type="button"
+                    onClick={() => setCalculadoraAberta(true)}
+                    className="cta-lift inline-flex items-center gap-2 rounded-xl border border-primary/60 px-4 py-2 text-sm font-bold text-primary transition hover:border-primary hover:bg-primary/10 active:scale-95"
+                    style={{ boxShadow: 'var(--gold-shadow)' }}
+                  >
+                    <Beef className="h-4 w-4" />
+                    Calcular Churrasco
+                  </button>
                 </div>
               </div>
 
@@ -1503,9 +1569,23 @@ export default function ClientePage() {
                         </button>
                       ))}
                     </div>
-                    <div className="rounded-xl border border-border bg-card p-4 text-xs leading-6 text-muted-foreground">
-                      {pagamento === 'cartao' ? ui.paymentCardHint : ui.paymentDigitalHint}
-                    </div>
+                    {pagamento === 'square' ? (
+                      <div className="rounded-xl border border-border bg-card p-4">
+                        <SquarePaymentForm
+                          totalUsd={resumoCarrinho.totalValor}
+                          onSuccess={(pid) => {
+                            setSquarePaymentId(pid);
+                            toast.success('Pagamento aprovado! Confirme o pedido.');
+                            avancarEtapa();
+                          }}
+                          onError={(msg) => toast.error(msg)}
+                        />
+                      </div>
+                    ) : (
+                      <div className="rounded-xl border border-border bg-card p-4 text-xs leading-6 text-muted-foreground">
+                        {pagamento === 'cartao' ? ui.paymentCardHint : ui.paymentDigitalHint}
+                      </div>
+                    )}
                   </div>
                 ) : null}
 
@@ -1547,8 +1627,15 @@ export default function ClientePage() {
                   {ui.back}
                 </Button>
                 {etapaCheckout < 3 ? (
-                  <Button type="button" onClick={avancarEtapa} className="gold-gradient-bg font-semibold text-accent-foreground">
-                    {ui.continue}
+                  <Button
+                    type="button"
+                    onClick={avancarEtapa}
+                    disabled={etapaCheckout === 2 && pagamento === 'square' && !squarePaymentId}
+                    className="gold-gradient-bg font-semibold text-accent-foreground"
+                  >
+                    {etapaCheckout === 2 && pagamento === 'square' && !squarePaymentId
+                      ? (isEn ? 'Pay by card above' : 'Pague pelo cartão acima')
+                      : ui.continue}
                   </Button>
                 ) : (
                   <Button type="button" onClick={finalizarPedido} className="gold-gradient-bg font-semibold text-accent-foreground">
@@ -1835,6 +1922,14 @@ export default function ClientePage() {
           </button>
         </div>
       </nav>
+
+      {calculadoraAberta && (
+        <CalculadoraChurrasco
+          onClose={() => setCalculadoraAberta(false)}
+          produtos={produtosCatalogo}
+          onAdicionarAoCarrinho={adicionarAoCarrinho}
+        />
+      )}
     </div>
   );
 }

@@ -77,6 +77,11 @@ export function SquarePaymentForm({ totalUsd, orderId, onSuccess, onError }: Pro
 
         await loadSquareScript(cfg.environment);
 
+        // Wait for the container to be painted and visible before attaching.
+        // Square SDK throws "unable to be initialized in time" if the div has
+        // zero dimensions (e.g. modal still animating when attach() is called).
+        await new Promise<void>(resolve => setTimeout(resolve, 300));
+
         if (cancelled || !cardRef.current) return;
 
         const payments = window.Square.payments(cfg.applicationId, cfg.locationId);

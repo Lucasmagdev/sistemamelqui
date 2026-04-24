@@ -39,7 +39,7 @@ import { backendRequest } from '@/lib/backendClient';
 import { checkoutPaymentOptions, getPaymentMethodLabel } from '@/lib/paymentMethods';
 import { resolvePriorityProductImage } from '@/lib/productImageOverrides';
 import { CalculadoraChurrasco } from '@/components/CalculadoraChurrasco';
-import { SquarePaymentForm } from '@/components/SquarePaymentForm';
+import { SquarePaymentForm, preloadSquare } from '@/components/SquarePaymentForm';
 import {
   formatPhoneForDisplay,
   inferPhoneCountry,
@@ -285,6 +285,12 @@ export default function ClientePage() {
   const [carrinhoAberto, setCarrinhoAberto] = useState(false);
   const [calculadoraAberta, setCalculadoraAberta] = useState(false);
   const [checkoutAberto, setCheckoutAberto] = useState(false);
+  // Pre-warm Square.js as soon as checkout opens so the script is already
+  // downloaded by the time the user reaches the payment step.
+  useEffect(() => {
+    if (checkoutAberto) preloadSquare();
+  }, [checkoutAberto]);
+
   // Preencher dados do usuario logado ao abrir checkout.
   useEffect(() => {
     if (!checkoutAberto) return;

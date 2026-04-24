@@ -54,6 +54,7 @@ function friendlyError(raw: string): { title: string; hint: string } {
 }
 
 let squareConfigCache: SquareConfig | null = null;
+let squareScriptPromise: Promise<void> | null = null;
 
 async function loadSquareConfig(): Promise<SquareConfig> {
   if (squareConfigCache) return squareConfigCache;
@@ -63,7 +64,8 @@ async function loadSquareConfig(): Promise<SquareConfig> {
 }
 
 function loadSquareScript(env: string): Promise<void> {
-  return new Promise((resolve, reject) => {
+  if (squareScriptPromise) return squareScriptPromise;
+  squareScriptPromise = new Promise((resolve, reject) => {
     if (window.Square) { resolve(); return; }
     const src =
       env === 'production'
@@ -72,9 +74,36 @@ function loadSquareScript(env: string): Promise<void> {
     const script = document.createElement('script');
     script.src = src;
     script.onload = () => resolve();
-    script.onerror = () => reject(new Error('TIMEOUT'));
+    script.onerror = () => { squareScriptPromise = null; reject(new Error('TIMEOUT')); };
     document.head.appendChild(script);
   });
+  return squareScriptPromise;
+}
+
+// Resolves on the first animation frame where the element has real dimensions.
+// Much faster than a fixed setTimeout — typically 16–50 ms instead of 300 ms.
+function waitForVisible(el: HTMLElement): Promise<void> {
+  return new Promise(resolve => {
+    function check() {
+      const { width, height } = el.getBoundingClientRect();
+      if (width > 0 && height > 0) { resolve(); return; }
+      requestAnimationFrame(check);
+    }
+    requestAnimationFrame(check);
+  });
+}
+
+// Call this as soon as the checkout opens so Square.js downloads in the
+// background while the user fills in their address (Steps 1–2).
+export async function preloadSquare(): Promise<void> {
+  try {
+    const cfg = await loadSquareConfig();
+    if (cfg.enabled && cfg.applicationId && cfg.locationId) {
+      loadSquareScript(cfg.environment); // fire-and-forget, result cached
+    }
+  } catch {
+    // preload is best-effort — silently ignore
+  }
 }
 
 type Phase = 'loading' | 'ready' | 'paying' | 'success' | 'failed' | 'unavailable' | 'init_error';
@@ -100,11 +129,12 @@ export function SquarePaymentForm({ totalUsd, orderId, onSuccess, onError }: Pro
 
       await loadSquareScript(cfg.environment);
 
-      // Wait for container to be painted before attach() — Square SDK requires
-      // the div to have non-zero dimensions or throws "unable to be initialized".
-      await new Promise<void>(resolve => setTimeout(resolve, 300));
-
       if (!cardRef.current) return;
+
+      // Wait until div has real dimensions before attach().
+      // Resolves on first rAF where element is visible — typically 16–50 ms
+      // instead of the previous fixed 300 ms delay.
+      await waitForVisible(cardRef.current);
 
       const payments = window.Square.payments(cfg.applicationId, cfg.locationId);
       const card = await payments.card();
